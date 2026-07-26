@@ -3,7 +3,7 @@
   "configurePresets": [
     {
       "name": "x64-windows",
-      "displayName": "x64 Windows MSVC",
+      "displayName": "x64 Windows MSVC (Ninja)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "architecture": {
@@ -12,6 +12,18 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "x64-windows-vs2026",
+      "displayName": "x64 Windows VS 2026 Community",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
       }
     },
     {
@@ -26,6 +38,11 @@
     {
       "name": "x64-windows",
       "configurePreset": "x64-windows"
+    },
+    {
+      "name": "x64-windows-vs2026",
+      "configurePreset": "x64-windows-vs2026",
+      "configuration": "Release"
     },
     {
       "name": "x64-windows-vs",

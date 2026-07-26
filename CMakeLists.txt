@@ -158,6 +158,16 @@ target_compile_options(hdllib PRIVATE /W4 /EHsc /permissive-)
 target_link_libraries(hdllib PRIVATE hdl_inject minhook)
 set_target_properties(hdllib PROPERTIES OUTPUT_NAME hdllib)
 
+# Stage beside the Python package so `pip install` / Scripts can find hdllib.dll.
+set(HDL_PYTHON_NATIVE_DIR "${CMAKE_SOURCE_DIR}/python/hdllib/_native")
+add_custom_command(TARGET hdllib POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${HDL_PYTHON_NATIVE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE:hdllib>"
+    "${HDL_PYTHON_NATIVE_DIR}/hdllib.dll"
+  COMMENT "Stage hdllib.dll into python/hdllib/_native for packaging"
+)
+
 if(HDL_DISASM_ZYDIS)
   target_compile_definitions(hdllib PRIVATE HDL_HAS_ZYDIS)
   target_link_libraries(hdllib PRIVATE Zydis)

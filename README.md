@@ -6,22 +6,22 @@ Capability reference (opcodes **1…91** from `protocol.hpp`, wire formats, plac
 
 ## Build
 
-Requirements: Visual Studio 2019+ Build Tools (MSVC x64), CMake, Ninja (or the VS generator). MinHook v1.3.3 is vendored under `third_party/minhook`. With `HDL_CLIENT_TUI=ON` (default), CMake FetchContent pulls PDCurses 3.9 for `hdlclient --tui`. Zydis and Capstone are fetched for the disasm backends.
+Requirements: Visual Studio 2019+ (MSVC x64) — [VS 2026 Community](https://visualstudio.microsoft.com/vs/community/) is free and recommended — plus CMake. Ninja is optional (bundled with VS). MinHook v1.3.3 is vendored under `third_party/minhook`. With `HDL_CLIENT_TUI=ON` (default), CMake FetchContent pulls PDCurses 3.9 for `hdlclient --tui`. Zydis and Capstone are fetched for the disasm backends.
 
 ```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-set CMAKE="C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+set CMAKE="C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 
-%CMAKE% --preset x64-windows-vs
-%CMAKE% --build --preset x64-windows-vs --config Release
+%CMAKE% --preset x64-windows-vs2026
+%CMAKE% --build --preset x64-windows-vs2026 --config Release
 ```
 
-Artifacts land under `build/x64-windows-vs/Release/`:
+Artifacts land under `build/x64-windows-vs2026/Release/`:
 
 - `hdllib.dll` — inject this
 - `hdlclient.exe` — inject + IPC CLI / REPL / optional TUI
 
-Ninja preset (`x64-windows`) works the same if `ninja` is on `PATH` after `vcvars64`.
+Other presets: `x64-windows` (Ninja), `x64-windows-vs` (VS 2019). Ninja needs `ninja` on `PATH` after `vcvars64`.
 
 ## Inject and talk
 
@@ -164,6 +164,22 @@ The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Adm
 `hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), REPL/`--tui`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
 
 Discover / recipe workflows (command sequences, predicates, store locators): [docs/client.md](docs/client.md). See also `HdlDiscover*` in `hdllib.h`. C-API-only leftovers (no pipe): `HdlSetLogFile`, `HdlSetHealthVeh`, custom `HdlHook`, custom `HdlDisasmRegisterBackend`.
+
+## Python client
+
+Pure-Python bindings live under [`python/`](python/): ctypes for out-of-process inject/resolve, named-pipe client for in-target ops (same protocol as `hdlclient`). Includes an **`hdl` shell** (hdlclient-like commands) and a **Python REPL** with an `HdlClient` instance named `hdl`.
+
+```bat
+cmake --build --preset x64-windows          REM stages hdllib.dll into python/hdllib/_native/
+cd python
+pip install -e ".[dev]"                     REM packages the DLL for Scripts (hdl, …)
+hdl --pid 1234 --inject --python            REM REPL: hdl, mem, scan, place, code, pe, …
+hdl 1234 ping
+python examples\inject_flow.py --exe hdl_test_target.exe
+pytest tests\test_pipe_framing.py tests\test_games.py tests\test_toolbox.py -q
+```
+
+Python layers: core `HdlClient` + CE-style toolbox classes (`Memory`, `Scanner`, `SearchSession`, `DiscoverSession`, `Place`, `Code`, `Pe`, …) + abstract `games`/`GameTarget` registry. `hdllib.dll` is staged into the wheel/editable install so console Scripts can inject without `HDL_DLL`. Concrete game adapters (e.g. Battle for Wesnoth) live in separate packages such as `hdllib-wesnoth`. Details: [`python/README.md`](python/README.md).
 
 ## Notes
 

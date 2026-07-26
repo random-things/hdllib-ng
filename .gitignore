@@ -28,6 +28,13 @@ compile_commands.json
 .vscode/
 .cursor/
 
+# Python
+python/**/__pycache__/
+python/**/*.egg-info/
+python/.pytest_cache/
+python/.venv/
+python/venv/
+
 # Misc
 *.log
 .DS_Store

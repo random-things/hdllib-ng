@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hdllib"
+version = "0.1.0"
+description = "Pure-Python client for hdllib-ng (inject + named-pipe IPC)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "hdllib-ng contributors" }]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+hdl = "hdllib.cli:main"
+hdllib = "hdllib.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hdllib*"]
+
+[tool.setuptools.package-data]
+hdllib = ["_native/*.dll", "_native/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "inject: requires built hdllib.dll and hdl_test_target.exe",
+]

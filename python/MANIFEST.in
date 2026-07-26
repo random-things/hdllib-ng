@@ -1,0 +1,3 @@
+include _stage_dll.py
+include README.md
+recursive-include hdllib/_native *.dll
