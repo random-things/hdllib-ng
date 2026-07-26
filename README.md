@@ -1,8 +1,8 @@
 # hdllib
 
-Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel—plus the same surface as a stable exported C API. `hdlclient` adds an interest store and place/stitch/discover recipes on top.
+Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, passive process fingerprinting (language/runtime/UI/graphics/engine tags), code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel—plus the same surface as a stable exported C API. `hdlclient` adds an interest store and place/stitch/discover recipes on top.
 
-Capability reference (opcodes **1…91** plus **`OpUnloadDll` = 92** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
+Capability reference (opcodes **1…91** plus **`OpUnloadDll` = 92**, **`OpFingerprint` = 93** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
 
 ## Build
 
@@ -35,6 +35,7 @@ hdlclient inject --title Notepad --class Notepad C:\full\path\to\hdllib.dll
 hdlclient inject --early-bird C:\Windows\System32\notepad.exe C:\full\path\to\hdllib.dll
 hdlclient <pid> ping
 hdlclient <pid> modules
+hdlclient <pid> fingerprint
 hdlclient <pid> scan --pattern "48 8B ?? 90" --max 32
 hdlclient <pid> scan --type i32 --value 100 --max 64
 hdlclient <pid> scan --next --session 1 --cmp decreased

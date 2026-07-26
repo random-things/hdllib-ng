@@ -652,4 +652,107 @@ int StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* mod
     return 0;
 }
 
+static const HdlFingerprintTag* PrimaryOf(const std::vector<HdlFingerprintTag>& tags,
+                                          uint32_t category) {
+    for (const auto& t : tags) {
+        if (t.category == category && (t.flags & HDL_FP_PRIMARY)) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+int RecipeSuggest(ControllerState& st, LogFn log) {
+    if (!st.client) {
+        Wlog(log, L"no client");
+        return 1;
+    }
+    std::vector<HdlFingerprintTag> tags;
+    const IpcStatus s = Fingerprint(*st.client, HDL_FP_SCAN_DEFAULT, &tags);
+    if (!s) {
+        Wlog(log, L"fingerprint failed status=%d", s.status);
+        return 1;
+    }
+    Wlog(log, L"fingerprint: %u tags", static_cast<unsigned>(tags.size()));
+    for (const auto& t : tags) {
+        if (!(t.flags & HDL_FP_PRIMARY)) {
+            continue;
+        }
+        Wlog(log, L"  primary cat=%u id=%hs conf=%u  %hs", t.category, t.id, t.confidence,
+             t.evidence);
+    }
+
+    const HdlFingerprintTag* ui = PrimaryOf(tags, HDL_FP_CAT_UI);
+    const HdlFingerprintTag* gfx = PrimaryOf(tags, HDL_FP_CAT_GRAPHICS);
+    const HdlFingerprintTag* rt = PrimaryOf(tags, HDL_FP_CAT_RUNTIME);
+    const HdlFingerprintTag* eng = PrimaryOf(tags, HDL_FP_CAT_ENGINE);
+    const HdlFingerprintTag* app = PrimaryOf(tags, HDL_FP_CAT_APP);
+    const HdlFingerprintTag* lang = PrimaryOf(tags, HDL_FP_CAT_LANGUAGE);
+
+    Wlog(log, L"suggestions (copy/paste; not auto-run):");
+
+    if (ui && strcmp(ui->id, "win32") == 0) {
+        Wlog(log, L"  discover-watch-import --dll user32.dll --import DispatchMessageW --args 1");
+        Wlog(log, L"  call --main --module user32.dll ...   (UI thread for windowed targets)");
+    }
+    if (ui && (strcmp(ui->id, "wpf") == 0 || strcmp(ui->id, "winforms") == 0 ||
+               strcmp(ui->id, "winui") == 0)) {
+        Wlog(log, L"  managed UI: prefer import/watch over native RTTI; JIT heaps make AOB brittle");
+    }
+    if (ui && (strcmp(ui->id, "qt5") == 0 || strcmp(ui->id, "qt6") == 0)) {
+        Wlog(log, L"  scope scans with --module Qt5Core.dll / Qt6Core.dll (or Gui/Widgets)");
+    }
+
+    if (gfx && strcmp(gfx->id, "d3d11") == 0) {
+        Wlog(log, L"  discover-watch-import --dll dxgi.dll --import Present --args 2");
+        Wlog(log, L"  (or Present1 on IDXGISwapChain1; resolve via exports/imports first)");
+    }
+    if (gfx && strcmp(gfx->id, "d3d12") == 0) {
+        Wlog(log, L"  frame sync often via DXGI Present; also watch D3D12 command queues");
+        Wlog(log, L"  discover-watch-import --dll dxgi.dll --import Present --args 2");
+    }
+    if (gfx && strcmp(gfx->id, "d3d9") == 0) {
+        Wlog(log, L"  discover-watch-import --dll d3d9.dll --import Direct3DCreate9 --args 1");
+        Wlog(log, L"  then rank around EndScene/Present on the device vtable");
+    }
+    if (gfx && strcmp(gfx->id, "opengl") == 0) {
+        Wlog(log, L"  discover-watch-import --dll opengl32.dll --import wglSwapBuffers --args 1");
+    }
+    if (gfx && strcmp(gfx->id, "vulkan") == 0) {
+        Wlog(log, L"  vulkan: prefer module-scoped scans; Present is often via swapchain fn table");
+        Wlog(log, L"  modules / exports --module vulkan-1.dll  then discover-watch on resolved VA");
+    }
+
+    if (rt && (strcmp(rt->id, "coreclr") == 0 || strcmp(rt->id, "dotnet_framework") == 0 ||
+               strcmp(rt->id, "mono") == 0)) {
+        Wlog(log, L"  managed runtime: avoid native RTTI; use imports/exports and discover-watch");
+        Wlog(log, L"  AOB on JIT code heaps is unstable across runs");
+    }
+    if (rt && (strcmp(rt->id, "electron") == 0 || strcmp(rt->id, "nodejs") == 0 ||
+               strcmp(rt->id, "cef") == 0)) {
+        Wlog(log, L"  web/host runtime: UI is Chromium; prefer CEF/Electron modules for --module");
+    }
+
+    if (eng && strcmp(eng->id, "unity") == 0) {
+        Wlog(log, L"  unity: --module GameAssembly.dll or UnityPlayer.dll for scans/recipes");
+    }
+    if (eng && strcmp(eng->id, "unreal") == 0) {
+        Wlog(log, L"  unreal: scope to *-Win64-Shipping.exe / UnrealEditor modules");
+    }
+    if (eng && strcmp(eng->id, "godot") == 0) {
+        Wlog(log, L"  godot: scope scans to the godot module / exe basename");
+    }
+
+    if (app && strcmp(app->id, "subsystem_gui") == 0) {
+        Wlog(log, L"  GUI subsystem: prefer call --main for UI-thread APIs");
+    }
+    if (lang && strcmp(lang->id, "native") == 0 && !rt && !eng) {
+        Wlog(log, L"  native: vtable/RTTI helpers and discover-constrain are fair game");
+    }
+
+    Wlog(log, L"  fingerprint          # full tag dump");
+    Wlog(log, L"  recipe action <name> <watch_hex>   # after you pick a watch target");
+    return 0;
+}
+
 }  // namespace hdlcli

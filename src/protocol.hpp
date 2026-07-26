@@ -109,6 +109,7 @@ enum Op : uint32_t {
     OpDiscoverDiffObjects = 89,
     OpDiscoverApplyWatchHits = 90,
     OpDiscoverGetEvidence = 91,
+    OpFingerprint = 93,
 };
 
 /* Optional request trailer / streaming response flags. */

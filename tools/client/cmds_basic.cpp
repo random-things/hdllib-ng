@@ -236,6 +236,103 @@ int CmdHealth(CmdCtx& ctx) {
     return st == HDL_OK ? 0 : 1;
 }
 
+static const wchar_t* FpCategoryName(uint32_t cat) {
+    switch (cat) {
+    case HDL_FP_CAT_LANGUAGE:
+        return L"language";
+    case HDL_FP_CAT_RUNTIME:
+        return L"runtime";
+    case HDL_FP_CAT_TOOLCHAIN:
+        return L"toolchain";
+    case HDL_FP_CAT_UI:
+        return L"ui";
+    case HDL_FP_CAT_GRAPHICS:
+        return L"graphics";
+    case HDL_FP_CAT_ENGINE:
+        return L"engine";
+    case HDL_FP_CAT_WEBHOST:
+        return L"webhost";
+    case HDL_FP_CAT_AUDIO:
+        return L"audio";
+    case HDL_FP_CAT_NETWORK:
+        return L"network";
+    case HDL_FP_CAT_TOOLING:
+        return L"tooling";
+    case HDL_FP_CAT_APP:
+        return L"app";
+    default:
+        return L"?";
+    }
+}
+
+int CmdFingerprint(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+
+    uint32_t scan_flags = HDL_FP_SCAN_DEFAULT;
+    bool stream = false;
+    for (int i = 3; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--stream") == 0) {
+            stream = true;
+        } else if (wcscmp(ctx.argv[i], L"--modules-only") == 0) {
+            scan_flags = HDL_FP_SCAN_MODULES;
+        } else if (wcscmp(ctx.argv[i], L"--no-imports") == 0) {
+            scan_flags &= ~HDL_FP_SCAN_IMPORTS;
+        }
+    }
+
+    AppendPod(req, static_cast<uint32_t>(OpFingerprint));
+    AppendPod(req, scan_flags);
+    if (stream) {
+        AppendPod(req, static_cast<uint64_t>(0));
+        AppendPod(req, static_cast<uint32_t>(0));
+        AppendPod(req, static_cast<uint32_t>(HDL_IPC_REQ_STREAM));
+        uint32_t printed = 0;
+        if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+                Reader r(p, n);
+                uint32_t total = 0, off = 0, count = 0;
+                if (!r.TakePod(total) || !r.TakePod(off) || !r.TakePod(count)) {
+                    return false;
+                }
+                if (printed == 0) {
+                    wprintf(L"status=%ls total=%u (stream)\n", StatusName(st), total);
+                }
+                for (uint32_t i = 0; i < count; ++i) {
+                    HdlFingerprintTag tag{};
+                    if (!r.Take(&tag, sizeof(tag))) {
+                        return false;
+                    }
+                    const wchar_t* prim = (tag.flags & HDL_FP_PRIMARY) ? L"*" : L" ";
+                    wprintf(L"  %ls %-10ls %-16hs  conf=%u  flags=0x%x  %hs\n", prim,
+                            FpCategoryName(tag.category), tag.id, tag.confidence, tag.flags,
+                            tag.evidence);
+                    ++printed;
+                }
+                (void)flags;
+                return true;
+            })) {
+            return 1;
+        }
+        return 0;
+    }
+
+    if (!ctx.client.Request(req, resp)) return 1;
+    Reader r(resp);
+    int32_t st = 0;
+    uint32_t count = 0;
+    if (!r.TakePod(st) || !r.TakePod(count)) return 1;
+    wprintf(L"status=%ls count=%u  (* = primary)\n", StatusName(st), count);
+    for (uint32_t i = 0; i < count; ++i) {
+        HdlFingerprintTag tag{};
+        if (!r.Take(&tag, sizeof(tag))) break;
+        const wchar_t* prim = (tag.flags & HDL_FP_PRIMARY) ? L"*" : L" ";
+        wprintf(L"  %ls %-10ls %-16hs  conf=%u  flags=0x%x  %hs\n", prim,
+                FpCategoryName(tag.category), tag.id, tag.confidence, tag.flags, tag.evidence);
+    }
+    return st == HDL_OK ? 0 : 1;
+}
+
 int CmdEvents(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;

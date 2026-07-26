@@ -128,6 +128,7 @@ add_library(hdllib SHARED
   src/ipc/handlers_code.cpp
   src/jobs.cpp
   src/health.cpp
+  src/fingerprint.cpp
   src/call.cpp
   src/call_invoke.asm
   src/call_dispatch.cpp

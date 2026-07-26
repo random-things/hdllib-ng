@@ -17,6 +17,7 @@ bool HandleReadMemory(HANDLE pipe, proto::Reader& r);
 bool HandleWriteMemory(HANDLE pipe, proto::Reader& r);
 bool HandleEnumRegions(HANDLE pipe, proto::Reader& r);
 bool HandleEnumModules(HANDLE pipe, proto::Reader& r);
+bool HandleFingerprint(HANDLE pipe, proto::Reader& r);
 bool HandleJobCreate(HANDLE pipe, proto::Reader& r);
 bool HandleJobCancel(HANDLE pipe, proto::Reader& r);
 bool HandleJobClose(HANDLE pipe, proto::Reader& r);

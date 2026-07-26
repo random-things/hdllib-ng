@@ -89,6 +89,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
         log(L"  recipe action <name> <watch_hex>, recipe constrain <size> <pred>...,");
         log(L"  recipe place <interest> <near_hex>, recipe expand <base_hex> <size>,");
         log(L"  recipe stitch <interest> --target HEX [--kind …],");
+        log(L"  recipe suggest,");
         log(L"  stabilize <cand_id>, quit — plus all pipe cmds");
         return 0;
     }
@@ -236,6 +237,9 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
     if (cmd == L"recipe") {
         if (toks.size() < 2) {
             return 1;
+        }
+        if (toks[1] == L"suggest") {
+            return RecipeSuggest(st, log);
         }
         if (toks[1] == L"action" && toks.size() >= 4) {
             auto wait = st.wait_enter;

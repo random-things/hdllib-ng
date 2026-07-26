@@ -2,11 +2,11 @@
 
 Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](../src/protocol.hpp). The named-pipe protocol is the remote control surface for an injected `hdllib.dll`; the same operations are also exposed as the exported C API in [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h).
 
-**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, allocation, and further DLL injection—controllable from outside via a multi-client named pipe, or in-process via `Hdl*`. The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
+**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, passive process fingerprinting, allocation, and further DLL injection—controllable from outside via a multi-client named pipe, or in-process via `Hdl*`. The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
 
 **Client workflows** (CLI groups, `discover-*` pipelines, recipes / store): [client.md](client.md).
 
-**Platform:** x64 only (no Wow64 helper). Opcodes: **1…91** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
+**Platform:** x64 only (no Wow64 helper). Opcodes: **1…91**, **`OpUnloadDll` = 92**, **`OpFingerprint` = 93** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
 
 ---
 
@@ -101,7 +101,7 @@ Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStrea
 
 ## Capability map (opcodes → features)
 
-Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92). Groups below match product capabilities.
+Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92, `OpFingerprint` = 93). Groups below match product capabilities.
 
 ### 1. Lifecycle, connectivity, logging
 
@@ -237,6 +237,22 @@ Jobs bind to long ops (search, call, pattern resolve, …) so one client can can
 **Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK` (wake only; full payload via `OpPollHookHits`), `WATCH` (wake only; full payload via `OpPollWatchHits` when armed).
 
 **`OpPollEvents`:** `max_events`, `timeout_ms` (0 = non-blocking) → `status`, `count`, `HdlEvent[]` (max clamped to 64).
+
+---
+
+### 6b. Process fingerprint
+
+| Op | Value | Capability | C API |
+|----|------:|------------|-------|
+| `OpFingerprint` | 93 | Passive tags: language/runtime/UI/graphics/engine/… from modules + main IAT + PE subsystem | `HdlEnumFingerprintTags`, `HdlClassifyFingerprint` |
+
+**Request:** `uint32_t scan_flags` (`HDL_FP_SCAN_MODULES` / `IMPORTS` / `PE`; `0` or omit → `HDL_FP_SCAN_DEFAULT`) + optional stream trailer.
+
+**Response:** `status`, `count`, `HdlFingerprintTag[]` (or streamed like modules). Each tag: `category`, `confidence` 0–100, `flags` (`FROM_MODULE` / `FROM_IMPORT` / `FROM_PE` / `PRIMARY`), `id`, `evidence`.
+
+`HdlClassifyFingerprint` classifies caller-provided module basenames + import pairs (tests / offline dumps; no process walk). Active probes (`HDL_FP_ACTIVE`) are reserved.
+
+CLI: `hdlclient <pid> fingerprint`; REPL: `recipe suggest` prints next-step watch/call hints from primaries.
 
 ---
 
@@ -510,6 +526,7 @@ Uses the active disasm backend. `EnumFunctions` confidence: export **90** (`HDL_
 | 85 | InvalidateFnIndex | Graph |
 | 86–91 | DiscoverResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence | Discover |
 | 92 | UnloadDll | Injection |
+| 93 | Fingerprint | Process fingerprint |
 
 ### Opcodes 79–91 (graph / watch / discover extensions)
 
@@ -573,7 +590,7 @@ Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [do
 | `read`, `write` | ReadMemory, WriteMemory |
 | `regions`, `modules`, `threads` | Enum* (+ stream) |
 | `scan` / `--next` / `--hits` | SearchMemory or Search* session |
-| `health`, `events`, `job` | GetHealth, PollEvents, Job* |
+| `health`, `fingerprint`, `events`, `job` | GetHealth, Fingerprint, PollEvents, Job* |
 | `call` / `vcall` / `resolve` | Call, CallExport, CallVtable, ResolveExport |
 | `alloc` / `free` / `alloc-near` | Alloc, Free, AllocNear |
 | `caves` / `protect` / `flush-icache` / `alloc-near` | Place ops 54–57 |

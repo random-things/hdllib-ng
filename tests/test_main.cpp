@@ -469,6 +469,125 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         st = HdlEnumThreads(threads.data(), &tcount);
         Report(c, st == HDL_OK && tcount > 0, false, "HdlEnumThreads fill", "");
 
+        /* Fingerprint: live self + synthetic classify fixtures */
+        {
+            uint32_t fcount = 0;
+            st = HdlEnumFingerprintTags(HDL_FP_SCAN_DEFAULT, nullptr, &fcount);
+            Report(c, st == HDL_E_BUFFER_SMALL && fcount > 0, false, "HdlEnumFingerprintTags size",
+                   "");
+            std::vector<HdlFingerprintTag> ftags(fcount);
+            st = HdlEnumFingerprintTags(HDL_FP_SCAN_DEFAULT, ftags.data(), &fcount);
+            bool has_primary = false;
+            bool has_msvc_or_native = false;
+            for (uint32_t i = 0; i < fcount; ++i) {
+                if (ftags[i].flags & HDL_FP_PRIMARY) {
+                    has_primary = true;
+                }
+                if (strcmp(ftags[i].id, "msvc") == 0 || strcmp(ftags[i].id, "native") == 0) {
+                    has_msvc_or_native = true;
+                }
+            }
+            Report(c, st == HDL_OK && fcount > 0 && has_primary && has_msvc_or_native, false,
+                   "HdlEnumFingerprintTags fill", "");
+        }
+        {
+            const wchar_t* mods[] = {L"d3d11.dll", L"dxgi.dll", L"user32.dll", L"vcruntime140.dll"};
+            HdlFingerprintImport imps[2]{};
+            strncpy_s(imps[0].module, "d3d11.dll", _TRUNCATE);
+            strncpy_s(imps[0].name, "D3D11CreateDevice", _TRUNCATE);
+            strncpy_s(imps[1].module, "user32.dll", _TRUNCATE);
+            strncpy_s(imps[1].name, "DispatchMessageW", _TRUNCATE);
+            uint32_t cn = 0;
+            st = HdlClassifyFingerprint(mods, 4, imps, 2, IMAGE_SUBSYSTEM_WINDOWS_GUI,
+                                        HDL_FP_SCAN_DEFAULT, nullptr, &cn);
+            Report(c, st == HDL_E_BUFFER_SMALL && cn > 0, false, "HdlClassifyFingerprint size", "");
+            std::vector<HdlFingerprintTag> tags(cn);
+            st = HdlClassifyFingerprint(mods, 4, imps, 2, IMAGE_SUBSYSTEM_WINDOWS_GUI,
+                                        HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
+            bool d3d11_primary = false;
+            bool win32_ok = false;
+            bool gui_app = false;
+            uint32_t d3d11_conf = 0;
+            for (uint32_t i = 0; i < cn; ++i) {
+                if (tags[i].category == HDL_FP_CAT_GRAPHICS && strcmp(tags[i].id, "d3d11") == 0) {
+                    d3d11_conf = tags[i].confidence;
+                    if (tags[i].flags & HDL_FP_PRIMARY) {
+                        d3d11_primary = true;
+                    }
+                }
+                if (tags[i].category == HDL_FP_CAT_UI && strcmp(tags[i].id, "win32") == 0 &&
+                    tags[i].confidence >= 35) {
+                    win32_ok = true;
+                }
+                if (tags[i].category == HDL_FP_CAT_APP && strcmp(tags[i].id, "subsystem_gui") == 0) {
+                    gui_app = true;
+                }
+            }
+            Report(c, st == HDL_OK && d3d11_primary && d3d11_conf >= 75 && win32_ok && gui_app, false,
+                   "HdlClassifyFingerprint d3d11+win32", "");
+        }
+        {
+            const wchar_t* mods[] = {L"coreclr.dll", L"hostfxr.dll", L"PresentationFramework.dll",
+                                    L"user32.dll", L"dxgi.dll"};
+            uint32_t cn = 0;
+            st = HdlClassifyFingerprint(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
+                                        HDL_FP_SCAN_DEFAULT, nullptr, &cn);
+            std::vector<HdlFingerprintTag> tags(cn);
+            st = HdlClassifyFingerprint(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
+                                        HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
+            bool coreclr = false;
+            bool wpf_primary = false;
+            bool win32_suppressed = true;
+            for (uint32_t i = 0; i < cn; ++i) {
+                if (strcmp(tags[i].id, "coreclr") == 0) {
+                    coreclr = true;
+                }
+                if (tags[i].category == HDL_FP_CAT_UI && strcmp(tags[i].id, "wpf") == 0 &&
+                    (tags[i].flags & HDL_FP_PRIMARY)) {
+                    wpf_primary = true;
+                }
+                if (tags[i].category == HDL_FP_CAT_UI && strcmp(tags[i].id, "win32") == 0 &&
+                    tags[i].confidence > 40) {
+                    win32_suppressed = false;
+                }
+            }
+            Report(c, st == HDL_OK && coreclr && wpf_primary && win32_suppressed, false,
+                   "HdlClassifyFingerprint coreclr+wpf", "");
+        }
+        {
+            const wchar_t* mods[] = {L"dxgi.dll", L"user32.dll"};
+            uint32_t n_bare = 0;
+            HdlClassifyFingerprint(mods, 2, nullptr, 0, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
+                                   nullptr, &n_bare);
+            std::vector<HdlFingerprintTag> bare(n_bare);
+            HdlClassifyFingerprint(mods, 2, nullptr, 0, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
+                                   bare.data(), &n_bare);
+            uint32_t bare_conf = 0;
+            for (uint32_t i = 0; i < n_bare; ++i) {
+                if (strcmp(bare[i].id, "d3d11") == 0) {
+                    bare_conf = bare[i].confidence;
+                }
+            }
+            HdlFingerprintImport create{};
+            strncpy_s(create.module, "d3d11.dll", _TRUNCATE);
+            strncpy_s(create.name, "D3D11CreateDevice", _TRUNCATE);
+            const wchar_t* mods2[] = {L"d3d11.dll", L"dxgi.dll"};
+            uint32_t n_full = 0;
+            HdlClassifyFingerprint(mods2, 2, &create, 1, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
+                                   nullptr, &n_full);
+            std::vector<HdlFingerprintTag> full(n_full);
+            HdlClassifyFingerprint(mods2, 2, &create, 1, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
+                                   full.data(), &n_full);
+            uint32_t full_conf = 0;
+            for (uint32_t i = 0; i < n_full; ++i) {
+                if (strcmp(full[i].id, "d3d11") == 0) {
+                    full_conf = full[i].confidence;
+                }
+            }
+            Report(c, full_conf > bare_conf && full_conf >= 75, false,
+                   "HdlClassifyFingerprint d3d11 import boost", "");
+        }
+
         uint64_t job = 0;
         st = HdlJobCreate(5000, &job);
         Report(c, st == HDL_OK && job != 0, false, "HdlJobCreate", "");

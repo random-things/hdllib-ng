@@ -28,10 +28,11 @@ hdlclient inject --early-bird C:\Windows\System32\notepad.exe C:\path\hdllib.dll
 
 hdlclient <pid> ping
 hdlclient <pid> modules
+hdlclient <pid> fingerprint
 hdlclient <pid> health
 ```
 
-Typical first checks after inject: `ping`, then `modules` for bases, then either a one-shot scan or `hdlclient <pid> --store interests.json` for a controller session.
+Typical first checks after inject: `ping`, then `modules` / `fingerprint` for bases and stack hints, then either a one-shot scan or `hdlclient <pid> --store interests.json` for a controller session. In REPL, `recipe suggest` turns fingerprint primaries into concrete watch/call next steps.
 
 Quiet defaults after inject (log off, health VEH off). Raise logging with `hdlclient <pid> log 2` when debugging.
 
@@ -279,6 +280,7 @@ Recipes orchestrate pipe ops and write the store. Use them from REPL/TUI (not as
 
 | Recipe | What it does |
 |--------|----------------|
+| `recipe suggest` | Fingerprint process; print primary tags + suggested watch/call/module commands |
 | `recipe action <name> <watch_hex>` | Watch → action window → wait → end → rank → **stabilize** top candidate |
 | `recipe constrain <size> <pred>…` | Constraint scan → list objects → cluster first object |
 | `recipe place <interest> <near_hex>` | Best cave near VA (or `AllocNear` fallback) → cave locator on interest |

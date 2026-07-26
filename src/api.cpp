@@ -6,6 +6,7 @@
 #include "core.hpp"
 #include "disasm/backend.hpp"
 #include "discover.hpp"
+#include "fingerprint.hpp"
 #include "graph.hpp"
 #include "health.hpp"
 #include "hooks.hpp"
@@ -210,6 +211,19 @@ HdlStatus HdlGetHealth(HdlHealthInfo* out) {
 
 HdlStatus HdlEnumThreads(HdlThreadInfo* out, uint32_t* inout_count) {
     return hdl::EnumThreads(out, inout_count);
+}
+
+HdlStatus HdlEnumFingerprintTags(uint32_t scan_flags, HdlFingerprintTag* out,
+                                 uint32_t* inout_count) {
+    return hdl::EnumFingerprintTags(scan_flags, out, inout_count);
+}
+
+HdlStatus HdlClassifyFingerprint(const wchar_t* const* module_basenames, uint32_t module_count,
+                                 const HdlFingerprintImport* imports, uint32_t import_count,
+                                 uint16_t pe_subsystem, uint32_t scan_flags, HdlFingerprintTag* out,
+                                 uint32_t* inout_count) {
+    return hdl::ClassifyFingerprintApi(module_basenames, module_count, imports, import_count,
+                                       pe_subsystem, scan_flags, out, inout_count);
 }
 
 HdlStatus HdlPollEvents(HdlEvent* out, uint32_t* inout_count, uint32_t timeout_ms) {

@@ -70,5 +70,6 @@ IpcStatus Unwatch(PipeClient& c, uint64_t handle);
 IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name, uint64_t* out_addr);
 
 IpcStatus EnumImports(PipeClient& c, uint64_t module_base, std::vector<HdlImportInfo>* out);
+IpcStatus Fingerprint(PipeClient& c, uint32_t scan_flags, std::vector<HdlFingerprintTag>* out);
 
 }  // namespace hdlcli

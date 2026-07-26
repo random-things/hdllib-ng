@@ -21,6 +21,7 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> regions [--stream]
   hdlclient <pid> threads [--stream]
   hdlclient <pid> health
+  hdlclient <pid> fingerprint [--stream] [--modules-only] [--no-imports]
   hdlclient <pid> events [--timeout MS] [--max N]
   hdlclient <pid> job create [--timeout MS]
   hdlclient <pid> job cancel <id>
@@ -102,7 +103,7 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> discover-evidence --session ID --id CAND_ID
   hdlclient <pid> [repl] [--store PATH] interactive REPL (default if no subcommand)
   hdlclient <pid> --tui [--store PATH]  PDCurses full-screen controller
-    REPL/TUI: store load|save|list|add|revalidate; recipe place|stitch|expand|action|constrain;
+    REPL/TUI: store load|save|list|add|revalidate; recipe suggest|place|stitch|expand|action|constrain;
     stabilize; store add --kind function|object|patch … [synth|path|export NAME|cave|stub|patch]
   hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--job ID] [--timeout MS]
   hdlclient <pid> scan --hits --session ID [--max N] [--stream]

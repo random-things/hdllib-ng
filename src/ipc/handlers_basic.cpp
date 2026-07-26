@@ -1,5 +1,6 @@
 #include "handlers.hpp"
 
+#include "fingerprint.hpp"
 #include "health.hpp"
 #include "inject.hpp"
 #include "jobs.hpp"
@@ -164,6 +165,43 @@ bool HandleEnumModules(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, count);
     if (count) {
         AppendBytes(resp, modules.data(), count * sizeof(HdlModuleInfo));
+    }
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleFingerprint(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    uint32_t scan_flags = HDL_FP_SCAN_DEFAULT;
+    if (r.left >= sizeof(uint32_t)) {
+        if (!r.TakePod(scan_flags)) {
+            AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+            return WriteFrame(pipe, resp);
+        }
+        if (scan_flags == 0) {
+            scan_flags = HDL_FP_SCAN_DEFAULT;
+        }
+    }
+    uint64_t job_id = 0;
+    uint32_t timeout_ms = 0;
+    uint32_t flags = 0;
+    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
+    (void)job_id;
+    (void)timeout_ms;
+
+    uint32_t count = 0;
+    EnumFingerprintTags(scan_flags, nullptr, &count);
+    std::vector<HdlFingerprintTag> tags(count);
+    const HdlStatus st = count ? EnumFingerprintTags(scan_flags, tags.data(), &count) : HDL_OK;
+
+    if (flags & HDL_IPC_REQ_STREAM) {
+        return WriteStreamed(pipe, st, tags.data(), count, 16);
+    }
+
+    AppendPod(resp, static_cast<int32_t>(st));
+    AppendPod(resp, count);
+    if (count) {
+        AppendBytes(resp, tags.data(), count * sizeof(HdlFingerprintTag));
     }
     return WriteFrame(pipe, resp);
 }

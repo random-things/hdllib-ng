@@ -630,4 +630,24 @@ IpcStatus EnumImports(PipeClient& c, uint64_t module_base, std::vector<HdlImport
     return s;
 }
 
+IpcStatus Fingerprint(PipeClient& c, uint32_t scan_flags, std::vector<HdlFingerprintTag>* out) {
+    std::vector<uint8_t> req, resp;
+    AppendPod(req, static_cast<uint32_t>(OpFingerprint));
+    AppendPod(req, scan_flags ? scan_flags : HDL_FP_SCAN_DEFAULT);
+    if (!c.Request(req, resp)) {
+        return IpcStatus{HDL_E_FAILED};
+    }
+    Reader r(resp);
+    IpcStatus s = TakeStatus(resp, &r);
+    uint32_t count = 0;
+    r.TakePod(count);
+    if (out) {
+        out->resize(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            r.Take(&(*out)[i], sizeof(HdlFingerprintTag));
+        }
+    }
+    return s;
+}
+
 }  // namespace hdlcli

@@ -56,6 +56,9 @@ int RecipeStitch(ControllerState& st, const char* interest_name, uint64_t target
 /* Register discover watch-region on object base; print manual action/heat steps. */
 int RecipeExpandStruct(ControllerState& st, uint64_t base, uint32_t size, LogFn log);
 
+/* Print fingerprint-driven next-step suggestions (does not auto-run). */
+int RecipeSuggest(ControllerState& st, LogFn log);
+
 int StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* module, LogFn log);
 
 bool EnsureDiscoverSession(ControllerState& st, LogFn log);

@@ -34,6 +34,8 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return HandleEnumRegions(pipe, r);
     case OpEnumModules:
         return HandleEnumModules(pipe, r);
+    case OpFingerprint:
+        return HandleFingerprint(pipe, r);
     case OpSearchMemory:
         return HandleSearchMemory(pipe, r);
     case OpSearchCreate:

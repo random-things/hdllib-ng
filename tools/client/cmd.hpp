@@ -34,6 +34,7 @@ int CmdModules(CmdCtx& ctx);
 int CmdRegions(CmdCtx& ctx);
 int CmdThreads(CmdCtx& ctx);
 int CmdHealth(CmdCtx& ctx);
+int CmdFingerprint(CmdCtx& ctx);
 int CmdEvents(CmdCtx& ctx);
 int CmdJob(CmdCtx& ctx);
 int CmdRead(CmdCtx& ctx);
