@@ -60,6 +60,23 @@ bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
+bool HandleUnloadDll(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    uint32_t pid = 0;
+    int32_t reload = 0;
+    std::wstring path;
+    if (!r.TakePod(pid) || !r.TakePod(reload) || !r.TakeWString(path)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    uint64_t base = 0;
+    const HdlStatus st = UnloadDll(pid, path.c_str(), reload, &base);
+    AppendPod(resp, static_cast<int32_t>(st));
+    AppendPod(resp, base);
+    return WriteFrame(pipe, resp);
+}
+
 bool HandleReadMemory(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
     std::vector<uint8_t> resp;

@@ -31,3 +31,8 @@ compile_commands.json
 # Misc
 *.log
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/

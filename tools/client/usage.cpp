@@ -12,6 +12,8 @@ Local inject (no pipe; former hdlinjector):
   hdlclient inject --recommend --title <substr> [--class <name>] [dll-path] [--stealth]
   hdlclient inject --early-bird <exe-path> <dll-path> [--stealth]
   hdlclient inject --help
+  hdlclient unload <pid> <dll-path> [--reload]
+  hdlclient reload <pid> <dll-path>
 
 Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> ping
@@ -106,6 +108,8 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> scan --hits --session ID [--max N] [--stream]
   hdlclient <pid> scan --close|--reset --session ID
   hdlclient <pid> inject <dll-path> [--target-pid N] [--method NAME] [--exe PATH] [--hook-export NAME]
+  hdlclient <pid> unload <dll-path> [--target-pid N] [--reload]
+  hdlclient <pid> reload <dll-path> [--target-pid N]
   hdlclient <pid> log <0-3>
 
 Types: bytes, i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, string, wstring

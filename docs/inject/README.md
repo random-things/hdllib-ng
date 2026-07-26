@@ -1,16 +1,17 @@
 # Injection techniques
 
-Live DLL injection methods implemented under `src/inject/`. The public entry points are `HdlInjectDll` / `HdlInjectDllEx` (see `include/hdllib/hdllib.h`); `src/inject.cpp` only dispatches to technique implementations.
+Live DLL injection methods implemented under `src/inject/`. The public entry points are `HdlInjectDll` / `HdlInjectDllEx` / `HdlUnloadDll` (see `include/hdllib/hdllib.h`); `src/inject.cpp` dispatches to technique implementations and unload.
 
 ## Layout
 
 ```
 src/inject.hpp              C++ facade used by the DLL / hdlclient inject
-src/inject.cpp              Method switch / validation / AUTO
+src/inject.cpp              Method switch / validation / AUTO / unload
 src/inject/
   common.hpp|.cpp           Shared remote alloc, path, module/thread/window helpers
   select.hpp|.cpp           Requirement catalog, target profile, confidence scoring
   techniques.hpp            Per-technique declarations
+  unload.cpp                FreeLibrary unload + optional same-path reload
   create_remote_thread.cpp
   nt_create_thread_ex.cpp
   rtl_create_user_thread.cpp

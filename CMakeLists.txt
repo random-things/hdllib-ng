@@ -71,6 +71,7 @@ set(HDL_INJECT_SOURCES
   src/inject/common.cpp
   src/inject/select.cpp
   src/inject/create_remote_thread.cpp
+  src/inject/unload.cpp
   src/inject/nt_create_thread_ex.cpp
   src/inject/rtl_create_user_thread.cpp
   src/inject/queue_user_apc.cpp

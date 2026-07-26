@@ -24,6 +24,8 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return HandleSetLogLevel(pipe, r);
     case OpInjectDll:
         return HandleInjectDll(pipe, r);
+    case OpUnloadDll:
+        return HandleUnloadDll(pipe, r);
     case OpReadMemory:
         return HandleReadMemory(pipe, r);
     case OpWriteMemory:

@@ -994,6 +994,37 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     st = HdlInjectDllEx(1, L"C:\\nonexistent_hdllib_test_zzz.dll", HDL_INJECT_CREATE_REMOTE_THREAD,
                         nullptr, nullptr, nullptr, &base);
     Report(c, st == HDL_E_NOT_FOUND, false, "HdlInjectDllEx missing file", "");
+
+    st = HdlUnloadDll(0, L"", 0, &base);
+    Report(c, st == HDL_E_INVALID_ARG, false, "HdlUnloadDll empty path", "");
+
+    st = HdlUnloadDll(0, L"C:\\nonexistent_hdl_unload_zzz.dll", 0, &base);
+    Report(c, st == HDL_E_NOT_FOUND, false, "HdlUnloadDll missing module", "");
+
+    /* Load a seldom-used system DLL, then unload and reload at the same path. */
+    {
+        wchar_t sys[MAX_PATH];
+        GetSystemDirectoryW(sys, MAX_PATH);
+        wcscat_s(sys, L"\\wintrust.dll");
+        const uint64_t before = reinterpret_cast<uint64_t>(GetModuleHandleW(L"wintrust.dll"));
+        uint64_t ubase = 0;
+        st = HdlInjectDll(0, sys, &ubase);
+        Report(c, st == HDL_OK && ubase != 0, false, "HdlInjectDll wintrust for unload", "");
+        if (st == HDL_OK) {
+            if (!before) {
+                st = HdlUnloadDll(0, sys, 1, &ubase);
+                Report(c, st == HDL_OK && ubase != 0, false, "HdlUnloadDll reload wintrust", "");
+                st = HdlUnloadDll(0, sys, 0, &ubase);
+                Report(c, st == HDL_OK && GetModuleHandleW(L"wintrust.dll") == nullptr, false,
+                       "HdlUnloadDll wintrust gone", "");
+            } else {
+                /* Already mapped elsewhere — one FreeLibrary should restore prior state. */
+                st = HdlUnloadDll(0, sys, 0, &ubase);
+                Report(c, st == HDL_OK || st == HDL_E_BUSY, true, "HdlUnloadDll wintrust (soft)",
+                       "");
+            }
+        }
+    }
 }
 
 void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t* dll_path) {

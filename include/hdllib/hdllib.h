@@ -146,6 +146,18 @@ HDL_API HdlStatus HdlInjectDllEx(
     uint64_t* out_base);
 
 /*
+ * Unload a DLL that has a module-list entry (LoadLibrary / most inject methods).
+ * pid==0 => current process. Manual-map / module-stomp images without a list entry
+ * are not supported (HDL_E_NOT_FOUND).
+ * reload!=0 => after a successful unload, LoadLibraryW the same path again;
+ * *out_base receives the new base (or 0 when reload==0).
+ * Unloading the module that contains the calling code in-process returns HDL_E_BUSY;
+ * eject that module from another process instead.
+ */
+HDL_API HdlStatus HdlUnloadDll(uint32_t pid, const wchar_t* dll_path, int reload,
+                               uint64_t* out_base);
+
+/*
  * Resolve pid/hwnd from HdlTargetSpec (pid and/or window title substring / class).
  * Multiple title/class matches => HDL_E_BUSY. HWND may be null when only pid is given
  * and the process has no top-level window.

@@ -101,7 +101,7 @@ Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStrea
 
 ## Capability map (opcodes → features)
 
-Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91). Groups below match product capabilities.
+Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92). Groups below match product capabilities.
 
 ### 1. Lifecycle, connectivity, logging
 
@@ -125,9 +125,13 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 | Op | Value | Capability | C API |
 |----|------:|------------|-------|
 | `OpInjectDll` | 2 | Inject another DLL into a process (or self / early-bird) | `HdlInjectDll`, `HdlInjectDllEx` |
+| `OpUnloadDll` | 92 | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` |
 
-**Request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.  
+**`OpInjectDll` request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.  
 **Reply:** `status`, `uint64_t base`, `uint32_t out_pid`.
+
+**`OpUnloadDll` request:** `uint32_t pid`, `int32_t reload`, `wstring dll_path`.  
+**Reply:** `status`, `uint64_t base` (new base when `reload != 0`, else 0).
 
 **Techniques** (`HDL_INJECT_*`, see [inject/](inject/README.md)):
 
@@ -505,6 +509,7 @@ Uses the active disasm backend. `EnumFunctions` confidence: export **90** (`HDL_
 | 84 | DiscoverWatchImport | Discover |
 | 85 | InvalidateFnIndex | Graph |
 | 86–91 | DiscoverResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence | Discover |
+| 92 | UnloadDll | Injection |
 
 ### Opcodes 79–91 (graph / watch / discover extensions)
 

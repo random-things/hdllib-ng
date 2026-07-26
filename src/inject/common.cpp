@@ -151,6 +151,16 @@ HdlStatus PollForModule(DWORD pid, const wchar_t* dll_path, uint64_t* out_base, 
     return HDL_E_FAILED;
 }
 
+HdlStatus PollForModuleGone(DWORD pid, const wchar_t* dll_path, int attempts, DWORD sleep_ms) {
+    for (int i = 0; i < attempts; ++i) {
+        if (!FindModuleBaseByPath(pid, dll_path)) {
+            return HDL_OK;
+        }
+        Sleep(sleep_ms);
+    }
+    return HDL_E_BUSY;
+}
+
 bool ReadRemote(HANDLE process, const void* addr, void* buf, size_t n) {
     SIZE_T got = 0;
     return ReadProcessMemory(process, addr, buf, n, &got) && got == n;

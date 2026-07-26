@@ -11,6 +11,7 @@ namespace proto {
 enum Op : uint32_t {
     OpPing          = 1,
     OpInjectDll     = 2,
+    OpUnloadDll     = 92,
     OpReadMemory    = 3,
     OpWriteMemory   = 4,
     OpEnumRegions   = 5,

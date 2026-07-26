@@ -50,6 +50,10 @@ HdlStatus WaitThreadAndBase(HANDLE thread, DWORD pid, const wchar_t* dll_path, u
 HdlStatus PollForModule(DWORD pid, const wchar_t* dll_path, uint64_t* out_base,
                         int attempts = 50, DWORD sleep_ms = 100);
 
+// Poll until the DLL disappears from the module list (or timeout).
+HdlStatus PollForModuleGone(DWORD pid, const wchar_t* dll_path, int attempts = 50,
+                            DWORD sleep_ms = 100);
+
 bool ReadRemote(HANDLE process, const void* addr, void* buf, size_t n);
 bool WriteRemote(HANDLE process, void* addr, const void* buf, size_t n);
 

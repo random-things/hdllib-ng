@@ -441,3 +441,53 @@ int RunLocalInject(int argc, wchar_t** argv) {
     wprintf(L"Module base: 0x%llX\n", static_cast<unsigned long long>(base));
     return 0;
 }
+
+void PrintLocalUnloadUsage() {
+    wprintf(LR"(hdlclient unload — FreeLibrary a DLL in a process (local, no pipe)
+
+Usage:
+  hdlclient unload <pid> <dll-path> [--reload]
+  hdlclient reload <pid> <dll-path>
+
+Notes:
+  Uses CreateRemoteThread(FreeLibrary) (or FreeLibrary in-process for pid 0/self).
+  --reload / the reload subcommand loads the same path again after unload.
+  Manual-mapped / stomped images without a module-list entry cannot be unloaded this way.
+  To eject hdllib itself, prefer this local command over the pipe verb.
+)");
+}
+
+int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
+    if (argc < 2) {
+        PrintLocalUnloadUsage();
+        return 1;
+    }
+    const uint32_t pid = static_cast<uint32_t>(_wtoi(argv[0]));
+    const wchar_t* path = argv[1];
+    int reload = reload_default;
+    for (int i = 2; i < argc; ++i) {
+        if (_wcsicmp(argv[i], L"--reload") == 0) {
+            reload = 1;
+        } else if (_wcsicmp(argv[i], L"--help") == 0 || wcscmp(argv[i], L"/?") == 0) {
+            PrintLocalUnloadUsage();
+            return 0;
+        }
+    }
+    wchar_t full[MAX_PATH];
+    GetFullPathNameW(path, MAX_PATH, full, nullptr);
+
+    uint64_t base = 0;
+    const HdlStatus st = hdl::UnloadDll(pid, full, reload, &base);
+    if (st != HDL_OK) {
+        wprintf(L"Unload failed: %ls\n", StatusName(st));
+        return 1;
+    }
+    if (reload) {
+        wprintf(L"Reloaded into pid %lu at 0x%llX\n", static_cast<unsigned long>(pid),
+                static_cast<unsigned long long>(base));
+        PrintPipe(pid);
+    } else {
+        wprintf(L"Unloaded from pid %lu.\n", static_cast<unsigned long>(pid));
+    }
+    return 0;
+}

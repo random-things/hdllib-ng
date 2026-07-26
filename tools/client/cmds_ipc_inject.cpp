@@ -108,3 +108,41 @@ int CmdInject(CmdCtx& ctx) {
     return st == HDL_OK ? 0 : 1;
 }
 
+int CmdUnload(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+
+    if (ctx.argc < 4) {
+        PrintUsage();
+        return 1;
+    }
+    uint32_t target_pid = 0;
+    int reload = 0;
+    if (_wcsicmp(ctx.cmd.c_str(), L"reload") == 0) {
+        reload = 1;
+    }
+    const wchar_t* path = ctx.argv[3];
+    for (int i = 4; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--target-pid") == 0 && i + 1 < ctx.argc) {
+            target_pid = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
+        } else if (wcscmp(ctx.argv[i], L"--reload") == 0) {
+            reload = 1;
+        }
+    }
+    wchar_t full[MAX_PATH];
+    GetFullPathNameW(path, MAX_PATH, full, nullptr);
+    AppendPod(req, static_cast<uint32_t>(OpUnloadDll));
+    AppendPod(req, target_pid);
+    AppendPod(req, static_cast<int32_t>(reload));
+    AppendWString(req, full);
+    if (!ctx.client.Request(req, resp)) return 1;
+    Reader r(resp);
+    int32_t st = 0;
+    uint64_t base = 0;
+    if (!r.TakePod(st) || !r.TakePod(base)) return 1;
+    wprintf(L"status=%ls base=%016llx reload=%d\n", StatusName(st),
+            static_cast<unsigned long long>(base), reload);
+    return st == HDL_OK ? 0 : 1;
+}
+

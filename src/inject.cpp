@@ -103,4 +103,24 @@ HdlStatus InjectDllEx(uint32_t pid, const wchar_t* dll_path, int method,
     }
 }
 
+HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base) {
+    if (!dll_path || !dll_path[0]) {
+        return HDL_E_INVALID_ARG;
+    }
+    if (out_base) {
+        *out_base = 0;
+    }
+
+    const std::wstring full = inject::NormalizePath(dll_path);
+    if (full.empty()) {
+        return HDL_E_INVALID_ARG;
+    }
+
+    const DWORD self = GetCurrentProcessId();
+    if (pid == 0 || pid == self) {
+        return inject::UnloadLocal(full.c_str(), reload, out_base);
+    }
+    return inject::UnloadRemote(pid, full.c_str(), reload, out_base);
+}
+
 }  // namespace hdl

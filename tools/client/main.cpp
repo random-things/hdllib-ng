@@ -43,6 +43,8 @@ static const CmdEntry kCommands[] = {
     {L"probe", CmdProbe},
     {L"scan", CmdScan},
     {L"inject", CmdInject},
+    {L"unload", CmdUnload},
+    {L"reload", CmdUnload},
     {L"discover-create", CmdDiscoverCreate},
     {L"discover-close", CmdDiscoverClose},
     {L"discover-add", CmdDiscoverAdd},
@@ -117,6 +119,16 @@ int wmain(int argc, wchar_t** argv) {
             return 0;
         }
         return RunLocalInject(argc - 2, argv + 2);
+    }
+
+    if (argc >= 2 && (_wcsicmp(argv[1], L"unload") == 0 || _wcsicmp(argv[1], L"reload") == 0)) {
+        const int reload_default = _wcsicmp(argv[1], L"reload") == 0 ? 1 : 0;
+        if (argc >= 3 && (EqFlag(argv[2], L"--help") || EqFlag(argv[2], L"-h") ||
+                          wcscmp(argv[2], L"/?") == 0)) {
+            PrintLocalUnloadUsage();
+            return 0;
+        }
+        return RunLocalUnload(argc - 2, argv + 2, reload_default);
     }
 
     if (argc < 2) {

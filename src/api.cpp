@@ -76,6 +76,10 @@ HdlStatus HdlInjectDllEx(uint32_t pid, const wchar_t* dll_path, int method,
                             out_base);
 }
 
+HdlStatus HdlUnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base) {
+    return hdl::UnloadDll(pid, dll_path, reload, out_base);
+}
+
 HdlStatus HdlResolveTarget(const HdlTargetSpec* spec, uint32_t* out_pid, HWND* out_hwnd) {
     return hdl::inject::ResolveTarget(spec, out_pid, out_hwnd);
 }
