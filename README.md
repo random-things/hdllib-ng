@@ -2,7 +2,7 @@
 
 Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel—plus the same surface as a stable exported C API. `hdlclient` adds an interest store and place/stitch/discover recipes on top.
 
-Capability reference (opcodes **1…91** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md).
+Capability reference (opcodes **1…91** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
 
 ## Build
 
@@ -62,21 +62,9 @@ Stub kinds: `abs_jmp`, `rel_jmp32`, `mov_rax_jmp`, `raw` (DLL templates — no t
 
 ### Interactive controller (REPL / TUI)
 
-`hdlclient <pid>` (or `repl`) opens a line REPL over the pipe. All one-shot pipe verbs work; extras:
+`hdlclient <pid>` (or `repl`) opens a line REPL over the pipe. All one-shot pipe verbs work; extras include `store`, `recipe`, `stabilize`, and `session`. `--tui` is a PDCurses full-screen UI (log + interests panes; recipe prefills on `a`/`c`/`p`/`t`/`x`). Build with `HDL_CLIENT_TUI=ON` (default).
 
-| Verb | Purpose |
-|------|---------|
-| `store load\|save\|list\|revalidate\|add <name>` | Persistent interest / locator JSON (v3) |
-| `store add <name> [--kind K] synth\|path\|export N\|cave\|stub\|patch` | Attach last synth / export / cave / stub / patch |
-| `recipe place <interest> <near_hex\|name>` | Best cave (or AllocNear) → store cave locator |
-| `recipe stitch <interest> --target HEX [--kind …]` | BuildStub + patch jmp → store stub/patch |
-| `recipe expand <base> <size>` | Layout / cluster expansion helper |
-| `recipe action <name> <watch_hex>` | Hook-watch → action window → rank → synth |
-| `recipe constrain <size> <pred>...` | Constraint scan → candidates |
-| `stabilize <cand_id>` | Synth **and** write interest into the store |
-| `session new\|show\|close` | Discover session |
-
-`--tui` is a PDCurses full-screen UI (log + interests panes with locator tags `P`/`A`/`E`/`I`/`C`/`S`/`X`; `q` quit, `s`/`L` save/load, `r` revalidate, `a`/`c`/`p`/`t`/`x` recipe prefills, `z` stabilize, `n` session, Enter for wide-string commands). Build with `HDL_CLIENT_TUI=ON` (default).
+Workflows for CLI groups, `discover-*` pipelines, and recipes: **[docs/client.md](docs/client.md)**.
 
 ### Injection methods
 
@@ -175,7 +163,7 @@ The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Adm
 
 `hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), REPL/`--tui`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
 
-Discover pipeline (session-based): create a session, add value/constraint/action evidence (optionally via `hook-import` / `discover-watch-import`), rank with stack frames by default, accumulate region heat across actions, promote fields from watch hits or object diffs, then stabilize with pattern synthesis or pointer-path consensus—and optionally `discover-export` / `discover-import` JSON. See `HdlDiscover*` in `hdllib.h`. C-API-only leftovers (no pipe): `HdlSetLogFile`, `HdlSetHealthVeh`, custom `HdlHook`, custom `HdlDisasmRegisterBackend`.
+Discover / recipe workflows (command sequences, predicates, store locators): [docs/client.md](docs/client.md). See also `HdlDiscover*` in `hdllib.h`. C-API-only leftovers (no pipe): `HdlSetLogFile`, `HdlSetHealthVeh`, custom `HdlHook`, custom `HdlDisasmRegisterBackend`.
 
 ## Notes
 

@@ -4,6 +4,8 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 
 **What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, allocation, and further DLL injection—controllable from outside via a multi-client named pipe, or in-process via `Hdl*`. The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
 
+**Client workflows** (CLI groups, `discover-*` pipelines, recipes / store): [client.md](client.md).
+
 **Platform:** x64 only (no Wow64 helper). Opcodes: **1…91** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
 
 ---
@@ -362,7 +364,9 @@ Session-based pipeline: seed candidates → constraint / action evidence → sta
 5. `ClusterType` / `DiffObjects` / `ApplyWatchHits` to expand layout → `GetCandidates`
 6. Optional `Export` / later `Import` for durable session snapshots
 
-**Note:** `HdlDiscoverScanValue` (typed exact scan → address candidates) exists on the C API only; there is no matching opcode—use an in-process call or seed hits via search + `AddCandidate`.
+Concrete `hdlclient` command sequences for these pipelines (and recipes that wrap them): [client.md § Discover](client.md#3-discover-sessions-discover-).
+
+**Note:** `HdlDiscoverScanValue` (typed exact scan → address candidates) exists on the C API only; there is no matching opcode. From outside the process use `discover-scan` (SearchFirst + AddCandidate per hit) or seed hits via search + `discover-add`.
 
 ---
 
@@ -587,31 +591,11 @@ Call arg prefixes: `u64:`, `i64:`, `f32:`, `f64:`, `cstr:`, `wstr:`, `buf:HEX`, 
 
 `hdlclient` persists addresses as **interests** in a JSON file (`--store PATH`). Schema **version 3** (Save always writes ≥3; older files still load; unknown locator types are skipped with a warning).
 
-**Locator types:**
+**Locator types:** `pattern`, `path`, `export`, `import`, `cave`, `stub`, `patch` — revalidate via ResolvePattern / FollowPointers / ResolveExport / EnumImports / FindCaves / BuildStub / address-only for patches.
 
-| Type | Persisted fields | Revalidate |
-|------|------------------|------------|
-| `pattern` | AOB + optional RIP / module | ResolvePattern |
-| `path` | static RVA + offsets | FollowPointers |
-| `export` | module + name | ResolveExport |
-| `import` | module + DLL + name | EnumImports / IAT |
-| `cave` | near hint, min size, fill | FindCaves + client score (nearer, then larger) |
-| `stub` | kind, target interest/abs, steal_min, last stub VA | BuildStub |
-| `patch` | name, bytes hex, enabled intent, handle | Resolve target addr only by default (apply is explicit) |
+**Recipes** (REPL / TUI): `place`, `stitch`, `expand`, `action`, `constrain`, plus `stabilize <cand_id>`.
 
-Optional per-interest: `kind` (`function` / `object` / `field` / `patch` / …), `evidence`, `struct_fields[]`.
-
-**Recipes** (REPL / TUI; orchestrate pipe ops + store writes):
-
-| Recipe | Behavior |
-|--------|----------|
-| `recipe place <interest> <near_hex\|name>` | Score caves near target → AllocNear fallback → store `cave` locator |
-| `recipe stitch <interest> --target <hex\|name> [--kind …]` | BuildStub → PatchCreate+Enable jmp → store `stub`+`patch` |
-| `recipe expand <base> <size>` | Cluster / layout expansion helpers |
-| `recipe action` / `recipe constrain` | Discover action window / constraint scan |
-| `stabilize <cand_id>` | Synth pattern **and** `AddOrReplace` into the store |
-
-`store add <name> [--kind K] [synth\|path\|export NAME\|cave\|stub\|patch]` attaches the last synth / cave / stub / patch handle. TUI interests pane tags locators `P`/`A`/`E`/`I`/`C`/`S`/`X`; key `p` prefills `recipe place `.
+Full workflows, predicate syntax, end-to-end examples, and TUI keys: **[client.md § Interest store and recipes](client.md#4-interest-store-and-recipes)**.
 
 Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` / `mov_rax_jmp` / `raw`.
 
@@ -652,3 +636,4 @@ Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` 
 | [`tools/client/store.cpp`](../tools/client/store.cpp) / [`recipes.cpp`](../tools/client/recipes.cpp) | Interest JSON + discovery recipes |
 | [`tools/client/local_inject.cpp`](../tools/client/local_inject.cpp) | Local inject / recommend / early-bird |
 | [`README.md`](../README.md) | Build, inject quickstart, API summary |
+| [`docs/client.md`](client.md) | CLI / discover / recipe workflows |
