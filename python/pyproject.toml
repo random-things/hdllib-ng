@@ -17,11 +17,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+mcp = ["mcp>=1.2"]
+dev = ["pytest>=7.0", "mcp>=1.2"]
 
 [project.scripts]
 hdl = "hdllib.cli:main"
 hdllib = "hdllib.cli:main"
+hdl-mcp = "hdllib.mcp_main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

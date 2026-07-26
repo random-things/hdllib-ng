@@ -176,3 +176,51 @@ hdl --game NAME --inject --python
 REM adapters are separate packages; after install, NAME appears in list_games()
 REM >>> hdl.ping(); mem.u32(addr); scan.aob("48 8B ??"); game.verify_attached(hdl)
 ```
+
+## MCP server
+
+Optional stdio MCP server for Cursor / Claude Desktop. It is a **separate entrypoint** (`hdl-mcp`) on top of `HdlClient` / `DebugSession` — not fused into the interactive shell. Install the extra:
+
+```bat
+cd python
+pip install -e ".[mcp]"
+```
+
+Run:
+
+```bat
+REM Read-oriented (default): attach via tools or --preattach without inject/write
+hdl-mcp --pid 1234 --preattach
+
+REM Full control: inject + write/call/patch/hook/watch-install
+hdl-mcp --pid 1234 --inject --allow-write --preattach
+
+REM Or resolve by exe / env HDL_PID
+set HDL_PID=1234
+hdl-mcp --allow-write
+```
+
+Flags: `--pid` / `--exe` / `--title` / `--game`, `--inject`, `--dll`, `--method`, `--timeout`, `--allow-write`, `--preattach`.
+
+**Write gate:** without `--allow-write`, tools such as `mem_write`, `attach(inject=true)`, `call_export`, `patch_nop`, `hook_trace`, `watch_hw`, and `aob_install` return a JSON error. Read tools (`mem_read`, `aob_scan`, `disasm`, …) always work once attached.
+
+Cursor config sample: [`examples/mcp_cursor.json`](examples/mcp_cursor.json).
+
+```json
+{
+  "mcpServers": {
+    "hdllib": {
+      "command": "hdl-mcp",
+      "args": ["--pid", "1234", "--inject", "--allow-write", "--preattach"]
+    }
+  }
+}
+```
+
+Tool results are JSON objects with `"ok": true|false`. High-level tools cover session lifecycle, memory, AOB/value scan, resolve-pattern, disasm, health, watches/hooks/call (gated), discover, and CE strategies (`patch_nop`, `aob_install`, `access_watch`). Logs go to **stderr** only (stdout is the MCP transport).
+
+Offline MCP tests:
+
+```bat
+pytest tests\test_mcp_serialize.py tests\test_mcp_session.py tests\test_mcp_tools_smoke.py -q
+```

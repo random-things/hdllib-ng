@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hdllib": {
+      "command": "hdl-mcp",
+      "args": ["--pid", "1234", "--inject", "--allow-write", "--preattach"],
+      "env": {}
+    }
+  }
+}
