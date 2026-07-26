@@ -181,6 +181,22 @@ pytest tests\test_pipe_framing.py tests\test_games.py tests\test_toolbox.py -q
 
 Python layers: core `HdlClient` + CE-style toolbox classes (`Memory`, `Scanner`, `SearchSession`, `DiscoverSession`, `Place`, `Code`, `Pe`, …) + abstract `games`/`GameTarget` registry. `hdllib.dll` is staged into the wheel/editable install so console Scripts can inject without `HDL_DLL`. Concrete game adapters (e.g. Battle for Wesnoth) live in separate packages such as `hdllib-wesnoth`. Details: [`python/README.md`](python/README.md).
 
+## Python client
+
+Pure-Python bindings live under [`python/`](python/): ctypes for out-of-process inject/resolve, named-pipe client for in-target ops (same protocol as `hdlclient`). Includes an **`hdl` shell** (hdlclient-like commands) and a **Python REPL** with an `HdlClient` instance named `hdl`.
+
+```bat
+cmake --build --preset x64-windows          REM stages hdllib.dll into python/hdllib/_native/
+cd python
+pip install -e ".[dev]"                     REM packages the DLL for Scripts (hdl, …)
+hdl --pid 1234 --inject --python            REM REPL: hdl, mem, scan, place, code, pe, …
+hdl 1234 ping
+python examples\inject_flow.py --exe hdl_test_target.exe
+pytest tests\test_pipe_framing.py tests\test_games.py tests\test_toolbox.py -q
+```
+
+Python layers: core `HdlClient` + CE-style toolbox classes (`Memory`, `Scanner`, `SearchSession`, `DiscoverSession`, `Place`, `Code`, `Pe`, …) + abstract `games`/`GameTarget` registry. `hdllib.dll` is staged into the wheel/editable install so console Scripts can inject without `HDL_DLL`. Concrete game adapters (e.g. Battle for Wesnoth) live in separate packages such as `hdllib-wesnoth`. Details: [`python/README.md`](python/README.md).
+
 ## Notes
 
 - x64 only; no Wow64 helper in v1.
