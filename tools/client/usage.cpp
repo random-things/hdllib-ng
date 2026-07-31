@@ -107,7 +107,7 @@ Pipe commands (DLL already loaded in <pid>):
     REPL/TUI: store load|save|list|add|revalidate; recipe place|suggest|stitch|expand|action|constrain;
     stabilize; store add --kind function|object|patch … [synth|path|export NAME|cave|stub|patch]
   hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--job ID] [--timeout MS]
-  hdlclient <pid> scan --hits --session ID [--max N] [--stream]
+  hdlclient <pid> scan --hits --session ID [--max N]
   hdlclient <pid> scan --close|--reset --session ID
   hdlclient <pid> inject <dll-path> [--target-pid N] [--method NAME] [--exe PATH] [--hook-export NAME]
   hdlclient <pid> unload <dll-path> [--target-pid N] [--reload]

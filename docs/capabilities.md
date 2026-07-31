@@ -68,7 +68,7 @@ Many long-running or bulk ops accept an optional trailing triple (missing fields
 
 ### Streaming replies
 
-When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **multiple frames**. Each chunk:
+When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **multiple frames**. Each chunk (regions/modules/threads/…):
 
 | Field | Type |
 |-------|------|
@@ -79,7 +79,9 @@ When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **mu
 | `count` | `uint32_t` |
 | items | `count` records (type depends on op) |
 
-Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`). Streaming is used for regions, modules, threads, AOB search hits, and incremental search hit dumps.
+**Search** streams omit `offset`: `status`, `flags`, `total`, `count`, `u64[count]`.
+
+Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`).
 
 ### Status codes (`HdlStatus`)
 
@@ -203,7 +205,7 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 
 **IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). Cancel/timeout via optional job trailer.
 
-**`OpSearchMemory` / `OpSearchFirst` / `OpSearchGetHits` always stream.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on `WriteFile` until the client drains the pipe. Frames: `status`, `flags(MORE)`, `total` (0 until final), `offset`, `count`, `u64[count]`. Final frame has `MORE=0` and the true `total`. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.  
+**`OpSearchMemory` / `OpSearchFirst` / `OpSearchGetHits` always stream.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on `WriteFile` until the client drains the pipe. Search frames: `status`, `flags(MORE)`, `total` (0 until final), `count`, `u64[count]` (no `offset` — append in order). Final frame has `MORE=0` and the true `total`. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.  
 **`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count` (then use GetHits to stream survivors).
 
 ---

@@ -73,24 +73,46 @@ bool WriteStreamed(HANDLE pipe, HdlStatus st, const T* items, uint32_t total, ui
 }
 
 /* Bounded hit buffer for search streaming. Flush (WriteFile) blocks until the client
- * drains the pipe — that is the scan backpressure when the buffer is full. */
+ * drains the pipe — that is the scan backpressure when the buffer is full.
+ * Frame: status, flags(MORE), total (0 until final), count, u64[count]. */
 constexpr uint32_t kSearchStreamCap = 4096;
 
 inline bool WriteSearchStreamError(HANDLE pipe, HdlStatus st) {
     using namespace proto;
     std::vector<uint8_t> frame;
     AppendPod(frame, static_cast<int32_t>(st));
-    AppendPod(frame, 0u);
-    AppendPod(frame, 0u);
-    AppendPod(frame, 0u);
-    AppendPod(frame, 0u);
+    AppendPod(frame, 0u); /* flags */
+    AppendPod(frame, 0u); /* total */
+    AppendPod(frame, 0u); /* count */
     return WriteFrame(pipe, frame);
+}
+
+inline bool WriteSearchHitsStreamed(HANDLE pipe, HdlStatus st, const uint64_t* items,
+                                   uint32_t total, uint32_t stream_count, uint32_t chunk) {
+    using namespace proto;
+    if (stream_count == 0 || !items) {
+        return WriteSearchStreamError(pipe, st);
+    }
+    for (uint32_t off = 0; off < stream_count; off += chunk) {
+        const uint32_t n = (off + chunk <= stream_count) ? chunk : (stream_count - off);
+        const bool more = (off + n) < stream_count;
+        std::vector<uint8_t> frame;
+        AppendPod(frame, static_cast<int32_t>(more ? HDL_OK : st));
+        AppendPod(frame, more ? static_cast<uint32_t>(HDL_IPC_MORE) : 0u);
+        AppendPod(frame, more ? 0u : total);
+        AppendPod(frame, n);
+        AppendBytes(frame, items + off, n * sizeof(uint64_t));
+        if (!WriteFrame(pipe, frame)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 struct SearchHitStreamer {
     HANDLE pipe = nullptr;
     std::vector<uint64_t> buf;
-    uint32_t offset = 0;
+    uint32_t emitted = 0;
     bool failed = false;
 
     explicit SearchHitStreamer(HANDLE p) : pipe(p) {
@@ -124,7 +146,6 @@ struct SearchHitStreamer {
         AppendPod(frame, static_cast<int32_t>(HDL_OK));
         AppendPod(frame, more ? static_cast<uint32_t>(HDL_IPC_MORE) : 0u);
         AppendPod(frame, 0u); /* total unknown until Finish */
-        AppendPod(frame, offset);
         AppendPod(frame, static_cast<uint32_t>(buf.size()));
         if (!buf.empty()) {
             AppendBytes(frame, buf.data(), buf.size() * sizeof(uint64_t));
@@ -133,7 +154,7 @@ struct SearchHitStreamer {
             failed = true;
             return HDL_E_FAILED;
         }
-        offset += static_cast<uint32_t>(buf.size());
+        emitted += static_cast<uint32_t>(buf.size());
         buf.clear();
         return HDL_OK;
     }
@@ -143,18 +164,17 @@ struct SearchHitStreamer {
         if (failed) {
             return false;
         }
-        const uint32_t total = offset + static_cast<uint32_t>(buf.size());
+        const uint32_t total = emitted + static_cast<uint32_t>(buf.size());
         std::vector<uint8_t> frame;
         AppendPod(frame, static_cast<int32_t>(st));
         AppendPod(frame, 0u); /* final */
         AppendPod(frame, total);
-        AppendPod(frame, offset);
         AppendPod(frame, static_cast<uint32_t>(buf.size()));
         if (!buf.empty()) {
             AppendBytes(frame, buf.data(), buf.size() * sizeof(uint64_t));
         }
         buf.clear();
-        offset = total;
+        emitted = total;
         return WriteFrame(pipe, frame);
     }
 };

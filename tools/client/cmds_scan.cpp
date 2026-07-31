@@ -173,7 +173,7 @@ bool IpcCreateSession(PipeClient& client, uint64_t* out_id) {
     return true;
 }
 
-/* Growable collector for streamed search frames (total/offset/count + u64 hits). */
+/* Growable collector for search frames: total, count, u64[count] (no offset). */
 bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
                          uint32_t* out_total, std::vector<uint64_t>* out_hits) {
     using namespace hdl::proto;
@@ -186,9 +186,8 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
     return client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
         Reader r(p, n);
         uint32_t total = 0;
-        uint32_t off = 0;
         uint32_t count = 0;
-        if (!r.TakePod(total) || !r.TakePod(off) || !r.TakePod(count)) {
+        if (!r.TakePod(total) || !r.TakePod(count)) {
             return false;
         }
         const size_t need = out_hits->size() + count;

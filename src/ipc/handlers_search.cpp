@@ -232,7 +232,7 @@ bool HandleSearchGetHits(HANDLE pipe, proto::Reader& r) {
     std::vector<uint64_t> all_hits(total ? total : 1);
     uint32_t all = total;
     const HdlStatus st = total ? SearchGetHits(session, all_hits.data(), &all) : HDL_OK;
-    return WriteStreamed(pipe, st, all_hits.data(), total, got, kSearchStreamCap);
+    return WriteSearchHitsStreamed(pipe, st, all_hits.data(), total, got, kSearchStreamCap);
 }
 
 }  // namespace ipc
