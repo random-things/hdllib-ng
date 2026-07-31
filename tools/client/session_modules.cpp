@@ -1,5 +1,7 @@
 #include "session_modules.hpp"
 
+#include <cwchar>
+
 namespace hdlcli {
 namespace {
 
