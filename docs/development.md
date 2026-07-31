@@ -16,16 +16,20 @@ The root [`CMakeLists.txt`](../CMakeLists.txt) is authoritative.
 | `HDL_CLIENT_TUI` | `ON` | Fetch/build PDCurses and enable `hdlclient --tui` |
 | `HDL_DISASM_ZYDIS` | `ON` | Fetch and register Zydis |
 | `HDL_DISASM_CAPSTONE` | `ON` | Fetch and register Capstone |
+| `HDL_WARNINGS_AS_ERRORS` | `OFF` | Promote warnings on first-party targets; enabled by CI presets |
+| `HDL_ENABLE_ASAN` | `OFF` | Instrument first-party targets with MSVC AddressSanitizer |
+| `HDL_ENABLE_CLANG_TIDY` | `OFF` | Run the configured clang-tidy checks during C++ compilation |
+| `HDL_ENABLE_MSVC_ANALYZE` | `OFF` | Run MSVC native code analysis during compilation |
 
 At least one disassembly backend must remain enabled. The project is Windows
 x64 only and enables MASM for the call/hook shims.
 
-Typical Visual Studio preset:
+Typical Visual Studio 2022 preset:
 
 ```bat
-cmake --preset x64-windows-vs
-cmake --build --preset x64-windows-vs --config Release
-ctest --test-dir build/x64-windows-vs -C Release -R hdl_ --output-on-failure
+cmake --preset x64-windows-vs2022
+cmake --build --preset x64-windows-vs2022 --config Release
+ctest --test-dir build/x64-windows-vs2022 -C Release -R hdl_ --output-on-failure
 ```
 
 Typical Ninja preset after entering an x64 MSVC environment:
@@ -35,6 +39,11 @@ cmake --preset x64-windows
 cmake --build --preset x64-windows
 ctest --test-dir build/x64-windows -R hdl_ --output-on-failure
 ```
+
+The checked-in CI presets split desktop-independent tests from the live GUI and
+injection suite. See [ci.md](ci.md) before running or changing CI: GUI-labeled
+tests require an unlocked interactive Windows runner and must not execute
+untrusted pull-request code on a persistent machine.
 
 ## How a capability crosses the repository
 

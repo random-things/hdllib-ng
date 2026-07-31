@@ -6,22 +6,21 @@ Capability reference (opcodes **1…91** plus **`OpUnloadDll` = 92**, **`OpFinge
 
 ## Build
 
-Requirements: Visual Studio 2019+ Build Tools (MSVC x64), CMake, Ninja (or the VS generator). MinHook v1.3.3 is vendored under `third_party/minhook`. With `HDL_CLIENT_TUI=ON` (default), CMake FetchContent pulls PDCurses 3.9 for `hdlclient --tui`. Zydis and Capstone are fetched for the disasm backends.
+Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.3 is vendored under `third_party/minhook`. With `HDL_CLIENT_TUI=ON` (default), CMake FetchContent pulls PDCurses 3.9 for `hdlclient --tui`. Zydis and Capstone are fetched for the disasm backends.
 
 ```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-set CMAKE="C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-
-%CMAKE% --preset x64-windows-vs
-%CMAKE% --build --preset x64-windows-vs --config Release
+cmake --preset x64-windows-vs2022
+cmake --build --preset x64-windows-vs2022 --config Release
 ```
 
-Artifacts land under `build/x64-windows-vs/Release/`:
+Artifacts land under `build/x64-windows-vs2022/Release/`:
 
 - `hdllib.dll` — inject this
 - `hdlclient.exe` — inject + IPC CLI / REPL / optional TUI
 
 Ninja preset (`x64-windows`) works the same if `ninja` is on `PATH` after `vcvars64`.
+Windows CI, including the required interactive GUI runner, is documented in
+[docs/ci.md](docs/ci.md).
 
 ## Inject and talk
 

@@ -1,0 +1,105 @@
+name: Windows CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-build:
+    name: Build and headless tests (Windows 2022)
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}\hdllib-fetchcontent
+          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
+
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -no-color
+
+      - name: Check formatting of changed C and C++ files
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: ./tools/ci/check-format.ps1 -BaseRevision $env:BASE_REVISION
+
+      - name: Configure
+        run: >-
+          cmake --preset ci-windows
+          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
+
+      - name: Build
+        run: cmake --build --preset ci-windows --parallel
+
+      - name: Run headless tests
+        run: ctest --preset ci-headless
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdllib-windows-x64-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/ci-windows/Release/*.dll
+            build/ci-windows/Release/*.exe
+            build/ci-windows/Release/*.lib
+            build/ci-windows/Release/*.pdb
+
+  gui-tests:
+    name: GUI and injection tests
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: hosted-build
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 90
+    concurrency:
+      group: hdllib-interactive-gui-runner
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Verify interactive desktop
+        run: ./tools/ci/assert-interactive-desktop.ps1
+
+      - name: Configure
+        run: >-
+          cmake --preset ci-gui
+          "-DFETCHCONTENT_BASE_DIR=C:\hdllib-ci\fetchcontent"
+
+      - name: Build
+        run: cmake --build --preset ci-gui --parallel
+
+      - name: Run GUI smoke suite
+        run: ctest --preset ci-gui-smoke
+
+      - name: Upload GUI test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdllib-gui-test-log-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: build/ci-gui/Testing/Temporary/*.log
