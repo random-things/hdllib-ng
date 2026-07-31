@@ -24,7 +24,7 @@ hdlclient --json <pid> ping
 hdlclient <pid> --json modules
 ```
 
-Stdout is one UTF-16 line of UTF-8 JSON:
+Stdout is one line of UTF-8 JSON:
 
 ```json
 { "ok": true, "status": 0, "cmd": "ping", "data": { "remote_pid": 1234 }, "error": null }
