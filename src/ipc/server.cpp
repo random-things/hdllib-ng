@@ -195,7 +195,6 @@ void StopNoJoin() {
         g_thread.detach();
     }
     /* Leave g_stop_event for the detached thread; do not close under loader lock. */
-    g_running = false;
 }
 
 bool IsRunning() {
