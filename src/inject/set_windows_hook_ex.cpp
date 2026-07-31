@@ -8,9 +8,23 @@ HdlStatus SetWindowsHookExMethod(uint32_t pid, const wchar_t* dll_path, const ch
                                  uint64_t* out_base) {
     const char* export_name = (hook_export && hook_export[0]) ? hook_export : "HdlHookProc";
 
-    HMODULE local = LoadLibraryW(dll_path);
+    HWND hwnd = FindWindowForPid(pid);
+    if (!hwnd) {
+        HDL_LOG_ERROR("No window found for pid %u (SetWindowsHookEx needs a UI thread)", pid);
+        return HDL_E_NOT_FOUND;
+    }
+
+    DWORD tid = GetWindowThreadProcessId(hwnd, nullptr);
+    if (tid == 0) {
+        return HDL_E_FAILED;
+    }
+
+    // SetWindowsHookEx needs the hook procedure's module and RVA in this process, but the
+    // controller must not initialize the operational payload locally. DONT_RESOLVE_DLL_REFERENCES
+    // maps exports without running DllMain and avoids racing hdllib's bootstrap thread on unload.
+    HMODULE local = LoadLibraryExW(dll_path, nullptr, DONT_RESOLVE_DLL_REFERENCES);
     if (!local) {
-        HDL_LOG_ERROR("LoadLibraryW(local) for hook DLL failed: %lu", GetLastError());
+        HDL_LOG_ERROR("LoadLibraryExW(local) for hook DLL failed: %lu", GetLastError());
         return HDL_E_FAILED;
     }
 
@@ -19,19 +33,6 @@ HdlStatus SetWindowsHookExMethod(uint32_t pid, const wchar_t* dll_path, const ch
         HDL_LOG_ERROR("Hook export '%s' not found", export_name);
         FreeLibrary(local);
         return HDL_E_NOT_FOUND;
-    }
-
-    HWND hwnd = FindWindowForPid(pid);
-    if (!hwnd) {
-        HDL_LOG_ERROR("No window found for pid %u (SetWindowsHookEx needs a UI thread)", pid);
-        FreeLibrary(local);
-        return HDL_E_NOT_FOUND;
-    }
-
-    DWORD tid = GetWindowThreadProcessId(hwnd, nullptr);
-    if (tid == 0) {
-        FreeLibrary(local);
-        return HDL_E_FAILED;
     }
 
     HHOOK hook = SetWindowsHookExW(WH_GETMESSAGE, hook_proc, local, tid);
@@ -56,5 +57,5 @@ HdlStatus SetWindowsHookExMethod(uint32_t pid, const wchar_t* dll_path, const ch
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

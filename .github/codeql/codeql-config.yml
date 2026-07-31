@@ -1,0 +1,5 @@
+name: hdllib CodeQL configuration
+
+paths-ignore:
+  - build/**
+  - third_party/**

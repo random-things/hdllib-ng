@@ -44,3 +44,18 @@ ctest -C Release -R hdl_ --output-on-failure
 
 `--locate-only` runs locate + discover inject fixtures (skips the inject matrix).
 `hdl_client_tests` requires `hdlclient.exe`, `hdllib.dll`, and `hdl_test_target.exe` beside the test binary (POST_BUILD copies them).
+
+CTest exposes `headless`, `gui`, and `full` labels. Only `hdl_select_tests` and
+`hdl_store_tests` are classified as headless. All local API, injection, locate,
+IPC/client, and toy coverage requires an interactive Windows desktop. Use the
+presets rather than guessing which executables are safe for a service session:
+
+```bat
+ctest --preset ci-headless
+ctest --preset ci-gui-smoke
+ctest --preset ci-gui-full
+```
+
+The GUI presets deliberately use one worker and a shared CTest resource lock.
+Runner setup and the pull-request security boundary are documented in
+[`docs/ci.md`](../docs/ci.md).

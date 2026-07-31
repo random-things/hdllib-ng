@@ -1,0 +1,126 @@
+# Windows continuous integration
+
+`hdllib` uses two Windows CI tiers because its end-to-end tests create real
+windows, install hooks, inject DLLs, and communicate with child processes.
+GitHub-hosted Windows machines are used for builds and tests that do not need a
+desktop. A self-hosted runner on an existing Windows PC supplies an unlocked
+interactive desktop for trusted `main` builds and scheduled GUI and injection
+suites. It does not need to be a rented server.
+
+## Workflow layout
+
+| Workflow/job | Runner | Trigger | Coverage |
+|---|---|---|---|
+| `Windows CI / hosted-build` | `windows-2022` | pull request, `main`, manual | Release build, changed-file formatting, `headless` CTest label |
+| `Windows CI / gui-tests` | Self-hosted Windows x64 | Push or manual dispatch of `main` | Partitioned GUI, API, injection, IPC, and toy tests |
+| `Windows Nightly / backend-matrix` | `windows-2022` | Nightly, manual | Zydis-only, Capstone-only, and no-TUI configurations |
+| `Windows Nightly / address-sanitizer` | `windows-2022` | Nightly, manual | MSVC ASan build and headless tests |
+| `Windows Nightly / *-analysis` | `windows-2022` | Nightly, manual | MSVC `/analyze` and clang-tidy; initially advisory |
+| `Windows Nightly / windows-canary` | `windows-2025` | Nightly, manual | Non-blocking newest-image compatibility signal |
+| `Windows Nightly / gui-stress` | Self-hosted Windows x64 | Nightly or manual dispatch of `main` | GUI partitions repeated three times, then the combined full suite |
+| `CodeQL` | `windows-2022` | Pull request, `main`, weekly | C/C++ security analysis excluding vendored sources |
+
+The primary image is pinned to `windows-2022` so changes to
+`windows-latest` cannot silently change the compiler. The `windows-2025`
+canary is intentionally non-blocking until it has a stable history.
+
+## Test partitions
+
+CTest labels are the boundary between hosted and desktop execution:
+
+- `headless`: deterministic selection and interest-store tests. These may run
+  on GitHub-hosted Windows.
+- `gui`: tests that load or inject the DLL, create a target window, use hooks,
+  or drive live IPC. These run only on the interactive runner.
+- `full`: the combined `hdl_tests` suite. It runs nightly to avoid duplicating
+  every partition on each trusted push.
+
+GUI tests also acquire the `hdl_gui_desktop` CTest resource lock. Keep the GUI
+CTest presets at one worker; parallel desktop/injection tests can interfere
+with each other's processes and window state.
+
+Useful local commands:
+
+```powershell
+cmake --preset ci-windows
+cmake --build --preset ci-windows --parallel
+ctest --preset ci-headless
+
+cmake --preset ci-gui
+cmake --build --preset ci-gui --parallel
+ctest --preset ci-gui-smoke
+ctest --preset ci-gui-full
+```
+
+For a local ASan run, execute
+`tools/ci/add-msvc-asan-runtime-to-path.ps1` in the same PowerShell session
+before CTest. Visual Studio does not place its ASan runtime DLL on an ordinary
+shell's `PATH`; the nightly workflow performs this step explicitly.
+
+## Interactive runner setup
+
+For occasional open-source CI, the self-hosted runner can be this development
+PC and can remain offline between runs. A dedicated Windows 11 VM or physical
+machine is safer for frequent or multi-contributor use. Do not attach a runner
+that holds production credentials to workflows which may execute untrusted code.
+
+1. Install current Visual Studio 2022 Build Tools with the Desktop development
+   with C++ workload, CMake 3.20 or newer, Git, and PowerShell 5.1 or newer.
+2. Create a dedicated local runner account. Give it only the permissions the
+   tests need and write access to `C:\hdllib-ci`.
+3. In the repository's **Settings > Actions > Runners** page, add a self-hosted
+   Windows x64 runner. The workflows use its default `self-hosted`, `Windows`,
+   and `X64` labels.
+4. When runner setup asks whether to run as a Windows service, answer **No**.
+   A service runs in session 0 and cannot provide the required desktop.
+5. Sign in as the runner account and start `run.cmd` from that session. For
+   automatic startup, create a Task Scheduler entry triggered **At log on**,
+   select **Run only when user is logged on**, and launch `run.cmd` with its
+   runner directory as the working directory.
+6. Keep the session signed in and unlocked. Prefer a hypervisor console over an
+   RDP session: disconnecting or locking RDP can remove access to the active
+   desktop even while the runner process remains online.
+7. Run `tools/ci/assert-interactive-desktop.ps1` in the runner session. It must
+   report a nonzero session, a visible window station, an Explorer shell, a
+   display, and successful window creation.
+8. Keep the runner application current. `actions/checkout@v6` requires runner
+   version 2.329.0 or later. The runner normally updates itself, but an offline
+   runner can fall behind.
+
+The GUI smoke job runs after the hosted build on every trusted push to `main`.
+The GUI stress job runs nightly. Both can also be dispatched manually against
+`main`; pull-request code is never sent to this runner. If the PC is offline,
+the job remains queued until the runner comes online or the workflow is
+cancelled. If you do not want GitHub orchestration for a particular run, use
+the `ci-gui-smoke` and `ci-gui-full` presets locally instead.
+
+The workflows place FetchContent checkouts in
+`C:\hdllib-ci\fetchcontent`. This directory is only a dependency download
+cache; repository build trees are cleaned by checkout on each job.
+
+## Security boundary
+
+Do not add `pull_request` or `pull_request_target` execution to a persistent
+self-hosted runner. Pull-request code can modify the build, tests, or workflow
+and retain control of the machine after a job. The checked-in workflows allow
+the GUI runner only when `github.ref` is exactly `refs/heads/main`.
+
+Recommended repository settings:
+
+- Protect `main` and require `hosted-build` plus CodeQL before merge.
+- Put GUI runners in a runner group restricted to this repository.
+- Do not expose production secrets, signing keys, personal browser sessions,
+  or sensitive network access to the runner account.
+- Snapshot or rebuild the VM regularly and after any suspected compromise.
+- If GUI tests must become a pre-merge gate, provision a fresh ephemeral VM for
+  each merge-queue job and destroy it afterward. Do not broaden the persistent
+  runner's trigger.
+
+## Quality-tool adoption
+
+Changed C/C++ lines are checked against `.clang-format` in primary CI, and
+actionlint validates the workflow files with the custom runner labels declared
+in `.github/actionlint.yaml`. CodeQL is blocking. clang-tidy and MSVC native
+analysis are nightly and advisory while the existing warning baseline is
+reduced; remove `continue-on-error` from those jobs once their output is clean.
+Dependabot proposes updates to pinned GitHub Actions versions each week.

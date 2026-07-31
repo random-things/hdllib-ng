@@ -10,7 +10,7 @@ namespace {
 
 using namespace hdl::proto;
 
-IpcStatus TakeStatus(const std::vector<uint8_t>& resp, Reader* r) {
+IpcStatus TakeStatus(const std::vector<uint8_t>&, Reader* r) {
     IpcStatus s;
     if (!r->TakePod(s.status)) {
         s.status = HDL_E_FAILED;

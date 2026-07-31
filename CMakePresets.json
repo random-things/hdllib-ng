@@ -1,9 +1,14 @@
 {
-  "version": 3,
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "x64-windows",
-      "displayName": "x64 Windows MSVC",
+      "displayName": "x64 Windows MSVC (Ninja)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "architecture": {
@@ -20,6 +25,114 @@
       "generator": "Visual Studio 16 2019",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "x64-windows-vs2022",
+      "displayName": "x64 Windows VS 2022",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "ci-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "HDL_BUILD_TESTS": "ON",
+        "HDL_BUILD_TOOLS": "ON",
+        "HDL_BUILD_TOYS": "ON",
+        "HDL_CLIENT_TUI": "ON",
+        "HDL_DISASM_ZYDIS": "ON",
+        "HDL_DISASM_CAPSTONE": "ON",
+        "HDL_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "displayName": "CI Windows release",
+      "inherits": "ci-base"
+    },
+    {
+      "name": "ci-gui",
+      "displayName": "CI interactive GUI tests",
+      "inherits": "ci-base"
+    },
+    {
+      "name": "ci-asan",
+      "displayName": "CI AddressSanitizer",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "ci-zydis",
+      "displayName": "CI Zydis-only backend",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_DISASM_CAPSTONE": "OFF"
+      }
+    },
+    {
+      "name": "ci-capstone",
+      "displayName": "CI Capstone-only backend",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_DISASM_ZYDIS": "OFF"
+      }
+    },
+    {
+      "name": "ci-no-tui",
+      "displayName": "CI client without TUI",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_CLIENT_TUI": "OFF"
+      }
+    },
+    {
+      "name": "ci-msvc-analyze",
+      "displayName": "CI MSVC native analysis",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_BUILD_TESTS": "OFF",
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_ENABLE_MSVC_ANALYZE": "ON"
+      }
+    },
+    {
+      "name": "ci-codeql",
+      "displayName": "CI CodeQL build",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HDL_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "ci-clang-tidy",
+      "displayName": "CI clang-tidy",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HDL_BUILD_TESTS": "OFF",
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_CLIENT_TUI": "OFF",
+        "HDL_ENABLE_CLANG_TIDY": "ON",
+        "HDL_WARNINGS_AS_ERRORS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -31,6 +144,167 @@
       "name": "x64-windows-vs",
       "configurePreset": "x64-windows-vs",
       "configuration": "Release"
+    },
+    {
+      "name": "x64-windows-vs2022",
+      "configurePreset": "x64-windows-vs2022",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-windows",
+      "configurePreset": "ci-windows",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-gui",
+      "configurePreset": "ci-gui",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-asan",
+      "configurePreset": "ci-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ci-zydis",
+      "configurePreset": "ci-zydis",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-capstone",
+      "configurePreset": "ci-capstone",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-no-tui",
+      "configurePreset": "ci-no-tui",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-msvc-analyze",
+      "configurePreset": "ci-msvc-analyze",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-codeql",
+      "configurePreset": "ci-codeql",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-clang-tidy",
+      "configurePreset": "ci-clang-tidy"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci-headless",
+      "configurePreset": "ci-windows",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 2,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-gui-smoke",
+      "configurePreset": "ci-gui",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^gui$"
+        },
+        "exclude": {
+          "name": "^hdl_tests$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-gui-full",
+      "configurePreset": "ci-gui",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^full$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-asan-headless",
+      "configurePreset": "ci-asan",
+      "configuration": "RelWithDebInfo",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 2,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-zydis-headless",
+      "configurePreset": "ci-zydis",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-capstone-headless",
+      "configurePreset": "ci-capstone",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-no-tui-headless",
+      "configurePreset": "ci-no-tui",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

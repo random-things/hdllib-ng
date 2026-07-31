@@ -23,6 +23,7 @@ REPL/TUI, recipes, and a persistent interest store.
 | Understand an IPC opcode or payload | [capability reference](capabilities.md) | [`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) |
 | Understand a CLI or recipe workflow | [client workflows](client.md) | [`tools/client/main.cpp`](../tools/client/main.cpp), [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) |
 | Change or extend the project | [development guide](development.md) | [`CMakeLists.txt`](../CMakeLists.txt), [test guide](../tests/README.md) |
+| Configure Windows CI or the GUI runner | [CI guide](ci.md) | [workflow definitions](../.github/workflows/) |
 | Work on injection | [injection index](inject/README.md) | [selection model](inject/selection.md), [`src/inject/`](../src/inject/) |
 | Exercise higher-level reverse-engineering flows | [toy arena](../toys/arena/README.md) | [`tests/toy_test_main.cpp`](../tests/toy_test_main.cpp) |
 

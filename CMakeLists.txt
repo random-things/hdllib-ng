@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 project(hdllib VERSION 0.1.0 LANGUAGES C CXX)
 
 if(NOT WIN32)
@@ -17,6 +17,55 @@ option(HDL_BUILD_TOYS "Build toy targets for higher-level hdllib exercise" ON)
 option(HDL_CLIENT_TUI "Build hdlclient --tui with PDCurses" ON)
 option(HDL_DISASM_ZYDIS "Enable Zydis disasm backend" ON)
 option(HDL_DISASM_CAPSTONE "Enable Capstone disasm backend" ON)
+option(HDL_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" OFF)
+option(HDL_ENABLE_ASAN "Enable AddressSanitizer for first-party targets" OFF)
+option(HDL_ENABLE_CLANG_TIDY "Run clang-tidy while compiling first-party C++ targets" OFF)
+option(HDL_ENABLE_MSVC_ANALYZE "Enable MSVC native code analysis for first-party targets" OFF)
+
+if(HDL_ENABLE_CLANG_TIDY)
+  find_program(HDL_CLANG_TIDY_EXECUTABLE NAMES clang-tidy REQUIRED)
+endif()
+
+function(hdl_configure_target target_name)
+  target_compile_options(${target_name} PRIVATE
+    "$<$<COMPILE_LANGUAGE:C>:/W4>"
+    "$<$<COMPILE_LANGUAGE:CXX>:/W4;/EHsc;/permissive->")
+
+  if(HDL_WARNINGS_AS_ERRORS)
+    target_compile_options(${target_name} PRIVATE
+      "$<$<COMPILE_LANGUAGE:C,CXX>:/WX>")
+  endif()
+
+  if(HDL_ENABLE_ASAN)
+    if(NOT MSVC)
+      message(FATAL_ERROR "HDL_ENABLE_ASAN currently requires the Microsoft C++ compiler")
+    endif()
+
+    target_compile_options(${target_name} PRIVATE
+      "$<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address;/Zi>")
+
+    get_target_property(hdl_target_type ${target_name} TYPE)
+    if(hdl_target_type STREQUAL "EXECUTABLE"
+        OR hdl_target_type STREQUAL "SHARED_LIBRARY"
+        OR hdl_target_type STREQUAL "MODULE_LIBRARY")
+      target_link_options(${target_name} PRIVATE /INCREMENTAL:NO)
+    endif()
+  endif()
+
+  if(HDL_ENABLE_MSVC_ANALYZE)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+      message(FATAL_ERROR "HDL_ENABLE_MSVC_ANALYZE requires the Microsoft C++ compiler")
+    endif()
+
+    target_compile_options(${target_name} PRIVATE
+      "$<$<COMPILE_LANGUAGE:C,CXX>:/analyze>")
+  endif()
+
+  if(HDL_ENABLE_CLANG_TIDY)
+    set_property(TARGET ${target_name} PROPERTY CXX_CLANG_TIDY
+      "${HDL_CLANG_TIDY_EXECUTABLE};--quiet")
+  endif()
+endfunction()
 
 if(NOT HDL_DISASM_ZYDIS AND NOT HDL_DISASM_CAPSTONE)
   message(FATAL_ERROR "At least one of HDL_DISASM_ZYDIS or HDL_DISASM_CAPSTONE must be ON")
@@ -103,7 +152,7 @@ target_include_directories(hdl_inject
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_definitions(hdl_inject PRIVATE UNICODE _UNICODE)
-target_compile_options(hdl_inject PRIVATE /W4 /EHsc /permissive-)
+hdl_configure_target(hdl_inject)
 target_link_libraries(hdl_inject PUBLIC Psapi Advapi32)
 
 add_library(hdllib SHARED
@@ -157,7 +206,7 @@ target_include_directories(hdllib
 )
 
 target_compile_definitions(hdllib PRIVATE HDL_EXPORTS UNICODE _UNICODE)
-target_compile_options(hdllib PRIVATE /W4 /EHsc /permissive-)
+hdl_configure_target(hdllib)
 target_link_libraries(hdllib PRIVATE hdl_inject minhook)
 set_target_properties(hdllib PROPERTIES OUTPUT_NAME hdllib)
 
@@ -240,7 +289,7 @@ if(HDL_BUILD_TOOLS)
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
   )
   target_compile_definitions(hdlclient PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdlclient PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdlclient)
   target_link_libraries(hdlclient PRIVATE hdl_inject)
   if(HDL_PDCURSES_OK)
     target_compile_definitions(hdlclient PRIVATE HDL_HAS_TUI)
@@ -253,7 +302,7 @@ if(HDL_BUILD_TESTS)
 
   add_executable(hdl_test_target tests/target/main.cpp)
   target_compile_definitions(hdl_test_target PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdl_test_target PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdl_test_target)
   target_link_libraries(hdl_test_target PRIVATE advapi32)
 
   add_executable(hdl_tests tests/test_main.cpp)
@@ -263,7 +312,7 @@ if(HDL_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   target_compile_definitions(hdl_tests PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdl_tests PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdl_tests)
   target_link_libraries(hdl_tests PRIVATE hdllib advapi32)
   add_dependencies(hdl_tests hdllib hdl_test_target)
 
@@ -273,7 +322,7 @@ if(HDL_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   target_compile_definitions(hdl_select_tests PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdl_select_tests PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdl_select_tests)
   target_link_libraries(hdl_select_tests PRIVATE hdl_inject)
 
   # Copy runtime deps next to the test exe (VS multi-config + Ninja).
@@ -285,10 +334,42 @@ if(HDL_BUILD_TESTS)
     COMMENT "Copy hdllib.dll and hdl_test_target.exe beside hdl_tests"
   )
 
-  add_test(NAME hdl_tests COMMAND hdl_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
-  set_tests_properties(hdl_tests PROPERTIES TIMEOUT 600)
+  add_test(NAME hdl_api_tests
+    COMMAND hdl_tests --api-only
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
+  set_tests_properties(hdl_api_tests PROPERTIES
+    TIMEOUT 300
+    LABELS "api;gui"
+    RESOURCE_LOCK hdl_gui_desktop)
+
+  add_test(NAME hdl_locate_tests
+    COMMAND hdl_tests --locate-only
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
+  set_tests_properties(hdl_locate_tests PROPERTIES
+    TIMEOUT 300
+    LABELS "gui;locate"
+    RESOURCE_LOCK hdl_gui_desktop)
+
+  add_test(NAME hdl_inject_tests
+    COMMAND hdl_tests --inject-only
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
+  set_tests_properties(hdl_inject_tests PROPERTIES
+    TIMEOUT 600
+    LABELS "gui;inject"
+    RESOURCE_LOCK hdl_gui_desktop)
+
+  add_test(NAME hdl_tests
+    COMMAND hdl_tests
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
+  set_tests_properties(hdl_tests PROPERTIES
+    TIMEOUT 900
+    LABELS "full;gui"
+    RESOURCE_LOCK hdl_gui_desktop)
+
   add_test(NAME hdl_select_tests COMMAND hdl_select_tests)
-  set_tests_properties(hdl_select_tests PROPERTIES TIMEOUT 60)
+  set_tests_properties(hdl_select_tests PROPERTIES
+    TIMEOUT 60
+    LABELS "headless;unit")
 
   add_executable(hdl_store_tests tests/store_test.cpp tools/client/store.cpp)
   target_include_directories(hdl_store_tests PRIVATE
@@ -296,9 +377,11 @@ if(HDL_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
   )
   target_compile_definitions(hdl_store_tests PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdl_store_tests PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdl_store_tests)
   add_test(NAME hdl_store_tests COMMAND hdl_store_tests)
-  set_tests_properties(hdl_store_tests PROPERTIES TIMEOUT 30)
+  set_tests_properties(hdl_store_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
 
   if(HDL_BUILD_TOOLS)
     add_executable(hdl_client_tests tests/client_test_main.cpp tools/client/store.cpp)
@@ -308,7 +391,7 @@ if(HDL_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_compile_definitions(hdl_client_tests PRIVATE UNICODE _UNICODE)
-    target_compile_options(hdl_client_tests PRIVATE /W4 /EHsc /permissive-)
+    hdl_configure_target(hdl_client_tests)
     target_link_libraries(hdl_client_tests PRIVATE hdl_inject advapi32)
     add_dependencies(hdl_client_tests hdlclient hdllib hdl_test_target)
     add_custom_command(TARGET hdl_client_tests POST_BUILD
@@ -320,15 +403,20 @@ if(HDL_BUILD_TESTS)
         $<TARGET_FILE:hdlclient> $<TARGET_FILE_DIR:hdl_client_tests>
       COMMENT "Copy hdllib, hdl_test_target, hdlclient beside hdl_client_tests"
     )
-    add_test(NAME hdl_client_tests COMMAND hdl_client_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_client_tests>)
-    set_tests_properties(hdl_client_tests PROPERTIES TIMEOUT 300)
+    add_test(NAME hdl_client_tests
+      COMMAND hdl_client_tests
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_client_tests>)
+    set_tests_properties(hdl_client_tests PROPERTIES
+      TIMEOUT 300
+      LABELS "client;gui;ipc"
+      RESOURCE_LOCK hdl_gui_desktop)
   endif()
 endif()
 
 if(HDL_BUILD_TOYS)
   add_executable(hdl_toy_arena toys/arena/main.cpp)
   target_compile_definitions(hdl_toy_arena PRIVATE UNICODE _UNICODE)
-  target_compile_options(hdl_toy_arena PRIVATE /W4 /EHsc /permissive-)
+  hdl_configure_target(hdl_toy_arena)
   target_link_libraries(hdl_toy_arena PRIVATE advapi32)
 
   if(HDL_BUILD_TOOLS)
@@ -338,7 +426,7 @@ if(HDL_BUILD_TOYS)
       ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_compile_definitions(hdl_toy_tests PRIVATE UNICODE _UNICODE)
-    target_compile_options(hdl_toy_tests PRIVATE /W4 /EHsc /permissive-)
+    hdl_configure_target(hdl_toy_tests)
     target_link_libraries(hdl_toy_tests PRIVATE hdl_inject advapi32)
     add_dependencies(hdl_toy_tests hdlclient hdllib hdl_toy_arena)
     add_custom_command(TARGET hdl_toy_tests POST_BUILD
@@ -350,8 +438,13 @@ if(HDL_BUILD_TOYS)
         $<TARGET_FILE:hdlclient> $<TARGET_FILE_DIR:hdl_toy_tests>
       COMMENT "Copy hdllib, hdl_toy_arena, hdlclient beside hdl_toy_tests"
     )
-    add_test(NAME hdl_toy_tests COMMAND hdl_toy_tests WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_toy_tests>)
-    set_tests_properties(hdl_toy_tests PROPERTIES TIMEOUT 180)
+    add_test(NAME hdl_toy_tests
+      COMMAND hdl_toy_tests
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_toy_tests>)
+    set_tests_properties(hdl_toy_tests PROPERTIES
+      TIMEOUT 180
+      LABELS "gui;toy"
+      RESOURCE_LOCK hdl_gui_desktop)
   endif()
 endif()
 

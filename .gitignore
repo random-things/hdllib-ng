@@ -6,6 +6,7 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 compile_commands.json
+CMakeUserPresets.json
 
 # VS / MSVC
 .vs/

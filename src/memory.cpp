@@ -836,7 +836,6 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
                 uint64_t scan_base = reinterpret_cast<uint64_t>(mbi.BaseAddress);
                 uint64_t scan_size = mbi.RegionSize;
                 if (filter.flags & HDL_SEARCH_MODULE) {
-                    const uint64_t end = scan_base + scan_size;
                     if (scan_base < filter.mod_base) {
                         scan_size -= (filter.mod_base - scan_base);
                         scan_base = filter.mod_base;

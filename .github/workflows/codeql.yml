@@ -1,0 +1,45 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '43 8 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: C++ security analysis
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          config-file: ./.github/codeql/codeql-config.yml
+          queries: security-extended
+
+      - name: Configure
+        run: >-
+          cmake --preset ci-codeql
+          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
+
+      - name: Build
+        run: cmake --build --preset ci-codeql --parallel
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp
