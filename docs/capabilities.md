@@ -6,7 +6,7 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 
 **Client workflows** (CLI groups, `discover-*` pipelines, recipes / store): [client.md](client.md).
 
-**Platform:** x64 only (no Wow64 helper). Opcodes: **1…91**, **`OpUnloadDll` = 92**, **`OpFingerprint` = 93** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
+**Platform:** x64 only (no Wow64 helper). Opcodes: **1…91**, **`OpUnloadDll` = 92**, **`OpFingerprint` = 93**, **`OpShutdown` = 94**, **`OpTrackLoadedDll` = 95** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
 
 ---
 
@@ -103,7 +103,7 @@ Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStrea
 
 ## Capability map (opcodes → features)
 
-Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92, `OpFingerprint` = 93). Groups below match product capabilities.
+Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92, `OpFingerprint` = 93, `OpShutdown` = 94, `OpTrackLoadedDll` = 95). Groups below match product capabilities.
 
 ### 1. Lifecycle, connectivity, logging
 
@@ -112,7 +112,7 @@ Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` =
 | `OpPing` | 1 | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
 | `OpSetLogLevel` | 8 | Set log verbosity | `HdlSetLogLevel` |
 
-**Also (C API / env, not opcodes):** `HdlInit` / `HdlShutdown`, `HdlStartIpc` / `HdlStopIpc`, `HdlSetLogFile`, `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`.
+**Also (C API / env, not only opcodes):** `HdlInit` / `HdlShutdown` / `HdlShutdownEx`, `HdlStartIpc` / `HdlStopIpc`, `HdlSetLogFile`, `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is also on the pipe as `OpShutdown`.
 
 Default after inject: log level **off**; health VEH **off** until enabled or first `HdlPollEvents`; IPC starts unless `HDL_NO_IPC`.
 
@@ -127,13 +127,20 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 | Op | Value | Capability | C API |
 |----|------:|------------|-------|
 | `OpInjectDll` | 2 | Inject another DLL into a process (or self / early-bird) | `HdlInjectDll`, `HdlInjectDllEx` |
-| `OpUnloadDll` | 92 | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` |
+| `OpUnloadDll` | 92 | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` / `HdlUnloadDllEx` |
+| `OpShutdown` | 94 | Restore hooks/patches/watches; optional unload tracked DLLs; stop IPC (DLL stays mapped) | `HdlShutdown` / `HdlShutdownEx` |
+| `OpTrackLoadedDll` | 95 | Register a module-list DLL for later `UNLOAD_MODULES` shutdown | `HdlTrackLoadedDll` |
 
 **`OpInjectDll` request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.  
 **Reply:** `status`, `uint64_t base`, `uint32_t out_pid`.
 
 **`OpUnloadDll` request:** `uint32_t pid`, `int32_t reload`, `wstring dll_path`.  
-**Reply:** `status`, `uint64_t base` (new base when `reload != 0`, else 0).
+**Reply:** `status`, `uint64_t base` (new base when `reload != 0`, else 0).  
+Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shutdown_flags)` so instrumentation is restored outside the loader lock.
+
+**`OpShutdown` request:** `uint32_t flags` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Reply `status`; then the server signals IPC stop without joining the accept thread from the worker. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
+
+**`OpTrackLoadedDll` request:** `uint64_t base`, `wstring dll_path`.
 
 **Techniques** (`HDL_INJECT_*`, see [inject/](inject/README.md)):
 
@@ -527,6 +534,8 @@ Built-in: **Zydis** (default) and **Capstone**. Custom engines: `HdlDisasmRegist
 | 86–91 | DiscoverResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence | Discover |
 | 92 | UnloadDll | Injection |
 | 93 | Fingerprint | Process fingerprint |
+| 94 | Shutdown | Lifecycle |
+| 95 | TrackLoadedDll | Lifecycle |
 
 ### Opcodes 79–91 (graph / watch / discover extensions)
 
@@ -570,7 +579,9 @@ These are first-class library capabilities but are not IPC opcodes (`hdlclient i
 - **Target resolution** — `HdlResolveTarget` (pid + window title substring / class)
 - **Custom MinHook detours** — `HdlHook` (IPC exposes trace/import hooks only)
 - **Custom disasm backends** — `HdlDisasmRegisterBackend` / `Unregister` (function pointers; C API only)
-- **Log file / health VEH / in-process lifecycle** — `HdlSetLogFile`, `HdlSetHealthVeh`, `HdlInit`/`HdlShutdown` (C API only; not pipe)
+- **Log file / health VEH** — `HdlSetLogFile`, `HdlSetHealthVeh` (also env `HDL_HEALTH_VEH`)
+
+In-process lifecycle prepare is on the pipe: `OpShutdown` / `hdlclient <pid> shutdown [--modules]` (`HdlShutdown` / `HdlShutdownEx`).
 
 **Client-side approximations / orchestration (no new DLL opcode):**
 
@@ -586,6 +597,7 @@ Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [do
 | Command area | Ops used |
 |--------------|----------|
 | `ping`, `log` | Ping, SetLogLevel |
+| `shutdown` | Shutdown (optional `--modules`) |
 | `inject` (pipe + `hdlclient inject`) | InjectDll / local inject |
 | `read`, `write` | ReadMemory, WriteMemory |
 | `regions`, `modules`, `threads` | Enum* (+ stream) |

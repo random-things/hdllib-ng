@@ -13,6 +13,7 @@
 #include "inject.hpp"
 #include "inject/select.hpp"
 #include "jobs.hpp"
+#include "loaded_modules.hpp"
 #include "locate.hpp"
 #include "log.hpp"
 #include "memory.hpp"
@@ -32,6 +33,10 @@ HdlStatus HdlInit(void) {
 
 void HdlShutdown(void) {
     hdl::CoreShutdown();
+}
+
+void HdlShutdownEx(uint32_t flags) {
+    hdl::CoreShutdownEx(flags);
 }
 
 int HdlIsInitialized(void) {
@@ -67,18 +72,58 @@ int HdlIsIpcRunning(void) {
 }
 
 HdlStatus HdlInjectDll(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    return hdl::InjectDll(pid, dll_path, out_base);
+    uint64_t base = 0;
+    const HdlStatus st = hdl::InjectDll(pid, dll_path, &base);
+    if (out_base) {
+        *out_base = base;
+    }
+    if (st == HDL_OK && base) {
+        const DWORD self = GetCurrentProcessId();
+        if (pid == 0 || pid == self) {
+            hdl::TrackLoadedModule(dll_path, base);
+        }
+    }
+    return st;
 }
 
 HdlStatus HdlInjectDllEx(uint32_t pid, const wchar_t* dll_path, int method,
                          const wchar_t* exe_path_or_null, const char* hook_export_or_null,
                          uint32_t* out_pid, uint64_t* out_base) {
-    return hdl::InjectDllEx(pid, dll_path, method, exe_path_or_null, hook_export_or_null, out_pid,
-                            out_base);
+    uint64_t base = 0;
+    uint32_t opid = 0;
+    const HdlStatus st = hdl::InjectDllEx(pid, dll_path, method, exe_path_or_null,
+                                          hook_export_or_null, &opid, &base);
+    if (out_base) {
+        *out_base = base;
+    }
+    if (out_pid) {
+        *out_pid = opid;
+    }
+    if (st == HDL_OK && base) {
+        const DWORD self = GetCurrentProcessId();
+        const uint32_t effective = opid ? opid : (pid ? pid : self);
+        if (effective == self) {
+            hdl::TrackLoadedModule(dll_path, base);
+        }
+    }
+    return st;
 }
 
 HdlStatus HdlUnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base) {
-    return hdl::UnloadDll(pid, dll_path, reload, out_base);
+    return hdl::UnloadDll(pid, dll_path, reload, 0, out_base);
+}
+
+HdlStatus HdlUnloadDllEx(uint32_t pid, const wchar_t* dll_path, int reload, uint32_t shutdown_flags,
+                         uint64_t* out_base) {
+    return hdl::UnloadDll(pid, dll_path, reload, shutdown_flags, out_base);
+}
+
+HdlStatus HdlTrackLoadedDll(const wchar_t* dll_path, uint64_t base) {
+    if (!dll_path || !dll_path[0] || !base) {
+        return HDL_E_INVALID_ARG;
+    }
+    hdl::TrackLoadedModule(dll_path, base);
+    return HDL_OK;
 }
 
 HdlStatus HdlResolveTarget(const HdlTargetSpec* spec, uint32_t* out_pid, HWND* out_hwnd) {

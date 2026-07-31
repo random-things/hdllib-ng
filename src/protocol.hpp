@@ -110,6 +110,8 @@ enum Op : uint32_t {
     OpDiscoverApplyWatchHits = 90,
     OpDiscoverGetEvidence = 91,
     OpFingerprint = 93,
+    OpShutdown = 94,
+    OpTrackLoadedDll = 95,
 };
 
 /* Optional request trailer / streaming response flags. */

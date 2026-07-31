@@ -149,6 +149,8 @@ void HooksShutdown() {
         return;
     }
     MH_DisableHook(MH_ALL_HOOKS);
+    /* Let in-flight detours return before removing hooks / freeing stubs. */
+    Sleep(1);
     for (auto& kv : g_hooks) {
         MH_RemoveHook(kv.second.target);
         FreeTraceResources(kv.second);

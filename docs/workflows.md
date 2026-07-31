@@ -588,4 +588,7 @@ Before treating an investigation as complete:
 - save the interest store and any useful discovery snapshot;
 - revalidate important locators after a meaningful state transition;
 - check `health` and pending events for suppressed faults or resource pressure;
-- record which observations were verified and which remain hypotheses.
+- record which observations were verified and which remain hypotheses;
+- when finished with the helper: `hdlclient <pid> shutdown [--modules]` then
+  `hdlclient unload <pid> <hdllib.dll> [--modules]` so instrumentation is restored
+  before `FreeLibrary` (see [client: clean unload](client.md#clean-unload-leave-the-target-intact)).

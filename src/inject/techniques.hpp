@@ -11,6 +11,8 @@ HdlStatus Local(const wchar_t* dll_path, uint64_t* out_base);
 
 HdlStatus UnloadLocal(const wchar_t* dll_path, int reload, uint64_t* out_base);
 HdlStatus UnloadRemote(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base);
+HdlStatus UnloadRemoteEx(uint32_t pid, const wchar_t* dll_path, int reload, uint32_t shutdown_flags,
+                         uint64_t* out_base);
 
 HdlStatus CreateRemoteThreadMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base);
 HdlStatus NtCreateThreadExMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base);

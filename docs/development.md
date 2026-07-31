@@ -191,8 +191,11 @@ If an opcode supports streaming, keep both modes:
 When adding process-local runtime state:
 
 - Give it an explicit close/remove operation when useful.
-- Add it to the correct shutdown path in [`core.cpp`](../src/core.cpp) or IPC
-  server cleanup.
+- Add it to the correct shutdown path in [`core.cpp`](../src/core.cpp)
+  (`BeginShutdown` / `CoreShutdownPrepare` + `CoreShutdownFinish`, or
+  `CoreShutdownDetach` for loader-lock residual) or IPC server cleanup.
+  Remote prepare is `OpShutdown`; do not rely on `DLL_PROCESS_DETACH` alone for
+  MinHook / VEH / IPC join.
 - Define whether handles survive enable/disable and whether removal restores
   target memory/protection.
 - Make cleanup safe after partial initialization.

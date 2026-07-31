@@ -1,5 +1,6 @@
 #include "cmd.hpp"
 #include "json_out.hpp"
+#include "session_modules.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -130,6 +131,18 @@ int CmdInject(CmdCtx& ctx) {
         return 1;
     }
     r.TakePod(out_pid);
+    if (st == HDL_OK && base) {
+        const uint32_t track_pid = out_pid ? out_pid : (target_pid ? target_pid : ctx.pid);
+        hdlcli::RememberInjectedModule(track_pid, full, base);
+        if (track_pid == ctx.pid) {
+            std::vector<uint8_t> treq;
+            std::vector<uint8_t> tresp;
+            AppendPod(treq, static_cast<uint32_t>(OpTrackLoadedDll));
+            AppendPod(treq, base);
+            AppendWString(treq, full);
+            ctx.client.Request(treq, tresp);
+        }
+    }
     if (ctx.json) {
         JsonWriter w;
         w.BeginObject();
@@ -143,6 +156,59 @@ int CmdInject(CmdCtx& ctx) {
     }
     wprintf(L"status=%ls base=%016llx out_pid=%u\n", StatusName(st),
             static_cast<unsigned long long>(base), out_pid);
+    PrintStatusHint(ctx.cmd, st);
+    return st == HDL_OK ? 0 : 1;
+}
+
+int CmdShutdown(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    uint32_t flags = 0;
+    for (int i = 3; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--modules") == 0) {
+            flags |= HDL_SHUTDOWN_UNLOAD_MODULES;
+        }
+    }
+
+    if (flags & HDL_SHUTDOWN_UNLOAD_MODULES) {
+        for (const auto& m : hdlcli::ListInjectedModules(ctx.pid)) {
+            std::vector<uint8_t> treq;
+            std::vector<uint8_t> tresp;
+            AppendPod(treq, static_cast<uint32_t>(OpTrackLoadedDll));
+            AppendPod(treq, m.base);
+            AppendWString(treq, m.path.c_str());
+            ctx.client.Request(treq, tresp);
+        }
+    }
+
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+    AppendPod(req, static_cast<uint32_t>(OpShutdown));
+    AppendPod(req, flags);
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
+    Reader r(resp);
+    int32_t st = 0;
+    if (!r.TakePod(st)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
+        return 1;
+    }
+    if (st == HDL_OK) {
+        hdlcli::ClearInjectedModules(ctx.pid);
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("flags");
+        w.Num(flags);
+        w.EndObject();
+        EmitEnvelope(ctx, st, L"shutdown", w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
+    wprintf(L"status=%ls flags=0x%X (helper prepared; use local unload to FreeLibrary hdllib)\n",
+            StatusName(st), flags);
     PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }

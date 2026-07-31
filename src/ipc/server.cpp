@@ -16,12 +16,38 @@ namespace {
 
 std::atomic<bool> g_running{false};
 std::atomic<bool> g_stop{false};
+/* True while ThreadMain is on the stack (including post-loop cleanup). */
+std::atomic<bool> g_accept_alive{false};
 HANDLE g_stop_event = nullptr;
 std::thread g_thread;
 
 std::mutex g_clients_mu;
 std::vector<HANDLE> g_client_pipes;
 std::atomic<int> g_client_count{0};
+
+void SignalStop() {
+    g_stop = true;
+    if (g_stop_event) {
+        SetEvent(g_stop_event);
+    }
+    HANDLE client = CreateFileW(PipeName().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                OPEN_EXISTING, 0, nullptr);
+    if (client != INVALID_HANDLE_VALUE) {
+        CloseHandle(client);
+    }
+}
+
+void WaitAcceptThreadExit() {
+    for (int i = 0; i < 250 && g_accept_alive.load(); ++i) {
+        if (g_stop_event) {
+            SetEvent(g_stop_event);
+        }
+        Sleep(20);
+    }
+    if (g_thread.joinable()) {
+        g_thread.join();
+    }
+}
 
 void UnregisterClient(HANDLE pipe) {
     std::lock_guard<std::mutex> lock(g_clients_mu);
@@ -58,6 +84,7 @@ void ServeClient(HANDLE pipe) {
 }
 
 void ThreadMain() {
+    g_accept_alive = true;
     const std::wstring name = PipeName();
     HDL_LOG_INFO("IPC server starting on %ls (multi-client, ACL)", name.c_str());
     g_running = true;
@@ -136,22 +163,24 @@ void ThreadMain() {
     JobCloseAll();
     g_running = false;
     HDL_LOG_INFO("IPC server stopped");
+    g_accept_alive = false;
 }
 
 }  // namespace
 
 HdlStatus Start() {
-    if (g_running.load()) {
+    /* Healthy server already up — do not disturb. */
+    if (g_running.load() && !g_stop.load()) {
         return HDL_OK;
     }
+    /* Stop in progress or prior detach: wait until ThreadMain has left the stack. */
+    WaitAcceptThreadExit();
+
     g_stop = false;
     if (!g_stop_event) {
         g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     } else {
         ResetEvent(g_stop_event);
-    }
-    if (g_thread.joinable()) {
-        g_thread.join();
     }
     g_thread = std::thread(ThreadMain);
     for (int i = 0; i < 50 && !g_running.load(); ++i) {
@@ -161,21 +190,37 @@ HdlStatus Start() {
 }
 
 void Stop() {
-    g_stop = true;
-    if (g_stop_event) {
-        SetEvent(g_stop_event);
+    SignalStop();
+    {
+        std::lock_guard<std::mutex> lock(g_clients_mu);
+        for (HANDLE h : g_client_pipes) {
+            CancelIoEx(h, nullptr);
+            DisconnectNamedPipe(h);
+        }
     }
-    HANDLE client = CreateFileW(PipeName().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                OPEN_EXISTING, 0, nullptr);
-    if (client != INVALID_HANDLE_VALUE) {
-        CloseHandle(client);
-    }
-    if (g_thread.joinable()) {
-        g_thread.join();
-    }
+    WaitAcceptThreadExit();
     if (g_stop_event) {
         CloseHandle(g_stop_event);
         g_stop_event = nullptr;
+    }
+}
+
+void StopNoJoin() {
+    SignalStop();
+    {
+        std::lock_guard<std::mutex> lock(g_clients_mu);
+        for (HANDLE h : g_client_pipes) {
+            CancelIoEx(h, nullptr);
+            DisconnectNamedPipe(h);
+        }
+    }
+    /*
+     * Detach so DllMain/ServeClient paths do not join under the loader lock.
+     * Do NOT clear g_running here — ThreadMain owns that flag until it exits.
+     * Start() waits on g_accept_alive before spawning a replacement thread.
+     */
+    if (g_thread.joinable()) {
+        g_thread.detach();
     }
 }
 

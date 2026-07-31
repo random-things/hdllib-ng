@@ -7,6 +7,7 @@ namespace ipc {
 
 HdlStatus Start();
 void Stop();
+void StopNoJoin();
 bool IsRunning();
 
 }  // namespace ipc

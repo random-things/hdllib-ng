@@ -1,9 +1,11 @@
 #include "handlers.hpp"
 
+#include "core.hpp"
 #include "fingerprint.hpp"
 #include "health.hpp"
 #include "inject.hpp"
 #include "jobs.hpp"
+#include "loaded_modules.hpp"
 #include "log.hpp"
 #include "memory.hpp"
 #include "protocol.hpp"
@@ -55,6 +57,13 @@ bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
                                      exe_path.empty() ? nullptr : exe_path.c_str(),
                                      hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid,
                                      &base);
+    if (st == HDL_OK && base) {
+        const DWORD self = GetCurrentProcessId();
+        const uint32_t effective = out_pid ? out_pid : (pid ? pid : self);
+        if (effective == self) {
+            TrackLoadedModule(path.c_str(), base);
+        }
+    }
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, base);
     AppendPod(resp, out_pid);
@@ -72,9 +81,43 @@ bool HandleUnloadDll(HANDLE pipe, proto::Reader& r) {
         return WriteFrame(pipe, resp);
     }
     uint64_t base = 0;
-    const HdlStatus st = UnloadDll(pid, path.c_str(), reload, &base);
+    const HdlStatus st = UnloadDll(pid, path.c_str(), reload, 0, &base);
+    if (st == HDL_OK) {
+        UntrackLoadedModule(path.c_str());
+    }
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, base);
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleShutdown(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    uint32_t flags = 0;
+    if (!r.TakePod(flags)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    /* Restore instrumentation first, reply, then signal IPC stop without joining
+     * (this thread is a ServeClient worker — joining the accept loop would deadlock). */
+    CoreShutdownPrepare(flags);
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
+    const bool wrote = WriteFrame(pipe, resp);
+    CoreShutdownFinish();
+    return wrote;
+}
+
+bool HandleTrackLoadedDll(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    uint64_t base = 0;
+    std::wstring path;
+    if (!r.TakePod(base) || !r.TakeWString(path) || !base || path.empty()) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    TrackLoadedModule(path.c_str(), base);
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
     return WriteFrame(pipe, resp);
 }
 

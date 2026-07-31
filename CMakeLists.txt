@@ -110,6 +110,7 @@ add_library(hdllib SHARED
   src/dllmain.cpp
   src/api.cpp
   src/core.cpp
+  src/loaded_modules.cpp
   src/memory.cpp
   src/hooks.cpp
   src/hooks_trace.asm
@@ -215,6 +216,7 @@ if(HDL_BUILD_TOOLS)
     tools/client/main.cpp
     tools/client/pipe_client.cpp
     tools/client/local_inject.cpp
+    tools/client/session_modules.cpp
     tools/client/usage.cpp
     tools/client/util.cpp
     tools/client/json_out.cpp
