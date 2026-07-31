@@ -16,7 +16,11 @@ Local inject (no pipe; former hdlinjector):
   hdlclient reload <pid> <dll-path>
 
 Pipe commands (DLL already loaded in <pid>):
-  hdlclient <pid> ping
+  Global flags (before or after pid): --json  --store PATH  --tui
+  Envelope: { "ok", "status", "cmd", "data", "error": { "code", "name", "hint" }|null }
+  Stream verbs emit one aggregated JSON object (not NDJSON).
+
+  hdlclient [--json] <pid> ping
   hdlclient <pid> modules [--stream]
   hdlclient <pid> regions [--stream]
   hdlclient <pid> threads [--stream]

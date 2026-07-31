@@ -7,6 +7,8 @@
 #include <vector>
 
 const wchar_t* StatusName(int32_t st);
+/* One-line English hint for cmd+status, or nullptr if none. */
+const wchar_t* StatusHint(const std::wstring& cmd, int32_t status);
 bool ParseHexBytes(const wchar_t* text, std::vector<uint8_t>& out);
 bool ParseHexU64(const wchar_t* s, uint64_t* out);
 int FailConnect(uint32_t pid);

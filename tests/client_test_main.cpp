@@ -921,6 +921,44 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         }
     }
 
+    /* --json structured output + actionable error hints */
+    {
+        ProcResult r;
+        RunProcess(ctx.client, {L"--json", std::to_wstring(ctx.pid), L"ping"}, nullptr, 30000, &r);
+        Report(c,
+               r.exit_code == 0 && Contains(r.out, L"\"ok\":true") &&
+                   Contains(r.out, L"\"cmd\":\"ping\"") && Contains(r.out, L"\"remote_pid\"") &&
+                   Contains(r.out, L"\"error\":null"),
+               false, "client --json ping envelope", "");
+
+        ProcResult mods;
+        RunProcess(ctx.client, {L"--json", std::to_wstring(ctx.pid), L"modules"}, nullptr, 30000,
+                   &mods);
+        Report(c,
+               mods.exit_code == 0 && Contains(mods.out, L"\"ok\":true") &&
+                   Contains(mods.out, L"\"modules\"") && Contains(mods.out, L"\"base\""),
+               false, "client --json modules array", "");
+
+        ProcResult failj;
+        RunProcess(ctx.client,
+                   {L"--json", std::to_wstring(ctx.pid), L"call", L"--addr", L"0", L"--main"},
+                   nullptr, 30000, &failj);
+        Report(c,
+               failj.exit_code != 0 && Contains(failj.out, L"\"ok\":false") &&
+                   Contains(failj.out, L"\"error\"") && Contains(failj.out, L"\"code\"") &&
+                   Contains(failj.out, L"\"name\"") && Contains(failj.out, L"\"hint\"") &&
+                   failj.out.find(L"\"hint\":\"\"") == std::wstring::npos,
+               false, "client --json call --main error hint", "");
+
+        ProcResult failt;
+        RunProcess(ctx.client, {std::to_wstring(ctx.pid), L"call", L"--addr", L"0", L"--main"},
+                   nullptr, 30000, &failt);
+        Report(c,
+               failt.exit_code != 0 && Contains(failt.out, L"status=") &&
+                   Contains(failt.out, L"hint:"),
+               false, "client text call --main prints hint", "");
+    }
+
     /* Usage documents new surfaces */
     {
         ProcResult r;
@@ -929,6 +967,7 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                r.out.find(L"discover-scan") != std::wstring::npos &&
                    r.out.find(L"hook-enable") != std::wstring::npos &&
                    r.out.find(L"--tui") != std::wstring::npos &&
+                   r.out.find(L"--json") != std::wstring::npos &&
                    r.out.find(L"write <hex-address>") != std::wstring::npos &&
                    r.out.find(L"discover-pathvalidate") != std::wstring::npos &&
                    r.out.find(L"stub") != std::wstring::npos &&

@@ -140,9 +140,10 @@ int wmain(int argc, wchar_t** argv) {
     const wchar_t* store_path = nullptr;
     bool want_tui = false;
     bool want_repl = false;
+    bool want_json = false;
     int argi = 1;
 
-    /* Optional global flags before pid: --store PATH --tui */
+    /* Optional global flags before pid: --store PATH --tui --json */
     while (argi < argc) {
         if (EqFlag(argv[argi], L"--store") && argi + 1 < argc) {
             store_path = argv[++argi];
@@ -151,6 +152,11 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (EqFlag(argv[argi], L"--tui")) {
             want_tui = true;
+            ++argi;
+            continue;
+        }
+        if (EqFlag(argv[argi], L"--json")) {
+            want_json = true;
             ++argi;
             continue;
         }
@@ -177,6 +183,11 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui")) {
             want_tui = true;
+            ++argi;
+            continue;
+        }
+        if (EqFlag(argv[argi], L"--json")) {
+            want_json = true;
             ++argi;
             continue;
         }
@@ -218,6 +229,7 @@ int wmain(int argc, wchar_t** argv) {
     /* Rebuild argv so handlers still see: exe pid cmd args...
        Original layout already matches when flags were only after pid. */
     CmdCtx ctx{argc, argv, pid, argv[argi], client};
+    ctx.json = want_json;
     /* If flags appeared before the command, shift so argv[2] is the command name.
        Handlers use argv[1]=pid and argv[2]=cmd — keep that contract by synthesizing. */
     if (argi != 2) {

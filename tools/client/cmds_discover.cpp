@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "json_out.hpp"
 #include "recipes.hpp"
 #include "usage.hpp"
 #include "util.hpp"
@@ -15,6 +16,91 @@
 #include <string>
 #include <vector>
 
+static int FailUsage(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
+    } else {
+        PrintUsage();
+    }
+    return 1;
+}
+
+static int FailIpc(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
+    }
+    return 1;
+}
+
+static int FailBadResp(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+    } else {
+        wprintf(L"Bad response\n");
+    }
+    return 1;
+}
+
+static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), hint);
+    } else {
+        wprintf(L"%ls\n", hint);
+    }
+    return 1;
+}
+
+static bool JsonWriteCandidates(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
+    w.Key("candidates");
+    w.BeginArray();
+    for (uint32_t i = 0; i < count; ++i) {
+        HdlCandidate cand{};
+        if (!r.Take(&cand, sizeof(cand))) {
+            w.EndArray();
+            return false;
+        }
+        w.BeginObject();
+        w.Key("id");
+        w.HexStr(cand.id);
+        w.Key("kind");
+        w.Num(cand.kind);
+        w.Key("conf");
+        w.Num(cand.confidence);
+        w.Key("addr");
+        w.HexStr(cand.address);
+        w.Key("tag");
+        w.Str(cand.tag);
+        w.EndObject();
+    }
+    w.EndArray();
+    return true;
+}
+
+static bool JsonWriteHeatFields(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
+    w.Key("fields");
+    w.BeginArray();
+    for (uint32_t i = 0; i < count; ++i) {
+        HdlHeatField hf{};
+        if (!r.Take(&hf, sizeof(hf))) {
+            w.EndArray();
+            return false;
+        }
+        w.BeginObject();
+        w.Key("offset");
+        w.Num(hf.offset);
+        w.Key("changes");
+        w.Num(hf.changes);
+        w.Key("kind");
+        w.Num(hf.kind);
+        w.Key("size");
+        w.Num(hf.reserved);
+        w.Key("value");
+        w.HexStr(hf.last_value);
+        w.EndObject();
+    }
+    w.EndArray();
+    return true;
+}
 
 static std::string Narrow(const wchar_t* w) {
     return WideToUtf8(w ? w : L"");
@@ -77,15 +163,28 @@ int CmdDiscoverCreate(CmdCtx& ctx) {
 
     AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     uint64_t id = 0;
     if (!r.TakePod(st) || !r.TakePod(id)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
     }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("session");
+        w.HexStr(id);
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls session=%llu\n", StatusName(st), static_cast<unsigned long long>(id));
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -103,12 +202,20 @@ int CmdDiscoverClose(CmdCtx& ctx) {
     AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
     AppendPod(req, id);
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls\n", StatusName(st));
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -145,14 +252,24 @@ int CmdDiscoverAdd(CmdCtx& ctx) {
     AppendPod(req, addr);
     AppendString(req, tag.c_str());
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     uint64_t cand = 0;
     r.TakePod(st);
     r.TakePod(cand);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("cand");
+        w.HexStr(cand);
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls cand=%llu\n", StatusName(st), static_cast<unsigned long long>(cand));
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -176,8 +293,7 @@ int CmdDiscoverConstraint(CmdCtx& ctx) {
         } else if (wcscmp(ctx.argv[i], L"--pred") == 0 && i + 1 < ctx.argc) {
             HdlFieldPred p{};
             if (!ClientParsePred(ctx.argv[++i], &p)) {
-                wprintf(L"Bad --pred\n");
-                return 1;
+                return FailArg(ctx, L"Bad --pred");
             }
             preds.push_back(p);
         } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
@@ -203,12 +319,20 @@ int CmdDiscoverConstraint(CmdCtx& ctx) {
         AppendPod(req, p);
     }
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls\n", StatusName(st));
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -245,17 +369,36 @@ int CmdDiscoverSynth(CmdCtx& ctx) {
     AppendPod(req, flags);
     AppendWString(req, module.c_str());
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     HdlSynthesizedPattern out{};
     if (!r.TakePod(st) || !r.Take(&out, sizeof(out))) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("hits");
+        w.Num(out.unique_hits);
+        w.Key("match");
+        w.HexStr(out.match_addr);
+        w.Key("resolved");
+        w.HexStr(out.resolved_addr);
+        w.Key("pattern");
+        w.Str(out.pattern);
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
     }
     wprintf(L"status=%ls hits=%u match=%016llx resolved=%016llx\n  %hs\n", StatusName(st),
             out.unique_hits, static_cast<unsigned long long>(out.match_addr),
             static_cast<unsigned long long>(out.resolved_addr), out.pattern);
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -265,8 +408,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
-        PrintUsage();
-        return 1;
+        return FailUsage(ctx);
     }
     const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
     uint32_t depth = 2;
@@ -294,19 +436,48 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
     AppendPod(req, flags);
     AppendWString(req, module.c_str());
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     uint32_t count = 0;
     if (!r.TakePod(st) || !r.TakePod(count)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("paths");
+        w.BeginArray();
+        for (uint32_t i = 0; i < count; ++i) {
+            HdlPointerPath path{};
+            if (!r.Take(&path, sizeof(path))) {
+                return FailBadResp(ctx);
+            }
+            if (i == 0) {
+                hdlcli::RememberPath(ctx.controller, path,
+                                     module.empty() ? nullptr : module.c_str());
+            }
+            w.BeginObject();
+            w.Key("base");
+            w.HexStr(path.static_base);
+            w.Key("depth");
+            w.Num(path.depth);
+            w.EndObject();
+        }
+        w.EndArray();
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
     }
     wprintf(L"status=%ls paths=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
         if (!r.Take(&path, sizeof(path))) {
-            break;
+            return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
@@ -314,6 +485,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
         wprintf(L"  base=%016llx depth=%u\n", static_cast<unsigned long long>(path.static_base),
                 path.depth);
     }
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -323,8 +495,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
-        PrintUsage();
-        return 1;
+        return FailUsage(ctx);
     }
     const uint64_t expected = _wcstoui64(ctx.argv[3], nullptr, 0);
     uint64_t base = 0;
@@ -348,8 +519,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
         }
     }
     if (!base || depth == 0 || depth > 8 || off_n < depth) {
-        wprintf(L"Need --base HEX --depth N --offs A,B,...\n");
-        return 1;
+        return FailArg(ctx, L"Need --base HEX --depth N --offs A,B,...");
     }
     HdlPointerPath path{};
     path.static_base = base;
@@ -362,19 +532,49 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
     AppendPod(req, static_cast<uint32_t>(1));
     AppendBytes(req, &path, sizeof(path));
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     uint32_t kept = 0;
     if (!r.TakePod(st) || !r.TakePod(kept)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("kept");
+        w.Num(kept);
+        w.Key("paths");
+        w.BeginArray();
+        for (uint32_t i = 0; i < kept; ++i) {
+            HdlPointerPath p{};
+            if (!r.Take(&p, sizeof(p))) {
+                return FailBadResp(ctx);
+            }
+            if (i == 0) {
+                hdlcli::RememberPath(ctx.controller, p, nullptr);
+            }
+            w.BeginObject();
+            w.Key("base");
+            w.HexStr(p.static_base);
+            w.Key("depth");
+            w.Num(p.depth);
+            w.EndObject();
+        }
+        w.EndArray();
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
     }
     wprintf(L"status=%ls kept=%u\n", StatusName(st), kept);
     for (uint32_t i = 0; i < kept; ++i) {
         HdlPointerPath p{};
         if (!r.Take(&p, sizeof(p))) {
-            break;
+            return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, p, nullptr);
@@ -382,6 +582,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
         wprintf(L"  base=%016llx depth=%u\n", static_cast<unsigned long long>(p.static_base),
                 p.depth);
     }
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -402,8 +603,7 @@ int CmdDiscoverScan(CmdCtx& ctx) {
             disc_id = _wcstoui64(ctx.argv[++i], nullptr, 0);
         } else if (wcscmp(ctx.argv[i], L"--type") == 0 && i + 1 < ctx.argc) {
             if (!ParseValueType(ctx.argv[++i], &value_type)) {
-                wprintf(L"Bad --type\n");
-                return 1;
+                return FailArg(ctx, L"Bad --type");
             }
         } else if (wcscmp(ctx.argv[i], L"--value") == 0 && i + 1 < ctx.argc) {
             value_w = ctx.argv[++i];
@@ -419,27 +619,30 @@ int CmdDiscoverScan(CmdCtx& ctx) {
         }
     }
     if (!disc_id || value_w.empty()) {
-        wprintf(L"Need --session ID --type T --value V\n");
-        return 1;
+        return FailArg(ctx, L"Need --session ID --type T --value V");
     }
 
     std::vector<uint8_t> value_bytes;
     if (!EncodeTypedValue(value_type, value_w.c_str(), value_bytes)) {
-        wprintf(L"Bad --value\n");
-        return 1;
+        return FailArg(ctx, L"Bad --value");
     }
 
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
     AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r0(resp);
     int32_t st = 0;
     uint64_t search_id = 0;
     if (!r0.TakePod(st) || !r0.TakePod(search_id) || st != HDL_OK) {
-        wprintf(L"SearchCreate failed status=%ls\n", StatusName(st));
+        if (ctx.json) {
+            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), L"SearchCreate failed");
+        } else {
+            wprintf(L"SearchCreate failed status=%ls\n", StatusName(st));
+            PrintStatusHint(ctx.cmd, st);
+        }
         return 1;
     }
 
@@ -458,12 +661,17 @@ int CmdDiscoverScan(CmdCtx& ctx) {
     AppendPod(req, search_flags);
     AppendWString(req, module.c_str());
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r1(resp);
     uint32_t count = 0;
     if (!r1.TakePod(st) || !r1.TakePod(count) || st != HDL_OK) {
-        wprintf(L"SearchFirst status=%ls\n", StatusName(st));
+        if (!ctx.json) {
+            wprintf(L"SearchFirst status=%ls\n", StatusName(st));
+            PrintStatusHint(ctx.cmd, st);
+        } else {
+            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), L"SearchFirst failed");
+        }
         req.clear();
         resp.clear();
         AppendPod(req, static_cast<uint32_t>(OpSearchClose));
@@ -478,17 +686,22 @@ int CmdDiscoverScan(CmdCtx& ctx) {
     AppendPod(req, search_id);
     AppendPod(req, count ? count : max_hits);
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r2(resp);
     uint32_t total = 0;
     uint32_t got = 0;
     if (!r2.TakePod(st) || !r2.TakePod(total) || !r2.TakePod(got)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
     }
     std::vector<uint64_t> hits(got);
+    bool bad_resp = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (!r2.TakePod(hits[i])) {
+            bad_resp = true;
             break;
         }
     }
@@ -499,7 +712,16 @@ int CmdDiscoverScan(CmdCtx& ctx) {
     AppendPod(req, search_id);
     ctx.client.Request(req, resp);
 
+    if (bad_resp) {
+        return FailBadResp(ctx);
+    }
+
     uint32_t added = 0;
+    struct ScanAddEntry {
+        uint64_t cand;
+        uint64_t addr;
+    };
+    std::vector<ScanAddEntry> entries;
     for (uint64_t hit : hits) {
         req.clear();
         resp.clear();
@@ -518,9 +740,35 @@ int CmdDiscoverScan(CmdCtx& ctx) {
         ra.TakePod(cand);
         if (ast == HDL_OK) {
             ++added;
-            wprintf(L"  cand=%llu addr=%016llx\n", static_cast<unsigned long long>(cand),
-                    static_cast<unsigned long long>(hit));
+            entries.push_back({cand, hit});
+            if (!ctx.json) {
+                wprintf(L"  cand=%llu addr=%016llx\n", static_cast<unsigned long long>(cand),
+                        static_cast<unsigned long long>(hit));
+            }
         }
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("hits");
+        w.Num(got);
+        w.Key("added");
+        w.Num(added);
+        w.Key("entries");
+        w.BeginArray();
+        for (const auto& e : entries) {
+            w.BeginObject();
+            w.Key("cand");
+            w.HexStr(e.cand);
+            w.Key("addr");
+            w.HexStr(e.addr);
+            w.EndObject();
+        }
+        w.EndArray();
+        w.EndObject();
+        const int32_t out_st = HDL_OK;
+        EmitEnvelope(ctx, out_st, ctx.cmd.c_str(), w.Take());
+        return added ? 0 : (got == 0 ? 1 : 0);
     }
     wprintf(L"status=%ls hits=%u added=%u\n", StatusName(HDL_OK), got, added);
     return added ? 0 : (got == 0 ? 1 : 0);
@@ -542,15 +790,16 @@ static bool OpenOutWide(const wchar_t* path, std::ofstream* out) {
     return static_cast<bool>(*out);
 }
 
-static void PrintHeatFields(hdl::proto::Reader& r, uint32_t count) {
+static bool PrintHeatFields(hdl::proto::Reader& r, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlHeatField hf{};
         if (!r.Take(&hf, sizeof(hf))) {
-            break;
+            return false;
         }
         wprintf(L"  +0x%x changes=%u kind=%u size=%u value=%016llx\n", hf.offset, hf.changes,
                 hf.kind, hf.reserved, static_cast<unsigned long long>(hf.last_value));
     }
+    return true;
 }
 
 int CmdDiscoverMisc(CmdCtx& ctx) {
@@ -652,8 +901,8 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         AppendPod(req, static_cast<uint32_t>(256));
     } else if (ctx.cmd == L"discover-watch-import") {
         if (!id || dll.empty() || import_name.empty()) {
-            wprintf(L"Need --session ID --dll NAME --import NAME [--args N] [--module MOD]\n");
-            return 1;
+            return FailArg(ctx,
+                           L"Need --session ID --dll NAME --import NAME [--args N] [--module MOD]");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverWatchImport));
         AppendPod(req, id);
@@ -663,29 +912,25 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         AppendPod(req, args_n);
     } else if (ctx.cmd == L"discover-reset-heat") {
         if (!id || !addr) {
-            wprintf(L"Need --session ID --addr HEX\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --addr HEX");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverResetHeat));
         AppendPod(req, id);
         AppendPod(req, addr);
     } else if (ctx.cmd == L"discover-export") {
         if (!id || out_path.empty()) {
-            wprintf(L"Need --session ID --out PATH\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --out PATH");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverExport));
         AppendPod(req, id);
         AppendPod(req, static_cast<uint32_t>(65536));
     } else if (ctx.cmd == L"discover-import") {
         if (!id || in_path.empty()) {
-            wprintf(L"Need --session ID --in PATH\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --in PATH");
         }
         std::ifstream fin;
         if (!OpenInWide(in_path.c_str(), &fin)) {
-            wprintf(L"Cannot read --in file\n");
-            return 1;
+            return FailArg(ctx, L"Cannot read --in file");
         }
         std::string json((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
         AppendPod(req, static_cast<uint32_t>(OpDiscoverImport));
@@ -693,8 +938,7 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         AppendString(req, json.c_str());
     } else if (ctx.cmd == L"discover-diff") {
         if (!id || diff_addrs.size() < 2) {
-            wprintf(L"Need --session ID --addr A --addr B ... [--size N]\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --addr A --addr B ... [--size N]");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverDiffObjects));
         AppendPod(req, id);
@@ -706,8 +950,7 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         }
     } else if (ctx.cmd == L"discover-apply-watch") {
         if (!id || !addr) {
-            wprintf(L"Need --session ID --addr HEX [--size N]\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --addr HEX [--size N]");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverApplyWatchHits));
         AppendPod(req, id);
@@ -715,38 +958,63 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         AppendPod(req, size ? size : static_cast<uint32_t>(64));
     } else if (ctx.cmd == L"discover-evidence") {
         if (!id || !cand_id) {
-            wprintf(L"Need --session ID --id CAND_ID\n");
-            return 1;
+            return FailArg(ctx, L"Need --session ID --id CAND_ID");
         }
         AppendPod(req, static_cast<uint32_t>(OpDiscoverGetEvidence));
         AppendPod(req, id);
         AppendPod(req, cand_id);
         AppendPod(req, static_cast<uint32_t>(160));
     } else {
-        wprintf(L"Unknown discover command\n");
-        return 1;
+        return FailArg(ctx, L"Unknown discover command");
     }
     if (!ctx.client.Request(req, resp)) {
-        return 1;
+        return FailIpc(ctx);
     }
     Reader r(resp);
     int32_t st = 0;
     if (!r.TakePod(st)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
         return 1;
     }
     if (ctx.cmd == L"discover-heat" || ctx.cmd == L"discover-diff") {
         uint32_t count = 0;
         r.TakePod(count);
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            if (!JsonWriteHeatFields(w, r, count)) {
+                return FailBadResp(ctx);
+            }
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls fields=%u\n", StatusName(st), count);
-        PrintHeatFields(r, count);
+        if (!PrintHeatFields(r, count)) {
+            return FailBadResp(ctx);
+        }
     } else if (ctx.cmd == L"discover-rank" || ctx.cmd == L"discover-cands") {
         uint32_t count = 0;
         r.TakePod(count);
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("count");
+            w.Num(count);
+            if (!JsonWriteCandidates(w, r, count)) {
+                return FailBadResp(ctx);
+            }
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls count=%u\n", StatusName(st), count);
         for (uint32_t i = 0; i < count; ++i) {
             HdlCandidate cand{};
             if (!r.Take(&cand, sizeof(cand))) {
-                break;
+                return FailBadResp(ctx);
             }
             wprintf(L"  id=%llu kind=%u conf=%u addr=%016llx tag=%hs\n",
                     static_cast<unsigned long long>(cand.id), cand.kind, cand.confidence,
@@ -760,19 +1028,58 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
             if (r.Take(json.data(), json_size)) {
                 std::ofstream fout;
                 if (!OpenOutWide(out_path.c_str(), &fout)) {
-                    wprintf(L"status=%ls bytes=%u (write failed)\n", StatusName(st), json_size);
+                    if (ctx.json) {
+                        JsonWriter w;
+                        w.BeginObject();
+                        w.Key("bytes");
+                        w.Num(json_size);
+                        w.Key("out");
+                        w.Str(out_path);
+                        w.EndObject();
+                        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+                    } else {
+                        wprintf(L"status=%ls bytes=%u (write failed)\n", StatusName(st), json_size);
+                    }
                     return 1;
                 }
                 fout.write(json.data(), static_cast<std::streamsize>(json.size()));
             }
         }
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("bytes");
+            w.Num(json_size);
+            w.Key("out");
+            w.Str(out_path);
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls bytes=%u out=%ls\n", StatusName(st), json_size, out_path.c_str());
     } else if (ctx.cmd == L"discover-evidence") {
         std::string ev;
         r.TakeString(ev);
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("evidence");
+            w.Str(ev);
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls evidence=%hs\n", StatusName(st), ev.c_str());
     } else {
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls\n", StatusName(st));
     }
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }

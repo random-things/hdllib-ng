@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "json_out.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -13,14 +14,29 @@
 #include <string>
 #include <vector>
 
+static int FailUsage(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
+    } else {
+        PrintUsage();
+    }
+    return 1;
+}
+
+static int FailIpc(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
+    }
+    return 1;
+}
+
 int CmdInject(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
-        PrintUsage();
-        return 1;
+        return FailUsage(ctx);
     }
     uint32_t target_pid = 0;
     uint32_t method = HDL_INJECT_CREATE_REMOTE_THREAD;
@@ -73,7 +89,11 @@ int CmdInject(CmdCtx& ctx) {
             } else if (_wcsicmp(ctx.argv[i], L"etw_callback") == 0) {
                 method = HDL_INJECT_ETW_CALLBACK;
             } else {
-                wprintf(L"Unknown method: %ls\n", ctx.argv[i]);
+                if (ctx.json) {
+                    EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"unknown inject method");
+                } else {
+                    wprintf(L"Unknown method: %ls\n", ctx.argv[i]);
+                }
                 return 1;
             }
         } else if (wcscmp(ctx.argv[i], L"--exe") == 0 && i + 1 < ctx.argc) {
@@ -96,15 +116,34 @@ int CmdInject(CmdCtx& ctx) {
     AppendWString(req, full);
     AppendWString(req, exe_path.empty() ? L"" : full_exe);
     AppendString(req, hook_export.c_str());
-    if (!ctx.client.Request(req, resp)) return 1;
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
     Reader r(resp);
     int32_t st = 0;
     uint64_t base = 0;
     uint32_t out_pid = 0;
-    if (!r.TakePod(st) || !r.TakePod(base)) return 1;
+    if (!r.TakePod(st) || !r.TakePod(base)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
+        return 1;
+    }
     r.TakePod(out_pid);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("base");
+        w.HexStr(base);
+        w.Key("out_pid");
+        w.Num(out_pid);
+        w.EndObject();
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls base=%016llx out_pid=%u\n", StatusName(st),
             static_cast<unsigned long long>(base), out_pid);
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -114,8 +153,7 @@ int CmdUnload(CmdCtx& ctx) {
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
-        PrintUsage();
-        return 1;
+        return FailUsage(ctx);
     }
     uint32_t target_pid = 0;
     int reload = 0;
@@ -136,13 +174,34 @@ int CmdUnload(CmdCtx& ctx) {
     AppendPod(req, target_pid);
     AppendPod(req, static_cast<int32_t>(reload));
     AppendWString(req, full);
-    if (!ctx.client.Request(req, resp)) return 1;
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
     Reader r(resp);
     int32_t st = 0;
     uint64_t base = 0;
-    if (!r.TakePod(st) || !r.TakePod(base)) return 1;
+    if (!r.TakePod(st) || !r.TakePod(base)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+        }
+        return 1;
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("base");
+        w.HexStr(base);
+        w.Key("reload");
+        w.Bool(reload != 0);
+        w.EndObject();
+        const wchar_t* cmd_name =
+            _wcsicmp(ctx.cmd.c_str(), L"reload") == 0 ? L"reload" : L"unload";
+        EmitEnvelope(ctx, st, cmd_name, w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
     wprintf(L"status=%ls base=%016llx reload=%d\n", StatusName(st),
             static_cast<unsigned long long>(base), reload);
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 

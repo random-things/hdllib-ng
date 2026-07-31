@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "json_out.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -12,6 +13,51 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+static int FailIpc(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
+    }
+    return 1;
+}
+
+static int FailBadResp(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+    } else {
+        wprintf(L"Bad response\n");
+    }
+    return 1;
+}
+
+static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), hint);
+    } else {
+        wprintf(L"%ls\n", hint);
+    }
+    return 1;
+}
+
+static void EmitHitsJson(CmdCtx& ctx, int32_t st, uint64_t session, bool have_session,
+                         uint32_t total, const std::vector<uint64_t>& hits) {
+    JsonWriter w;
+    w.BeginObject();
+    if (have_session) {
+        w.Key("session");
+        w.HexStr(session);
+    }
+    w.Key("total");
+    w.Num(total);
+    w.Key("hits");
+    w.BeginArray();
+    for (uint64_t h : hits) {
+        w.HexStr(h);
+    }
+    w.EndArray();
+    w.EndObject();
+    EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+}
 
 bool ParseValueType(const wchar_t* s, int32_t* out) {
     if (!s || !out) return false;
@@ -158,16 +204,26 @@ bool EncodeTypedValue(int32_t type, const wchar_t* text, std::vector<uint8_t>& o
     return true;
 }
 
-bool IpcCreateSession(PipeClient& client, uint64_t* out_id) {
+bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
     AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
-    if (!client.Request(req, resp)) return false;
+    if (!ctx.client.Request(req, resp)) {
+        if (ctx.json) {
+            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
+        }
+        return false;
+    }
     Reader r(resp);
     int32_t st = 0;
     if (!r.TakePod(st) || !r.TakePod(*out_id) || st != HDL_OK) {
-        wprintf(L"scan-create status=%ls\n", StatusName(st));
+        if (ctx.json) {
+            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), nullptr);
+        } else {
+            wprintf(L"scan-create status=%ls\n", StatusName(st));
+            PrintStatusHint(ctx.cmd, st);
+        }
         return false;
     }
     return true;
@@ -175,7 +231,8 @@ bool IpcCreateSession(PipeClient& client, uint64_t* out_id) {
 
 /* Growable collector for search frames: total, count, u64[count] (no offset). */
 bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
-                         uint32_t* out_total, std::vector<uint64_t>* out_hits) {
+                         uint32_t* out_total, std::vector<uint64_t>* out_hits,
+                         bool* out_bad_resp) {
     using namespace hdl::proto;
     if (!out_st || !out_total || !out_hits) {
         return false;
@@ -183,11 +240,16 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
     out_hits->clear();
     *out_st = HDL_E_FAILED;
     *out_total = 0;
-    return client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+    if (out_bad_resp) {
+        *out_bad_resp = false;
+    }
+    bool bad_resp = false;
+    bool ok = client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
         Reader r(p, n);
         uint32_t total = 0;
         uint32_t count = 0;
         if (!r.TakePod(total) || !r.TakePod(count)) {
+            bad_resp = true;
             return false;
         }
         const size_t need = out_hits->size() + count;
@@ -201,6 +263,7 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t hit = 0;
             if (!r.TakePod(hit)) {
+                bad_resp = true;
                 return false;
             }
             out_hits->push_back(hit);
@@ -211,6 +274,10 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
         }
         return true;
     });
+    if (out_bad_resp) {
+        *out_bad_resp = bad_resp;
+    }
+    return ok;
 }
 
 void PrintHitList(const std::vector<uint64_t>& hits, uint32_t max_print) {
@@ -224,7 +291,7 @@ void PrintHitList(const std::vector<uint64_t>& hits, uint32_t max_print) {
     }
 }
 
-int PrintScanHits(PipeClient& client, uint64_t session, uint32_t max_hits) {
+int PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     AppendPod(req, static_cast<uint32_t>(OpSearchGetHits));
@@ -237,12 +304,18 @@ int PrintScanHits(PipeClient& client, uint64_t session, uint32_t max_hits) {
     int32_t st = 0;
     uint32_t total = 0;
     std::vector<uint64_t> hits;
-    if (!CollectStreamedHits(client, req, &st, &total, &hits)) {
-        return 1;
+    bool bad_resp = false;
+    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+        return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
+    }
+    if (ctx.json) {
+        EmitHitsJson(ctx, st, session, true, total, hits);
+        return st == HDL_OK ? 0 : 1;
     }
     wprintf(L"status=%ls total=%u session=%llu\n", StatusName(st), total,
             static_cast<unsigned long long>(session));
     PrintHitList(hits, 0);
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -281,16 +354,14 @@ int CmdScan(CmdCtx& ctx) {
             value_type = HDL_VALUE_BYTES;
         } else if (wcscmp(ctx.argv[i], L"--type") == 0 && i + 1 < ctx.argc) {
             if (!ParseValueType(ctx.argv[++i], &value_type)) {
-                wprintf(L"Unknown --type\n");
-                return 1;
+                return FailArg(ctx, L"Unknown --type");
             }
         } else if (wcscmp(ctx.argv[i], L"--value") == 0 && i + 1 < ctx.argc) {
             value_text = ctx.argv[++i];
             have_value = true;
         } else if (wcscmp(ctx.argv[i], L"--cmp") == 0 && i + 1 < ctx.argc) {
             if (!ParseCmp(ctx.argv[++i], &cmp)) {
-                wprintf(L"Unknown --cmp\n");
-                return 1;
+                return FailArg(ctx, L"Unknown --cmp");
             }
             have_cmp = true;
         } else if (wcscmp(ctx.argv[i], L"--start") == 0 && i + 1 < ctx.argc) {
@@ -339,33 +410,50 @@ int CmdScan(CmdCtx& ctx) {
         int32_t st = 0;
         uint32_t total = 0;
         std::vector<uint64_t> hits;
-        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
-            return 1;
+        bool bad_resp = false;
+        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
+        }
+        if (ctx.json) {
+            EmitHitsJson(ctx, st, 0, false, total, hits);
+            return st == HDL_OK ? 0 : 1;
         }
         wprintf(L"status=%ls hits=%u\n", StatusName(st), total);
         PrintHitList(hits, 0);
+        PrintStatusHint(ctx.cmd, st);
         return st == HDL_OK ? 0 : 1;
     }
 
     if (do_hits || do_close || do_reset || do_next) {
         if (!have_session) {
-            wprintf(L"--session required\n");
-            return 1;
+            return FailArg(ctx, L"--session required");
         }
     }
 
     if (do_hits) {
-        return PrintScanHits(ctx.client, session, max_hits);
+        return PrintScanHits(ctx, session, max_hits);
     }
     if (do_close || do_reset) {
         AppendPod(req, static_cast<uint32_t>(do_close ? OpSearchClose : OpSearchReset));
         AppendPod(req, session);
-        if (!ctx.client.Request(req, resp)) return 1;
+        if (!ctx.client.Request(req, resp)) {
+            return FailIpc(ctx);
+        }
         Reader r(resp);
         int32_t st = 0;
         r.TakePod(st);
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("session");
+            w.HexStr(session);
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
         wprintf(L"status=%ls session=%llu\n", StatusName(st),
                 static_cast<unsigned long long>(session));
+        PrintStatusHint(ctx.cmd, st);
         return st == HDL_OK ? 0 : 1;
     }
 
@@ -375,12 +463,10 @@ int CmdScan(CmdCtx& ctx) {
             // Type is unknown on the ctx.client for next; encode as raw for bytes pattern
             // or require --type when value is supplied.
             if (value_type < 0) {
-                wprintf(L"--type required with --value on --next\n");
-                return 1;
+                return FailArg(ctx, L"--type required with --value on --next");
             }
             if (!EncodeTypedValue(value_type, value_text.c_str(), encoded)) {
-                wprintf(L"Bad --value\n");
-                return 1;
+                return FailArg(ctx, L"Bad --value");
             }
         }
         AppendPod(req, static_cast<uint32_t>(OpSearchNext));
@@ -391,31 +477,50 @@ int CmdScan(CmdCtx& ctx) {
             AppendBytes(req, encoded.data(), encoded.size());
         }
         append_job_trailer(req);
-        if (!ctx.client.Request(req, resp)) return 1;
+        if (!ctx.client.Request(req, resp)) {
+            return FailIpc(ctx);
+        }
         Reader r(resp);
         int32_t st = 0;
         uint32_t count = 0;
-        if (!r.TakePod(st) || !r.TakePod(count)) return 1;
+        if (!r.TakePod(st) || !r.TakePod(count)) {
+            if (ctx.json) {
+                EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+            }
+            return 1;
+        }
+        if (ctx.json) {
+            if (st == HDL_OK) {
+                return PrintScanHits(ctx, session, max_hits);
+            }
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("session");
+            w.HexStr(session);
+            w.Key("hits");
+            w.Num(count);
+            w.EndObject();
+            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+            return 1;
+        }
         wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), count,
                 static_cast<unsigned long long>(session));
         if (st == HDL_OK) {
-            return PrintScanHits(ctx.client, session, max_hits);
+            return PrintScanHits(ctx, session, max_hits);
         }
+        PrintStatusHint(ctx.cmd, st);
         return 1;
     }
 
     // First typed / session scan.
     if (value_type < 0) {
-        wprintf(L"--type or --pattern required\n");
-        return 1;
+        return FailArg(ctx, L"--type or --pattern required");
     }
     if (cmp != HDL_CMP_UNKNOWN && !have_value && value_type != HDL_VALUE_BYTES) {
-        wprintf(L"--value required\n");
-        return 1;
+        return FailArg(ctx, L"--value required");
     }
     if (value_type == HDL_VALUE_BYTES && !have_value && !pattern) {
-        wprintf(L"--value/--pattern required for bytes\n");
-        return 1;
+        return FailArg(ctx, L"--value/--pattern required for bytes");
     }
 
     std::vector<uint8_t> encoded;
@@ -429,23 +534,20 @@ int CmdScan(CmdCtx& ctx) {
             tmp = wbuf;
             src = tmp.c_str();
             if (!EncodeTypedValue(HDL_VALUE_BYTES, src, encoded)) {
-                wprintf(L"Bad pattern\n");
-                return 1;
+                return FailArg(ctx, L"Bad pattern");
             }
         } else if (!EncodeTypedValue(HDL_VALUE_BYTES, value_text.c_str(), encoded)) {
-            wprintf(L"Bad --value\n");
-            return 1;
+            return FailArg(ctx, L"Bad --value");
         }
     } else if (cmp != HDL_CMP_UNKNOWN) {
         if (!EncodeTypedValue(value_type, value_text.c_str(), encoded)) {
-            wprintf(L"Bad --value\n");
-            return 1;
+            return FailArg(ctx, L"Bad --value");
         }
     }
 
     if (!have_session) {
-        if (!IpcCreateSession(ctx.client, &session)) {
-            return 1;
+        if (!IpcCreateSession(ctx, &session)) {
+            return ctx.json ? 1 : 1;
         }
         have_session = true;
     }
@@ -480,12 +582,18 @@ int CmdScan(CmdCtx& ctx) {
     int32_t st = 0;
     uint32_t total = 0;
     std::vector<uint64_t> hits;
-    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
-        return 1;
+    bool bad_resp = false;
+    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+        return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
+    }
+    if (ctx.json) {
+        EmitHitsJson(ctx, st, session, true, total, hits);
+        return st == HDL_OK ? 0 : 1;
     }
     wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), total,
             static_cast<unsigned long long>(session));
     PrintHitList(hits, 0);
+    PrintStatusHint(ctx.cmd, st);
     return st == HDL_OK ? 0 : 1;
 }
 
