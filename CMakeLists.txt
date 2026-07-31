@@ -217,6 +217,7 @@ if(HDL_BUILD_TOOLS)
     tools/client/local_inject.cpp
     tools/client/usage.cpp
     tools/client/util.cpp
+    tools/client/json_out.cpp
     tools/client/cmds_basic.cpp
     tools/client/cmds_call.cpp
     tools/client/cmds_hooks.cpp

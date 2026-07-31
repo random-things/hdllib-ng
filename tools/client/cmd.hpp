@@ -19,6 +19,8 @@ struct CmdCtx {
     PipeClient& client;
     /* Non-null when invoked from REPL/TUI DispatchLine (interest store / last_*). */
     hdlcli::ControllerState* controller = nullptr;
+    /* Global --json: structured envelope on stdout instead of human text. */
+    bool json = false;
 };
 
 using CmdHandler = int (*)(CmdCtx& ctx);

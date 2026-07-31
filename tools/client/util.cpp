@@ -100,6 +100,66 @@ const wchar_t* StatusName(int32_t st) {
     }
 }
 
+static bool CmdStartsWith(const std::wstring& cmd, const wchar_t* prefix) {
+    const size_t n = wcslen(prefix);
+    return cmd.size() >= n && wcsncmp(cmd.c_str(), prefix, n) == 0;
+}
+
+const wchar_t* StatusHint(const std::wstring& cmd, int32_t status) {
+    if (status == HDL_OK) {
+        return nullptr;
+    }
+    /* Domain-specific (cmd + status) first. */
+    if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_NOT_FOUND) {
+        return L"no non-console HWND for --main, or export/address not found; "
+               L"check --module / --addr";
+    }
+    if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_TIMEOUT) {
+        return L"callee may still be running (orphaned); avoid stacking another call";
+    }
+    if (CmdStartsWith(cmd, L"discover") && status == HDL_E_NOT_FOUND) {
+        return L"unknown session id; run discover-create or pass --session";
+    }
+    if ((cmd == L"scan" || CmdStartsWith(cmd, L"scan")) && status == HDL_E_NOT_FOUND) {
+        return L"unknown scan session; run scan without --session to create one, "
+               L"or pass a valid --session";
+    }
+    if (cmd == L"hook-import" && status == HDL_E_NOT_FOUND) {
+        return L"import not found in module IAT; check DLL!Name spelling and loaded module";
+    }
+    if ((cmd == L"watch" || cmd == L"hooktrace") && status == HDL_E_FAILED) {
+        return L"instrumentation install failed; check address validity and page protect";
+    }
+    if (cmd == L"inject" && status == HDL_E_ACCESS) {
+        return L"Wow64 target rejected or access denied; use matching bitness / elevate";
+    }
+    /* Generic per-status fallbacks. */
+    switch (status) {
+    case HDL_E_INVALID_ARG:
+        return L"invalid argument; check flags and value types for this verb";
+    case HDL_E_ACCESS:
+        return L"access denied; check integrity level / elevation";
+    case HDL_E_NOT_FOUND:
+        return L"target not found (address, export, session, or HWND)";
+    case HDL_E_NO_MEM:
+        return L"out of memory in target or client";
+    case HDL_E_BUSY:
+        return L"resource busy (ambiguous window match, unload blocked, or in-use handle)";
+    case HDL_E_FAILED:
+        return L"operation failed; see DLL log for details";
+    case HDL_E_BUFFER_SMALL:
+        return L"buffer too small; retry with larger --max";
+    case HDL_E_CANCELLED:
+        return L"operation cancelled";
+    case HDL_E_NOT_INIT:
+        return L"DLL not initialized; reinject and ping";
+    case HDL_E_TIMEOUT:
+        return L"timed out waiting for target; increase --timeout or check hung UI thread";
+    default:
+        return nullptr;
+    }
+}
+
 bool ParseHexBytes(const wchar_t* text, std::vector<uint8_t>& out) {
     out.clear();
     if (!text) {

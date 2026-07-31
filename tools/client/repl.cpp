@@ -360,7 +360,12 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
     swprintf_s(pidbuf, L"%u", pid);
     storage.push_back(pidbuf);
     storage.push_back(resolved);
+    bool want_json = false;
     for (size_t i = 1; i < toks.size(); ++i) {
+        if (toks[i] == L"--json") {
+            want_json = true;
+            continue;
+        }
         storage.push_back(toks[i]);
     }
     std::vector<wchar_t*> argv;
@@ -369,6 +374,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
         argv.push_back(s.data());
     }
     CmdCtx ctx{static_cast<int>(argv.size()), argv.data(), pid, resolved, *st.client, &st};
+    ctx.json = want_json;
     return handler(ctx);
 }
 

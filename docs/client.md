@@ -15,6 +15,23 @@ Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>`. Override w
 
 In REPL/TUI, every pipe verb works. Discover verbs also have short aliases (`dcreate`, `dwatch`, `drank`, … — see `help` / `repl.cpp`).
 
+### Structured output (`--json`)
+
+Global flag before or after the pid (not on local `inject`/`unload`):
+
+```bat
+hdlclient --json <pid> ping
+hdlclient <pid> --json modules
+```
+
+Stdout is one UTF-16 line of UTF-8 JSON:
+
+```json
+{ "ok": true, "status": 0, "cmd": "ping", "data": { "remote_pid": 1234 }, "error": null }
+```
+
+On failure, `ok` is false and `error` is `{ "code", "name", "hint" }` with an actionable one-line hint. Stream verbs (`modules --stream`, scan hits, …) still emit **one aggregated** envelope (not NDJSON). Text mode remains the default; failing text lines may also print `hint: …`.
+
 ---
 
 ## 1. Get in: inject → talk
