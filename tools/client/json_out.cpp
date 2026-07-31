@@ -177,9 +177,16 @@ std::string JsonWriter::Take() {
 }
 
 static void WriteUtf8Line(const std::string& utf8) {
-    const std::wstring w = Utf8ToWide(utf8);
-    fputws(w.c_str(), stdout);
-    fputws(L"\n", stdout);
+    const HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_CHAR) {
+        const std::wstring w = Utf8ToWide(utf8);
+        DWORD wrote = 0;
+        WriteConsoleW(h, w.c_str(), static_cast<DWORD>(w.size()), &wrote, nullptr);
+        WriteConsoleW(h, L"\n", 1, &wrote, nullptr);
+    } else {
+        fwrite(utf8.data(), 1, utf8.size(), stdout);
+        fputc('\n', stdout);
+    }
     fflush(stdout);
 }
 
