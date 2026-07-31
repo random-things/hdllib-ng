@@ -20,21 +20,35 @@
 namespace hdl {
 namespace {
 
-std::atomic<bool> g_init{false};
-std::atomic<bool> g_bootstrapping{false};
+/* Single state avoids a window where g_init is true but bootstrapping is not yet set. */
+enum : int {
+    kUninit = 0,
+    kBootstrapping = 1,
+    kReady = 2,
+};
+
+std::atomic<int> g_state{kUninit};
 std::mutex g_boot_mu;
 std::condition_variable g_boot_cv;
 
-void WaitBootstrapDone() {
+void WaitNotBootstrapping() {
     std::unique_lock<std::mutex> lock(g_boot_mu);
-    g_boot_cv.wait(lock, [] { return !g_bootstrapping.load(); });
+    g_boot_cv.wait(lock, [] { return g_state.load() != kBootstrapping; });
+}
+
+void PublishState(int state) {
+    {
+        std::lock_guard<std::mutex> lock(g_boot_mu);
+        g_state.store(state);
+    }
+    g_boot_cv.notify_all();
 }
 
 /* Tear down instrumentation / sessions. Does not touch IPC or allocs. */
 bool BeginShutdown(uint32_t flags) {
-    WaitBootstrapDone();
-    bool expected = true;
-    if (!g_init.compare_exchange_strong(expected, false)) {
+    WaitNotBootstrapping();
+    int expected = kReady;
+    if (!g_state.compare_exchange_strong(expected, kUninit)) {
         return false;
     }
     HDL_LOG_INFO("helper shutting down (flags=0x%X)", flags);
@@ -66,15 +80,10 @@ void FinishShutdownResources() {
 }  // namespace
 
 HdlStatus CoreInit() {
-    bool expected = false;
-    if (!g_init.compare_exchange_strong(expected, true)) {
-        WaitBootstrapDone();
-        return g_init.load() ? HDL_OK : HDL_E_FAILED;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(g_boot_mu);
-        g_bootstrapping = true;
+    int expected = kUninit;
+    if (!g_state.compare_exchange_strong(expected, kBootstrapping)) {
+        WaitNotBootstrapping();
+        return g_state.load() == kReady ? HDL_OK : HDL_E_FAILED;
     }
 
     ApplyQuietLogDefaults();
@@ -83,12 +92,10 @@ HdlStatus CoreInit() {
     disasm::RegistryInit();
     if (HooksInit() != HDL_OK) {
         disasm::RegistryShutdown();
-        g_init = false;
         result = HDL_E_FAILED;
     } else if (HealthInit() != HDL_OK) {
         HooksShutdown();
         disasm::RegistryShutdown();
-        g_init = false;
         result = HDL_E_FAILED;
     } else {
         WatchInit();
@@ -99,7 +106,6 @@ HdlStatus CoreInit() {
                 HealthShutdown();
                 HooksShutdown();
                 disasm::RegistryShutdown();
-                g_init = false;
                 result = st;
             }
         } else {
@@ -109,13 +115,10 @@ HdlStatus CoreInit() {
 
     if (result == HDL_OK) {
         HDL_LOG_INFO("helper ready");
+        PublishState(kReady);
+    } else {
+        PublishState(kUninit);
     }
-
-    {
-        std::lock_guard<std::mutex> lock(g_boot_mu);
-        g_bootstrapping = false;
-    }
-    g_boot_cv.notify_all();
     return result;
 }
 
@@ -155,7 +158,7 @@ void CoreShutdownDetach() {
 }
 
 bool CoreIsInitialized() {
-    return g_init.load() && !g_bootstrapping.load();
+    return g_state.load() == kReady;
 }
 
 HdlStatus StartIpc() {

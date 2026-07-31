@@ -254,7 +254,7 @@ the target. Handles and IDs are not durable across unload/reload.
 
 | State | Owner | Synchronization | Cleanup |
 |---|---|---|---|
-| Core initialized flag | [`core.cpp`](../src/core.cpp) | Atomic + bootstrap CV | `CoreShutdown*` |
+| Core state (uninit / bootstrapping / ready) | [`core.cpp`](../src/core.cpp) | Atomic + bootstrap CV | `CoreShutdown*` |
 | Tracked loaded modules | [`loaded_modules.cpp`](../src/loaded_modules.cpp) | Mutex | `UnloadTrackedExcept` / `OpShutdown` |
 | Pipe accept/client list | [`ipc/server.cpp`](../src/ipc/server.cpp) | Atomics + client mutex | `ipc::Stop`; active pipe I/O is cancelled |
 | IPC search ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
