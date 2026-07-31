@@ -471,6 +471,34 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         }
     }
 
+    // Optional max_results early-stop still works with unlimited default.
+    {
+        alignas(4) int32_t many[32];
+        for (int i = 0; i < 32; ++i) {
+            many[i] = 7;
+        }
+        HdlSearchSession* session = nullptr;
+        st = HdlSearchCreate(&session);
+        if (session) {
+            const int32_t needle = 7;
+            HdlSearchDesc desc{};
+            desc.start = reinterpret_cast<uint64_t>(many);
+            desc.size = sizeof(many);
+            desc.value_type = HDL_VALUE_I32;
+            desc.cmp = HDL_CMP_EXACT;
+            desc.alignment = 4;
+            desc.max_results = 3;
+            desc.value = &needle;
+            desc.value_size = sizeof(needle);
+            st = HdlSearchFirst(session, &desc, nullptr);
+            uint32_t scount = 0;
+            HdlSearchGetCount(session, &scount);
+            Report(c, st == HDL_OK && scount == 3, false, "HdlSearchFirst max_results early stop",
+                   "");
+            HdlSearchClose(session);
+        }
+    }
+
     // Hooks — HdlHook enables immediately; exercise disable/enable + detour.
     g_hook_hits = 0;
     g_orig_add = nullptr;

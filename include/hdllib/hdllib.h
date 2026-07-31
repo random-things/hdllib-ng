@@ -236,7 +236,7 @@ typedef struct HdlSearchDesc {
     int32_t     value_type;  /* HDL_VALUE_* */
     int32_t     cmp;         /* HDL_CMP_* */
     uint32_t    alignment;   /* 0 = natural for type; 1 = byte-unaligned */
-    uint32_t    max_results; /* 0 = unlimited; nonzero = hard stop when reached */
+    uint32_t    max_results; /* 0 = unlimited; nonzero = optional early stop */
     const void* value;       /* typed bytes, or AOB pattern C string for BYTES */
     size_t      value_size;  /* byte length; for BYTES may be 0 (uses strlen) */
     uint32_t    flags;       /* HDL_SEARCH_* */

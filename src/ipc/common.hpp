@@ -72,5 +72,92 @@ bool WriteStreamed(HANDLE pipe, HdlStatus st, const T* items, uint32_t total, ui
     return WriteStreamed(pipe, st, items, total, total, chunk);
 }
 
+/* Bounded hit buffer for search streaming. Flush (WriteFile) blocks until the client
+ * drains the pipe — that is the scan backpressure when the buffer is full. */
+constexpr uint32_t kSearchStreamCap = 4096;
+
+inline bool WriteSearchStreamError(HANDLE pipe, HdlStatus st) {
+    using namespace proto;
+    std::vector<uint8_t> frame;
+    AppendPod(frame, static_cast<int32_t>(st));
+    AppendPod(frame, 0u);
+    AppendPod(frame, 0u);
+    AppendPod(frame, 0u);
+    AppendPod(frame, 0u);
+    return WriteFrame(pipe, frame);
+}
+
+struct SearchHitStreamer {
+    HANDLE pipe = nullptr;
+    std::vector<uint64_t> buf;
+    uint32_t offset = 0;
+    bool failed = false;
+
+    explicit SearchHitStreamer(HANDLE p) : pipe(p) {
+        buf.reserve(kSearchStreamCap);
+    }
+
+    static HdlStatus OnHitThunk(uint64_t address, void* user) {
+        return static_cast<SearchHitStreamer*>(user)->OnHit(address);
+    }
+
+    HdlStatus OnHit(uint64_t address) {
+        if (failed) {
+            return HDL_E_FAILED;
+        }
+        buf.push_back(address);
+        if (buf.size() >= kSearchStreamCap) {
+            return Flush(/*more=*/true);
+        }
+        return HDL_OK;
+    }
+
+    HdlStatus Flush(bool more) {
+        using namespace proto;
+        if (failed) {
+            return HDL_E_FAILED;
+        }
+        if (buf.empty() && more) {
+            return HDL_OK;
+        }
+        std::vector<uint8_t> frame;
+        AppendPod(frame, static_cast<int32_t>(HDL_OK));
+        AppendPod(frame, more ? static_cast<uint32_t>(HDL_IPC_MORE) : 0u);
+        AppendPod(frame, 0u); /* total unknown until Finish */
+        AppendPod(frame, offset);
+        AppendPod(frame, static_cast<uint32_t>(buf.size()));
+        if (!buf.empty()) {
+            AppendBytes(frame, buf.data(), buf.size() * sizeof(uint64_t));
+        }
+        if (!WriteFrame(pipe, frame)) {
+            failed = true;
+            return HDL_E_FAILED;
+        }
+        offset += static_cast<uint32_t>(buf.size());
+        buf.clear();
+        return HDL_OK;
+    }
+
+    bool Finish(HdlStatus st) {
+        using namespace proto;
+        if (failed) {
+            return false;
+        }
+        const uint32_t total = offset + static_cast<uint32_t>(buf.size());
+        std::vector<uint8_t> frame;
+        AppendPod(frame, static_cast<int32_t>(st));
+        AppendPod(frame, 0u); /* final */
+        AppendPod(frame, total);
+        AppendPod(frame, offset);
+        AppendPod(frame, static_cast<uint32_t>(buf.size()));
+        if (!buf.empty()) {
+            AppendBytes(frame, buf.data(), buf.size() * sizeof(uint64_t));
+        }
+        buf.clear();
+        offset = total;
+        return WriteFrame(pipe, frame);
+    }
+};
+
 }  // namespace ipc
 }  // namespace hdl

@@ -60,7 +60,7 @@ hdlclient <pid> write 0x7FF6ABCD0000 90 90 90 90
 
 `--type`: `bytes`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `f32`, `f64`, `string`, `wstring`.  
 `--cmp`: `exact`, `unknown`, `changed`, `unchanged`, `increased`, `decreased`, `increased_by`, `decreased_by`, `greater`, `less`.  
-Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`. Typed scans use natural alignment by default; `--unaligned` uses a byte stride. `--max 0` means unlimited results (prefer `--stream` for large hit sets).
+Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`. Typed scans use natural alignment by default; `--unaligned` uses a byte stride. Search replies are always streamed; `--max 0` (default) is unlimited. The DLL pauses the scan when its 4096-hit buffer is full until the client reads.
 
 ### Locate (signatures → addresses)
 

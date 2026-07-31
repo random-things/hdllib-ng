@@ -450,14 +450,28 @@ struct SearchSession {
     uint32_t max_results = 0; /* 0 = unlimited */
     size_t elem_size = 0;
     bool active = false;
+    bool retain_hits = true;
+    uint32_t emitted_hits = 0; /* total hits seen (for !retain_hits / streaming) */
+    HdlStatus abort_status = HDL_OK;
+    SearchHitFn on_hit = nullptr;
+    void* on_hit_user = nullptr;
     std::vector<uint8_t> needle;
     std::vector<uint8_t> mask;
     std::vector<uint64_t> addresses;
     std::vector<uint8_t> snapshots;
 };
 
+size_t HitCount(const SearchSession& s) {
+    return s.retain_hits ? s.addresses.size() : static_cast<size_t>(s.emitted_hits);
+}
+
 bool CapReached(const SearchSession& s) {
-    return s.max_results != 0 && s.addresses.size() >= static_cast<size_t>(s.max_results);
+    return s.max_results != 0 && HitCount(s) >= static_cast<size_t>(s.max_results);
+}
+
+/* After a failed PushHit: abort_status if handler failed, else HDL_OK (cap reached). */
+HdlStatus AfterPushFail(const SearchSession& s) {
+    return s.abort_status != HDL_OK ? s.abort_status : HDL_OK;
 }
 
 SearchSession* AsSearch(HdlSearchSession* s) {
@@ -645,8 +659,18 @@ bool PushHit(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) 
     if (CapReached(s)) {
         return false;
     }
-    s.addresses.push_back(address);
-    s.snapshots.insert(s.snapshots.end(), data, data + n);
+    if (s.retain_hits) {
+        s.addresses.push_back(address);
+        s.snapshots.insert(s.snapshots.end(), data, data + n);
+    }
+    ++s.emitted_hits;
+    if (s.on_hit) {
+        const HdlStatus st = s.on_hit(address, s.on_hit_user);
+        if (st != HDL_OK) {
+            s.abort_status = st;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -713,7 +737,7 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                         continue;
                     }
                     if (!PushHit(s, scan_from + i, tmp, s.elem_size)) {
-                        return HDL_OK;
+                        return AfterPushFail(s);
                     }
                 }
             } else if (!s.mask.empty()) {
@@ -750,10 +774,7 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                     }
                     if (SehMatchAt(data + i, s.needle.data(), s.mask.data(), s.needle.size())) {
                         if (!PushHitFromMemory(s, scan_from + i, data + i, s.elem_size)) {
-                            return HDL_OK;
-                        }
-                        if (CapReached(s)) {
-                            return HDL_OK;
+                            return AfterPushFail(s);
                         }
                     }
                     ++i;
@@ -784,10 +805,7 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                     }
                     if (SehBytesEqual(data + i, s.needle.data(), s.elem_size)) {
                         if (!PushHitFromMemory(s, scan_from + i, data + i, s.elem_size)) {
-                            return HDL_OK;
-                        }
-                        if (CapReached(s)) {
-                            return HDL_OK;
+                            return AfterPushFail(s);
                         }
                     }
                     ++i;
@@ -829,8 +847,8 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
                 }
                 if (scan_size > 0) {
                     st = ScanPatternRange(s, scan_base, scan_size, token, unknown_fill);
-                    if (st != HDL_OK || CapReached(s)) {
-                        return st;
+                    if (st != HDL_OK || CapReached(s) || s.abort_status != HDL_OK) {
+                        return st != HDL_OK ? st : AfterPushFail(s);
                     }
                 }
             }
@@ -857,8 +875,8 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
         uint64_t to = (start + size) < region_end ? (start + size) : region_end;
         if (to > from && RegionMatchesFilter(mbi, filter)) {
             st = ScanPatternRange(s, from, to - from, token, unknown_fill);
-            if (st != HDL_OK || CapReached(s)) {
-                return st;
+            if (st != HDL_OK || CapReached(s) || s.abort_status != HDL_OK) {
+                return st != HDL_OK ? st : AfterPushFail(s);
             }
         }
         if (region_end <= reinterpret_cast<uint64_t>(addr)) {
@@ -1003,6 +1021,26 @@ void SearchReset(HdlSearchSession* session) {
     s->needle.clear();
     s->mask.clear();
     s->elem_size = 0;
+    s->emitted_hits = 0;
+    s->abort_status = HDL_OK;
+    /* retain_hits / on_hit survive reset so IPC can arm a sink before SearchFirst. */
+}
+
+void SearchSetHitHandler(HdlSearchSession* session, SearchHitFn fn, void* user) {
+    auto* s = AsSearch(session);
+    if (!s) {
+        return;
+    }
+    s->on_hit = fn;
+    s->on_hit_user = user;
+}
+
+void SearchSetRetainHits(HdlSearchSession* session, bool retain) {
+    auto* s = AsSearch(session);
+    if (!s) {
+        return;
+    }
+    s->retain_hits = retain;
 }
 
 HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, volatile int* cancel) {
@@ -1053,6 +1091,9 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         probe.elem_size = s->elem_size;
         probe.alignment = s->alignment;
         probe.max_results = s->max_results;
+        probe.retain_hits = true; /* need snapshots to filter GREATER/LESS */
+        probe.on_hit = (desc->cmp == HDL_CMP_UNKNOWN) ? s->on_hit : nullptr;
+        probe.on_hit_user = s->on_hit_user;
         probe.active = true;
 
         HdlStatus st =
@@ -1062,19 +1103,23 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         }
 
         if (desc->cmp == HDL_CMP_UNKNOWN) {
-            s->addresses.swap(probe.addresses);
-            s->snapshots.swap(probe.snapshots);
+            if (s->retain_hits) {
+                s->addresses.swap(probe.addresses);
+                s->snapshots.swap(probe.snapshots);
+            }
+            s->emitted_hits = probe.emitted_hits;
             s->active = true;
             return HDL_OK;
         }
 
-        // Filter GREATER/LESS against value.
+        // Filter GREATER/LESS against value; deliver via session PushHit (handler + retain).
         for (size_t i = 0; i < probe.addresses.size(); ++i) {
             const uint8_t* cur = probe.snapshots.data() + i * s->elem_size;
             if (MatchCmp(s->value_type, desc->cmp, cur, nullptr, s->needle.data(),
                          s->elem_size)) {
                 if (!PushHit(*s, probe.addresses[i], cur, s->elem_size)) {
-                    break;
+                    s->active = true;
+                    return AfterPushFail(*s);
                 }
             }
         }
@@ -1212,7 +1257,7 @@ HdlStatus SearchGetCount(const HdlSearchSession* session, uint32_t* out_count) {
     if (!s || !out_count) {
         return HDL_E_INVALID_ARG;
     }
-    *out_count = static_cast<uint32_t>(s->addresses.size());
+    *out_count = static_cast<uint32_t>(HitCount(*s));
     return HDL_OK;
 }
 

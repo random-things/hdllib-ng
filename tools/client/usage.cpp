@@ -65,11 +65,11 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> read <hex-address> <size>
   hdlclient <pid> write <hex-address> <hex-bytes|@file>
   hdlclient <pid> scan --pattern "48 8B ?? ??" [--start HEX] [--size HEX] [--max N]
-                       [--job ID] [--timeout MS] [--stream]
+                       [--job ID] [--timeout MS]
   hdlclient <pid> scan --type TYPE --value VAL [--start HEX] [--size HEX] [--max N]
                        [--cmp exact|unknown|greater|less] [--unaligned] [--session ID]
                        [--job ID] [--timeout MS] [--image] [--executable] [--module NAME]
-                       (--max 0 = unlimited; --unaligned = byte stride)
+                       (always streams; --max 0 = unlimited; --unaligned = byte stride)
   hdlclient <pid> resolve-pattern "AOB" [--module NAME] [--hit N] [--offset N]
                        [--rip-disp N --rip-len M] [--follow OFF ...] [--image] [--executable]
   hdlclient <pid> xrefs STRING [--wide] [--absolute] [--rip] [--module NAME] [--image]

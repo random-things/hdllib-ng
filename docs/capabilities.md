@@ -203,10 +203,8 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 
 **IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). Cancel/timeout via optional job trailer.
 
-**`OpSearchMemory` request:** `start`, `size`, `max_hits`, `string pattern` \[+ trailer\]. `max_hits` 0 = unlimited (prefer stream); positive values capped at 100000 for the reply. AOB scans are always byte-unaligned.  
-**`OpSearchFirst` request:** `session`, `start`, `size`, `value_type`, `cmp`, `alignment` (0 = natural, 1 = unaligned), `max_results` (0 = unlimited), `value_len` + bytes \[+ `search_flags`, `module`\] \[+ trailer\] → `status`, `count`.  
-**`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count`.  
-**`OpSearchGetHits`:** `session`, `max_hits` (0 = all) \[+ trailer\] → non-stream: `status`, `total`, `got`, hits; stream supported.
+**`OpSearchMemory` / `OpSearchFirst` / `OpSearchGetHits` always stream.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on `WriteFile` until the client drains the pipe. Frames: `status`, `flags(MORE)`, `total` (0 until final), `offset`, `count`, `u64[count]`. Final frame has `MORE=0` and the true `total`. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.  
+**`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count` (then use GetHits to stream survivors).
 
 ---
 
