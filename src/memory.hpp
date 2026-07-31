@@ -17,9 +17,16 @@ HdlStatus SearchMemory(uint64_t start, uint64_t size, const char* pattern, uint6
 
 bool ParseAobPattern(const char* pattern, std::vector<uint8_t>& bytes, std::vector<uint8_t>& mask);
 
+/* Invoked for each hit during First/scan. May block (backpressure). Non-HDL_OK aborts the scan. */
+using SearchHitFn = HdlStatus (*)(uint64_t address, void* user);
+
 HdlStatus SearchCreate(HdlSearchSession** out_session);
 void SearchClose(HdlSearchSession* session);
 void SearchReset(HdlSearchSession* session);
+/* Optional streaming sink. Survives SearchReset; cleared on SearchClose. */
+void SearchSetHitHandler(HdlSearchSession* session, SearchHitFn fn, void* user);
+/* When false, hits are only delivered via the handler (no session candidate list). Default true. */
+void SearchSetRetainHits(HdlSearchSession* session, bool retain);
 HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, volatile int* cancel);
 HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, const CancelToken& token);
 HdlStatus SearchNext(HdlSearchSession* session, int cmp, const void* value, size_t value_size,

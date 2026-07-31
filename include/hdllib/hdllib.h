@@ -236,7 +236,7 @@ typedef struct HdlSearchDesc {
     int32_t     value_type;  /* HDL_VALUE_* */
     int32_t     cmp;         /* HDL_CMP_* */
     uint32_t    alignment;   /* 0 = natural for type; 1 = byte-unaligned */
-    uint32_t    max_results; /* 0 = default (1e6); hard stop when reached */
+    uint32_t    max_results; /* 0 = unlimited; nonzero = optional early stop */
     const void* value;       /* typed bytes, or AOB pattern C string for BYTES */
     size_t      value_size;  /* byte length; for BYTES may be 0 (uses strlen) */
     uint32_t    flags;       /* HDL_SEARCH_* */
@@ -1120,8 +1120,9 @@ HDL_API HdlStatus HdlXrefsFrom(
     volatile int* cancel);
 
 /*
- * Map addr into a function from EnumFunctions for the owning module (or given
- * module_or_null). out->end may be 0 if unknown.
+ * Map any interior byte address into an instruction-aligned function range for
+ * the owning module (or given module_or_null). x64 unwind metadata is preferred;
+ * the bounded function index is the fallback. out->end may be 0 if unknown.
  */
 HDL_API HdlStatus HdlResolveFunction(
     uint64_t addr,

@@ -48,6 +48,7 @@ hdlclient <pid> scan --pattern "48 8B ?? ??" --max 32 --image
 
 rem Cheat Engine–style typed scan
 hdlclient <pid> scan --type i32 --value 100 --max 64
+hdlclient <pid> scan --type i32 --value 100 --unaligned --max 0
 hdlclient <pid> scan --next --session 1 --cmp decreased
 hdlclient <pid> scan --next --session 1 --cmp exact --value 90
 hdlclient <pid> scan --hits --session 1 --max 64
@@ -59,7 +60,7 @@ hdlclient <pid> write 0x7FF6ABCD0000 90 90 90 90
 
 `--type`: `bytes`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `f32`, `f64`, `string`, `wstring`.  
 `--cmp`: `exact`, `unknown`, `changed`, `unchanged`, `increased`, `decreased`, `increased_by`, `decreased_by`, `greater`, `less`.  
-Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`.
+Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`. Typed scans use natural alignment by default; `--unaligned` uses a byte stride. Search replies are always streamed; `--max 0` (default) is unlimited. The DLL pauses the scan when its 4096-hit buffer is full until the client reads.
 
 ### Locate (signatures → addresses)
 
@@ -111,6 +112,10 @@ hdlclient <pid> xrefs-to 0xADDR --module game.exe
 hdlclient <pid> vtable 0xOBJ --vtable
 hdlclient <pid> rtti 0xOBJ
 ```
+
+`resolve-function` accepts any interior byte address. For x64 image code it
+prefers compiler-authored unwind boundaries, then falls back to the bounded
+call-target/prologue index.
 
 Stub kinds: `abs_jmp`, `rel_jmp32`, `mov_rax_jmp`, `raw` (templates only — no text assembler).
 

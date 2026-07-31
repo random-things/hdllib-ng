@@ -68,7 +68,7 @@ Many long-running or bulk ops accept an optional trailing triple (missing fields
 
 ### Streaming replies
 
-When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **multiple frames**. Each chunk:
+When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **multiple frames**. Each chunk (regions/modules/threads/…):
 
 | Field | Type |
 |-------|------|
@@ -79,7 +79,9 @@ When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **mu
 | `count` | `uint32_t` |
 | items | `count` records (type depends on op) |
 
-Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`). Streaming is used for regions, modules, threads, AOB search hits, and incremental search hit dumps.
+**Search** streams omit `offset`: `status`, `flags`, `total`, `count`, `u64[count]`.
+
+Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`).
 
 ### Status codes (`HdlStatus`)
 
@@ -203,10 +205,8 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 
 **IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). Cancel/timeout via optional job trailer.
 
-**`OpSearchMemory` request:** `start`, `size`, `max_hits`, `string pattern` \[+ trailer\]. Cap `max_hits` ≤ 100000.  
-**`OpSearchFirst` request:** `session`, `start`, `size`, `value_type`, `cmp`, `alignment`, `max_results`, `value_len` + bytes \[+ `search_flags`, `module`\] \[+ trailer\] → `status`, `count`.  
-**`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count`.  
-**`OpSearchGetHits`:** `session`, `max_hits` \[+ trailer\] → non-stream: `status`, `total`, `got`, hits; stream supported.
+**`OpSearchMemory` / `OpSearchFirst` / `OpSearchGetHits` always stream.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on `WriteFile` until the client drains the pipe. Search frames: `status`, `flags(MORE)`, `total` (0 until final), `count`, `u64[count]` (no `offset` — append in order). Final frame has `MORE=0` and the true `total`. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.  
+**`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count` (then use GetHits to stream survivors).
 
 ---
 
@@ -453,11 +453,11 @@ Built-in: **Zydis** (default) and **Capstone**. Custom engines: `HdlDisasmRegist
 |----|------:|------------|-------|
 | `OpEnumFunctions` | 71 | Heuristic function starts in a range / module | `HdlEnumFunctions` |
 | `OpXrefsFrom` | 72 | Outgoing call/jmp(/data) edges from a seed | `HdlXrefsFrom` |
-| `OpResolveFunction` | 79 | Map VA → containing function (`start`/`end`/confidence/flags) | `HdlResolveFunction` |
+| `OpResolveFunction` | 79 | Align any interior VA → containing function (`start`/`end`/confidence/flags) | `HdlResolveFunction` |
 | `OpXrefsTo` | 80 | Incoming call/jmp(/data) sites targeting an address | `HdlXrefsTo` |
 | `OpInvalidateFnIndex` | 85 | Drop process-local function index cache | `HdlInvalidateFunctionIndex` |
 
-Uses the active disasm backend. `EnumFunctions` confidence: export **90** (`HDL_FN_EXPORT`), call/jmp target **75** (`HDL_FN_CALLED`), prologue heuristic **45** (`HDL_FN_PROLOGUE`); ends prefer ret / `int3` padding / next start. Results are cached per `(module_base, SizeOfImage)`.
+`ResolveFunction` prefers compiler-authored x64 unwind ranges (confidence **100**) and accepts any interior byte address, including a post-watchpoint RIP. Its fallback and `EnumFunctions` use the active disassembler: export **90** (`HDL_FN_EXPORT`), call target **75** (`HDL_FN_CALLED`), and narrowly matched prologue **45** (`HDL_FN_PROLOGUE`); conditional/local jump targets are not function starts. Heuristic ends prefer ret / `int3` padding / next start, and the fallback index is cached per `(module_base, SizeOfImage)`.
 
 **XrefsTo kinds:** `HDL_XREF_CALL|JMP|DATA`; with `HDL_XREF_FUNC` (8) also match branches into `[fn.start, fn.end)`. Client: `resolve-function`, `xrefs-to` (`--exact` drops `FUNC`), `invalidate-fn-index`.
 
@@ -556,7 +556,7 @@ In-process placement and analysis surface:
 - **Disasm backends** — pluggable Zydis + Capstone (runtime select); `HdlDisasmRegisterBackend` is C-API-only for custom engines
 - **InstrLen / Disasm / BuildStub / Patch ledger** — decode, trampoline emit, reversible patches
 - **PE sections / exports / imports** — mapped-image metadata
-- **EnumFunctions / XrefsFrom / ResolveFunction / XrefsTo / InvalidateFunctionIndex** — bounded function index (export/call/prologue confidence, ret-based ends, process-local cache) + outbound/inbound edges (`HDL_XREF_CALL|JMP|DATA|FUNC`)
+- **EnumFunctions / XrefsFrom / ResolveFunction / XrefsTo / InvalidateFunctionIndex** — unwind-aligned x64 resolution plus bounded fallback index (export/call/prologue confidence, ret-based ends, process-local cache) and outbound/inbound edges (`HDL_XREF_CALL|JMP|DATA|FUNC`)
 - **WalkVtable / QueryRttiName** — MSVC RTTI best-effort
 - **WatchHw / WatchPage / Unwatch / EnumWatches / WatchRefresh / PollWatchHits** — DR breakpoints (tracked slots) and page guards; `HDL_EVENT_WATCH` is wake-only; full `HdlWatchHit` payload via `PollWatchHits`
 - **HookImport** — one-shot IAT sink tracing (opcode 83)

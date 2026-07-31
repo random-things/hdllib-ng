@@ -173,49 +173,76 @@ bool IpcCreateSession(PipeClient& client, uint64_t* out_id) {
     return true;
 }
 
-int PrintScanHits(PipeClient& client, uint64_t session, uint32_t max_hits, bool stream) {
+/* Growable collector for search frames: total, count, u64[count] (no offset). */
+bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
+                         uint32_t* out_total, std::vector<uint64_t>* out_hits) {
+    using namespace hdl::proto;
+    if (!out_st || !out_total || !out_hits) {
+        return false;
+    }
+    out_hits->clear();
+    *out_st = HDL_E_FAILED;
+    *out_total = 0;
+    return client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+        Reader r(p, n);
+        uint32_t total = 0;
+        uint32_t count = 0;
+        if (!r.TakePod(total) || !r.TakePod(count)) {
+            return false;
+        }
+        const size_t need = out_hits->size() + count;
+        if (out_hits->capacity() < need) {
+            size_t cap = out_hits->capacity() ? out_hits->capacity() : 256;
+            while (cap < need) {
+                cap *= 2;
+            }
+            out_hits->reserve(cap);
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            uint64_t hit = 0;
+            if (!r.TakePod(hit)) {
+                return false;
+            }
+            out_hits->push_back(hit);
+        }
+        if ((flags & HDL_IPC_MORE) == 0) {
+            *out_st = st;
+            *out_total = total ? total : static_cast<uint32_t>(out_hits->size());
+        }
+        return true;
+    });
+}
+
+void PrintHitList(const std::vector<uint64_t>& hits, uint32_t max_print) {
+    const uint32_t n =
+        (max_print && max_print < hits.size()) ? max_print : static_cast<uint32_t>(hits.size());
+    for (uint32_t i = 0; i < n; ++i) {
+        wprintf(L"  %016llx\n", static_cast<unsigned long long>(hits[i]));
+    }
+    if (max_print && hits.size() > max_print) {
+        wprintf(L"  ... (%zu more)\n", hits.size() - max_print);
+    }
+}
+
+int PrintScanHits(PipeClient& client, uint64_t session, uint32_t max_hits) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
-    std::vector<uint8_t> resp;
     AppendPod(req, static_cast<uint32_t>(OpSearchGetHits));
     AppendPod(req, session);
     AppendPod(req, max_hits);
     AppendPod(req, static_cast<uint64_t>(0));
     AppendPod(req, static_cast<uint32_t>(0));
-    AppendPod(req, stream ? static_cast<uint32_t>(HDL_IPC_REQ_STREAM) : 0u);
-    if (stream) {
-        if (!client.RequestStream(req, [&](int32_t st, uint32_t, const uint8_t* p, size_t n) {
-                Reader r(p, n);
-                uint32_t total = 0, off = 0, count = 0;
-                if (!r.TakePod(total) || !r.TakePod(off) || !r.TakePod(count)) return false;
-                if (off == 0) {
-                    wprintf(L"status=%ls total=%u session=%llu\n", StatusName(st), total,
-                            static_cast<unsigned long long>(session));
-                }
-                for (uint32_t i = 0; i < count; ++i) {
-                    uint64_t hit = 0;
-                    if (!r.TakePod(hit)) return false;
-                    wprintf(L"  %016llx\n", static_cast<unsigned long long>(hit));
-                }
-                return true;
-            })) {
-            return 1;
-        }
-        return 0;
-    }
-    if (!client.Request(req, resp)) return 1;
-    Reader r(resp);
+    AppendPod(req, static_cast<uint32_t>(HDL_IPC_REQ_STREAM)); /* always streamed */
+
     int32_t st = 0;
     uint32_t total = 0;
-    uint32_t got = 0;
-    if (!r.TakePod(st) || !r.TakePod(total) || !r.TakePod(got)) return 1;
-    wprintf(L"status=%ls total=%u showing=%u session=%llu\n", StatusName(st), total, got,
-            static_cast<unsigned long long>(session));
-    for (uint32_t i = 0; i < got; ++i) {
-        uint64_t hit = 0;
-        if (!r.TakePod(hit)) break;
-        wprintf(L"  %016llx\n", static_cast<unsigned long long>(hit));
+    std::vector<uint64_t> hits;
+    if (!CollectStreamedHits(client, req, &st, &total, &hits)) {
+        return 1;
     }
+    wprintf(L"status=%ls total=%u session=%llu\n", StatusName(st), total,
+            static_cast<unsigned long long>(session));
+    PrintHitList(hits, 0);
     return st == HDL_OK ? 0 : 1;
 }
 
@@ -233,7 +260,6 @@ int CmdScan(CmdCtx& ctx) {
     bool do_close = false;
     bool do_reset = false;
     bool unaligned = false;
-    bool stream = false;
     int32_t value_type = -1;
     int32_t cmp = HDL_CMP_EXACT;
     bool have_cmp = false;
@@ -243,7 +269,7 @@ int CmdScan(CmdCtx& ctx) {
     bool have_session = false;
     uint64_t job_id = 0;
     uint32_t timeout_ms = 0;
-    uint32_t max_hits = 64;
+    uint32_t max_hits = 0; /* 0 = unlimited */
 
     for (int i = 3; i < ctx.argc; ++i) {
         if (wcscmp(ctx.argv[i], L"--pattern") == 0 && i + 1 < ctx.argc) {
@@ -291,7 +317,7 @@ int CmdScan(CmdCtx& ctx) {
         } else if (wcscmp(ctx.argv[i], L"--unaligned") == 0) {
             unaligned = true;
         } else if (wcscmp(ctx.argv[i], L"--stream") == 0) {
-            stream = true;
+            /* Search always streams; flag kept for compatibility. */
         }
     }
 
@@ -301,7 +327,7 @@ int CmdScan(CmdCtx& ctx) {
         AppendPod(out, flags);
     };
 
-    // Legacy one-shot AOB path (no session).
+    // Legacy one-shot AOB path (no session) — always streamed with backpressure.
     if (pattern && !do_next && !do_hits && !do_close && !do_reset && value_type == HDL_VALUE_BYTES &&
         !have_session && !have_cmp) {
         AppendPod(req, static_cast<uint32_t>(OpSearchMemory));
@@ -309,35 +335,15 @@ int CmdScan(CmdCtx& ctx) {
         AppendPod(req, size);
         AppendPod(req, max_hits);
         AppendString(req, pattern);
-        append_job_trailer(req, stream ? HDL_IPC_REQ_STREAM : 0);
-        if (stream) {
-            if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t, const uint8_t* p, size_t n) {
-                    Reader r(p, n);
-                    uint32_t total = 0, off = 0, count = 0;
-                    if (!r.TakePod(total) || !r.TakePod(off) || !r.TakePod(count)) return false;
-                    if (off == 0) wprintf(L"status=%ls hits=%u\n", StatusName(st), total);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        uint64_t hit = 0;
-                        if (!r.TakePod(hit)) return false;
-                        wprintf(L"  %016llx\n", static_cast<unsigned long long>(hit));
-                    }
-                    return true;
-                })) {
-                return 1;
-            }
-            return 0;
-        }
-        if (!ctx.client.Request(req, resp)) return 1;
-        Reader r(resp);
+        append_job_trailer(req, HDL_IPC_REQ_STREAM);
         int32_t st = 0;
-        uint32_t count = 0;
-        if (!r.TakePod(st) || !r.TakePod(count)) return 1;
-        wprintf(L"status=%ls hits=%u\n", StatusName(st), count);
-        for (uint32_t i = 0; i < count; ++i) {
-            uint64_t hit = 0;
-            if (!r.TakePod(hit)) break;
-            wprintf(L"  %016llx\n", static_cast<unsigned long long>(hit));
+        uint32_t total = 0;
+        std::vector<uint64_t> hits;
+        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
+            return 1;
         }
+        wprintf(L"status=%ls hits=%u\n", StatusName(st), total);
+        PrintHitList(hits, 0);
         return st == HDL_OK ? 0 : 1;
     }
 
@@ -349,7 +355,7 @@ int CmdScan(CmdCtx& ctx) {
     }
 
     if (do_hits) {
-        return PrintScanHits(ctx.client, session, max_hits, stream);
+        return PrintScanHits(ctx.client, session, max_hits);
     }
     if (do_close || do_reset) {
         AppendPod(req, static_cast<uint32_t>(do_close ? OpSearchClose : OpSearchReset));
@@ -393,7 +399,7 @@ int CmdScan(CmdCtx& ctx) {
         wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), count,
                 static_cast<unsigned long long>(session));
         if (st == HDL_OK) {
-            return PrintScanHits(ctx.client, session, max_hits, stream);
+            return PrintScanHits(ctx.client, session, max_hits);
         }
         return 1;
     }
@@ -470,17 +476,16 @@ int CmdScan(CmdCtx& ctx) {
     }
     AppendPod(req, search_flags);
     AppendWString(req, module.c_str());
-    append_job_trailer(req);
-    if (!ctx.client.Request(req, resp)) return 1;
-    Reader r(resp);
+    append_job_trailer(req, HDL_IPC_REQ_STREAM);
     int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) return 1;
-    wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), count,
-            static_cast<unsigned long long>(session));
-    if (st == HDL_OK) {
-        return PrintScanHits(ctx.client, session, max_hits, stream);
+    uint32_t total = 0;
+    std::vector<uint64_t> hits;
+    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
+        return 1;
     }
-    return 1;
+    wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), total,
+            static_cast<unsigned long long>(session));
+    PrintHitList(hits, 0);
+    return st == HDL_OK ? 0 : 1;
 }
 

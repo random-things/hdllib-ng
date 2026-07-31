@@ -65,10 +65,11 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> read <hex-address> <size>
   hdlclient <pid> write <hex-address> <hex-bytes|@file>
   hdlclient <pid> scan --pattern "48 8B ?? ??" [--start HEX] [--size HEX] [--max N]
-                       [--job ID] [--timeout MS] [--stream]
+                       [--job ID] [--timeout MS]
   hdlclient <pid> scan --type TYPE --value VAL [--start HEX] [--size HEX] [--max N]
                        [--cmp exact|unknown|greater|less] [--unaligned] [--session ID]
                        [--job ID] [--timeout MS] [--image] [--executable] [--module NAME]
+                       (always streams; --max 0 = unlimited; --unaligned = byte stride)
   hdlclient <pid> resolve-pattern "AOB" [--module NAME] [--hit N] [--offset N]
                        [--rip-disp N --rip-len M] [--follow OFF ...] [--image] [--executable]
   hdlclient <pid> xrefs STRING [--wide] [--absolute] [--rip] [--module NAME] [--image]
@@ -103,10 +104,10 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> discover-evidence --session ID --id CAND_ID
   hdlclient <pid> [repl] [--store PATH] interactive REPL (default if no subcommand)
   hdlclient <pid> --tui [--store PATH]  PDCurses full-screen controller
-    REPL/TUI: store load|save|list|add|revalidate; recipe suggest|place|stitch|expand|action|constrain;
+    REPL/TUI: store load|save|list|add|revalidate; recipe place|suggest|stitch|expand|action|constrain;
     stabilize; store add --kind function|object|patch … [synth|path|export NAME|cave|stub|patch]
   hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--job ID] [--timeout MS]
-  hdlclient <pid> scan --hits --session ID [--max N] [--stream]
+  hdlclient <pid> scan --hits --session ID [--max N]
   hdlclient <pid> scan --close|--reset --session ID
   hdlclient <pid> inject <dll-path> [--target-pid N] [--method NAME] [--exe PATH] [--hook-export NAME]
   hdlclient <pid> unload <dll-path> [--target-pid N] [--reload]
