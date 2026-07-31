@@ -113,10 +113,9 @@ int CmdCaves(CmdCtx& ctx) {
         w.Num(count);
         w.Key("caves");
         w.BeginArray();
-        for (uint32_t i = 0; i < count; ++i) {
             HdlCaveInfo c{};
             if (!r.Take(&c, sizeof(c))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("addr");
