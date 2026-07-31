@@ -369,9 +369,16 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
     if (dmg_fn) {
         wchar_t fa[32], mid[32];
         Hex(fa, 32, dmg_fn);
-        Hex(mid, 32, dmg_fn + 4);
-        ExpectOk(c, "toy resolve-function Damage",
-                 Cli(ctx, {L"resolve-function", mid, L"--module", L"hdl_toy_arena.exe"}));
+        /* Deep enough to cross internal branch/prologue-like candidates in the
+           Release build; +0x40 also lands inside the subtract instruction. */
+        Hex(mid, 32, dmg_fn + 0x40);
+        auto resolved =
+            Cli(ctx, {L"resolve-function", mid, L"--module", L"hdl_toy_arena.exe"});
+        ExpectOk(c, "toy resolve-function deep interior", resolved);
+        uint64_t resolved_start = 0;
+        ParseHexAfter(resolved.out, L"start=", &resolved_start);
+        Report(c, resolved_start == dmg_fn, false,
+               "toy deep interior aligns to Damage entry", "");
         auto xr = Cli(ctx, {L"xrefs-to", fa, L"--module", L"hdl_toy_arena.exe"});
         ExpectOk(c, "toy xrefs-to Damage", xr);
         Report(c, Contains(xr.out, L"count=") && !Contains(xr.out, L"count=0\n"), true,

@@ -14,8 +14,6 @@
 namespace hdl {
 namespace {
 
-constexpr uint32_t kDefaultMaxResults = 1000000;
-
 bool IsReadableProtect(DWORD protect) {
     protect &= 0xFF;
     switch (protect) {
@@ -449,7 +447,7 @@ struct SearchSession {
     int value_type = HDL_VALUE_BYTES;
     int last_cmp = HDL_CMP_EXACT;
     uint32_t alignment = 1;
-    uint32_t max_results = kDefaultMaxResults;
+    uint32_t max_results = 0; /* 0 = unlimited */
     size_t elem_size = 0;
     bool active = false;
     std::vector<uint8_t> needle;
@@ -457,6 +455,10 @@ struct SearchSession {
     std::vector<uint64_t> addresses;
     std::vector<uint8_t> snapshots;
 };
+
+bool CapReached(const SearchSession& s) {
+    return s.max_results != 0 && s.addresses.size() >= static_cast<size_t>(s.max_results);
+}
 
 SearchSession* AsSearch(HdlSearchSession* s) {
     return reinterpret_cast<SearchSession*>(s);
@@ -640,7 +642,7 @@ HdlStatus EnumModules(HdlModuleInfo* out, uint32_t* inout_count) {
 namespace {
 
 bool PushHit(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
-    if (s.addresses.size() >= s.max_results) {
+    if (CapReached(s)) {
         return false;
     }
     s.addresses.push_back(address);
@@ -750,7 +752,7 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                         if (!PushHitFromMemory(s, scan_from + i, data + i, s.elem_size)) {
                             return HDL_OK;
                         }
-                        if (s.addresses.size() >= s.max_results) {
+                        if (CapReached(s)) {
                             return HDL_OK;
                         }
                     }
@@ -784,7 +786,7 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                         if (!PushHitFromMemory(s, scan_from + i, data + i, s.elem_size)) {
                             return HDL_OK;
                         }
-                        if (s.addresses.size() >= s.max_results) {
+                        if (CapReached(s)) {
                             return HDL_OK;
                         }
                     }
@@ -827,7 +829,7 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
                 }
                 if (scan_size > 0) {
                     st = ScanPatternRange(s, scan_base, scan_size, token, unknown_fill);
-                    if (st != HDL_OK || s.addresses.size() >= s.max_results) {
+                    if (st != HDL_OK || CapReached(s)) {
                         return st;
                     }
                 }
@@ -855,7 +857,7 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
         uint64_t to = (start + size) < region_end ? (start + size) : region_end;
         if (to > from && RegionMatchesFilter(mbi, filter)) {
             st = ScanPatternRange(s, from, to - from, token, unknown_fill);
-            if (st != HDL_OK || s.addresses.size() >= s.max_results) {
+            if (st != HDL_OK || CapReached(s)) {
                 return st;
             }
         }
@@ -955,7 +957,7 @@ HdlStatus SearchMemory(uint64_t start, uint64_t size, const char* pattern, uint6
     desc.value_type = HDL_VALUE_BYTES;
     desc.cmp = HDL_CMP_EXACT;
     desc.alignment = 1;
-    desc.max_results = *inout_hit_count ? *inout_hit_count : kDefaultMaxResults;
+    desc.max_results = *inout_hit_count; /* 0 = unlimited (e.g. size query) */
     desc.value = pattern;
     desc.value_size = 0;
 
@@ -1029,7 +1031,7 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         return prep;
     }
 
-    s->max_results = desc->max_results ? desc->max_results : kDefaultMaxResults;
+    s->max_results = desc->max_results; /* 0 = unlimited */
     s->alignment = desc->alignment ? desc->alignment : NaturalAlignment(desc->value_type);
     if (s->alignment == 0) {
         s->alignment = 1;

@@ -27,31 +27,36 @@ bool HandleSearchMemory(HANDLE pipe, proto::Reader& r) {
     TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
     auto job = BindJob(job_id, timeout_ms);
 
+    /* Positive max_hits caps the IPC reply; 0 = unlimited scan / return all (prefer --stream). */
     if (max_hits > 100000) {
         max_hits = 100000;
     }
-    std::vector<uint64_t> hits(max_hits ? max_hits : 1);
-    uint32_t hit_count = max_hits;
-    uint64_t* hit_ptr = max_hits ? hits.data() : nullptr;
 
-    // Use session path with token for cancel/timeout.
     HdlSearchSession* session = nullptr;
     HdlStatus st = SearchCreate(&session);
+    uint32_t hit_count = 0;
+    uint32_t reply_count = 0;
+    std::vector<uint64_t> hits;
     if (st == HDL_OK) {
         HdlSearchDesc desc{};
         desc.start = start;
         desc.size = size;
         desc.value_type = HDL_VALUE_BYTES;
         desc.cmp = HDL_CMP_EXACT;
-        desc.alignment = 1;
-        desc.max_results = max_hits ? max_hits : 1000000;
+        desc.alignment = 1; /* AOB is always byte-unaligned */
+        desc.max_results = max_hits; /* 0 = unlimited */
         desc.value = pattern.c_str();
         desc.value_size = 0;
         st = SearchFirst(session, &desc, MakeToken(nullptr, job));
         if (st == HDL_OK || st == HDL_E_CANCELLED || st == HDL_E_TIMEOUT) {
-            uint32_t count = hit_count;
-            SearchGetHits(session, hit_ptr, &count);
-            hit_count = count;
+            SearchGetCount(session, &hit_count);
+            if (hit_count) {
+                hits.resize(hit_count);
+                uint32_t all = hit_count;
+                SearchGetHits(session, hits.data(), &all);
+                hit_count = all;
+            }
+            reply_count = (max_hits && max_hits < hit_count) ? max_hits : hit_count;
         }
         SearchClose(session);
     }
@@ -60,13 +65,13 @@ bool HandleSearchMemory(HANDLE pipe, proto::Reader& r) {
     }
 
     if ((flags & HDL_IPC_REQ_STREAM)) {
-        return WriteStreamed(pipe, st, hit_ptr ? hits.data() : nullptr, hit_count, 256);
+        return WriteStreamed(pipe, st, hits.empty() ? nullptr : hits.data(), reply_count, 256);
     }
 
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, hit_count);
-    if (max_hits && hit_count) {
-        AppendBytes(resp, hits.data(), hit_count * sizeof(uint64_t));
+    AppendPod(resp, reply_count);
+    if (reply_count && !hits.empty()) {
+        AppendBytes(resp, hits.data(), reply_count * sizeof(uint64_t));
     }
     return WriteFrame(pipe, resp);
 }

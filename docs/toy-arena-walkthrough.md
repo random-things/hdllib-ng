@@ -15,12 +15,12 @@ By the end, you will have:
 
 1. narrowed two identical `100` values to the hero's changing health field;
 2. changed health directly and observed the target reflect the change;
-3. discovered a module-relative pointer path to a heap object;
-4. saved that path, restarted the target, and resolved the new heap address;
-5. located and disassembled `HdlToyDamage`;
-6. correlated its instructions, xrefs, hook arguments, and object offset;
-7. found executable `0xCC` code caves near the function;
-8. installed a trace hook and enabled/disabled it;
+3. located the unknown function that writes health, without resolving a function export;
+4. correlated its instructions, xrefs, hook arguments, and object offset;
+5. installed a trace hook and enabled/disabled it;
+6. discovered a module-relative pointer path to a heap object;
+7. saved that path, restarted the target, and resolved the new heap address;
+8. found executable `0xCC` code caves near the function;
 9. redirected damage through a cave so damage became a no-op;
 10. disabled the detour and proved the original behavior was restored.
 
@@ -31,7 +31,8 @@ flowchart TD
     Change["Trigger 13 damage"]
     Refine["Refine to the one decreased address"]
     Modify["Write health = 150"]
-    Function["Resolve and disassemble HdlToyDamage"]
+    Watch["Watch the health address for writes"]
+    Function["Recover the writer's entry from RIP and xrefs"]
     Hook["Trace calls and arguments"]
     Pointer["Discover module-rooted path to hero bag"]
     Restart["Restart and revalidate path"]
@@ -40,7 +41,7 @@ flowchart TD
     Restore["Disable patches and restore behavior"]
 
     Launch --> Scan --> Change --> Refine --> Modify
-    Refine --> Function --> Hook
+    Refine --> Watch --> Function --> Hook
     Launch --> Pointer --> Restart
     Function --> Cave --> Detour --> Restore
 ```
@@ -82,10 +83,11 @@ flowchart LR
     EntitySlots -- "dereference" --> Hero
 ```
 
-The named getters and exports are shortcuts for checking the lab. They let you
-prove that a scan or pointer path found the intended object. In an unknown
-target, those oracles would be replaced by a wider scan, a behavioral anchor,
-an import, or a previously verified locator.
+The named getters and data exports are shortcuts for bounding and checking the
+value and pointer exercises. In an unknown target, those oracles would be
+replaced by a wider scan, a behavioral anchor, an import, or a previously
+verified locator. The function-discovery, hook, and detour steps deliberately
+do not resolve or invoke either exported damage function.
 
 ## 0. Build and verify
 
@@ -237,14 +239,16 @@ $ScanSession = 1
 
 ### 2.2 Trigger one controlled change
 
-Call the wrapper that the toy's `damage 0 13` console command uses:
+In Terminal A, trigger the behavior through the toy's normal user-facing
+command:
 
-```powershell
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:13
+```text
+damage 0 13
 ```
 
-`HdlToyCallDamage` and `HdlToyDamage` return `void`. Ignore the CLI's printed
-`return=` bits for these calls; they have no semantic return value.
+The toy prints a new status line with hero health `87`. At this point, assume
+you know only the action you performed and the candidate addresses—not the
+name or address of any function behind the command.
 
 Refine against the previous snapshot:
 
@@ -305,85 +309,146 @@ behavior, controlled the value.
 
 Keep health at `150` for the hook experiment.
 
-## 3. Locate and understand the damage function
+## 3. Locate the unknown function that writes health
 
-Start from `HdlToyCallDamage`, the behavioral entry point used by the toy's
-console command. Resolve and disassemble that wrapper:
+Do not resolve `HdlToyDamage` or `HdlToyCallDamage`, and do not invoke either
+through `hdlclient call`. Treat the console command as a black-box action. The
+bridge from known data to unknown code is a hardware write watchpoint.
+
+```mermaid
+flowchart TD
+    Data["Known health address"]
+    Watch["Hardware write watch"]
+    Action["Trigger damage from the toy console"]
+    Rip["Watch hit: RIP after the store"]
+    Resolve["resolve-function: instruction-aligned entry"]
+    Xrefs["xrefs-to --exact"]
+    Entry["Validated function entry"]
+    Validate["Disassemble, trace-hook, and correlate behavior"]
+
+    Data --> Watch --> Action --> Rip --> Resolve --> Xrefs --> Entry --> Validate
+```
+
+### 3.1 Catch the instruction that changes health
+
+Install a four-byte write watch on the address recovered by the scan:
 
 ```powershell
-$CallDamage = Invoke-HdlHex `
-    -Arguments @($ToyPid, "resolve", "HdlToyCallDamage") `
-    -Field "addr="
+$WatchText = (
+    & $Client $ToyPid watch hw $HealthHex `
+        --size 4 --access write 2>&1 |
+    Out-String
+).Trim()
+Write-Host $WatchText
+
+$WatchMatch = [regex]::Match($WatchText, "handle=(\d+)")
+if (-not $WatchMatch.Success) {
+    throw "No hardware-watch handle"
+}
+$HealthWatch = [uint64]$WatchMatch.Groups[1].Value
+```
+
+```text
+status=OK handle=1
+```
+
+In Terminal A, run the same behavior with a different, recognizable amount:
+
+```text
+damage 0 7
+```
+
+Use the console here, not a one-shot `hdlclient call`. A hardware watch is
+applied to threads that exist when it is installed; the toy's console thread
+already exists, while a later IPC request may execute on a new thread. If the
+target created relevant threads after installation, run `watch refresh` before
+triggering the action.
+
+Poll the event queue in Terminal B:
+
+```powershell
+$WatchHits = (
+    & $Client $ToyPid watch hits --timeout 500 --max 8 2>&1 |
+    Out-String
+).Trim()
+Write-Host $WatchHits
+
+$RipMatch = [regex]::Match($WatchHits, "rip=([0-9a-fA-F]+)")
+if (-not $RipMatch.Success) {
+    throw "The action produced no write hit"
+}
+$WriteRip = [Convert]::ToUInt64($RipMatch.Groups[1].Value, 16)
+$WriteRipHex = "0x{0:x}" -f $WriteRip
 ```
 
 Captured output:
 
 ```text
-status=OK addr=00007ff652b71ca0
+status=OK count=1
+  handle=1 rip=00007ff652b71d09 accessed=000001a7305dae18 size=4 tid=49568
 ```
 
-Inspect its outgoing control flow:
+The reported RIP is the instruction after the faulting store on x86-64. It is
+an address inside the unknown writer, not necessarily its entry.
+
+### 3.2 Resolve the instruction-aligned function entry
+
+Pass the arbitrary interior RIP directly to HDLLib:
 
 ```powershell
-$CallDamageHex = "0x{0:x}" -f $CallDamage
-$WrapperDisasm = (
-    & $Client $ToyPid disasm $CallDamageHex --max 8 2>&1 |
-    Out-String
-).Trim()
-Write-Host $WrapperDisasm
-& $Client $ToyPid xrefs-from $CallDamageHex
-```
-
-```text
-00007ff652b71ca0  mov      [rsp+0x10], edx
-00007ff652b71ca4  mov      [rsp+0x08], ecx
-00007ff652b71ca8  sub      rsp, 0x28
-00007ff652b71cac  mov      edx, [rsp+0x38]
-00007ff652b71cb0  mov      ecx, [rsp+0x30]
-00007ff652b71cb4  call     0x00007FF652B71CC0
-00007ff652b71cb9  add      rsp, 0x28
-00007ff652b71cbd  ret
-...
-  00007ff652b71cb4 -> 00007ff652b71cc0 kind=1
-```
-
-The wrapper forwards its two arguments into one call. Capture that call target
-as the function of interest:
-
-```powershell
-$DamageMatch = [regex]::Match(
-    $WrapperDisasm,
-    "call\s+0x([0-9a-fA-F]+)"
-)
-if (-not $DamageMatch.Success) {
-    throw "No direct call in HdlToyCallDamage"
-}
-$Damage = [Convert]::ToUInt64($DamageMatch.Groups[1].Value, 16)
+$Damage = Invoke-HdlHex `
+    -Arguments @(
+        $ToyPid, "resolve-function", $WriteRipHex,
+        "--module", "hdl_toy_arena.exe"
+    ) `
+    -Field "start="
 $DamageHex = "0x{0:x}" -f $Damage
 ```
 
-Now use the toy's exports only as ground-truth checks:
+Captured output:
 
-```powershell
-& $Client $ToyPid resolve HdlToyDamage
-& $Client $ToyPid resolve HdlToyGetEntity
+```text
+status=OK
+  start=00007ff652b71cc0 end=00007ff652b71d25 conf=100 flags=3
 ```
 
-They should return `$Damage` and `0x00007FF652B71D60`, respectively. The
-function was located from the wrapper's call graph; the export confirms the
-answer.
+No manual byte decrement or candidate alignment is required. On x64 image
+code, `resolve-function` first asks the platform's unwind table for the
+compiler-authored function range containing the supplied byte address. The
+input may be any byte inside that range, including the post-store RIP reported
+by a hardware watch. If unwind metadata is unavailable, HDLLib falls back to
+its bounded index of call targets and narrowly matched prologues; conditional
+and local jump targets are not treated as function entries.
 
-### 3.1 Use the disassembler
+Confirm that executable code contains a direct caller of the aligned entry:
 
-List the compiled-in backends and inspect the selected one:
+```powershell
+& $Client $ToyPid xrefs-to $DamageHex `
+    --module hdl_toy_arena.exe --max 16 --exact
+```
+
+```text
+status=OK count=1
+  00007ff652b71cb4 -> 00007ff652b71cc0 kind=1
+```
+
+The procedure used only the watched data address, behavioral input, unwind
+metadata, executable bytes, and control-flow xrefs. It did not use a function
+name or export address and would take the same path if the damage functions
+were absent from the export table.
+
+### 3.3 Use the disassembler to validate and learn
+
+List the compiled-in backends, inspect the selected one, and decode far enough
+to include the watched store:
 
 ```powershell
 & $Client $ToyPid disasm-backend list
 & $Client $ToyPid disasm-backend get
-& $Client $ToyPid disasm $DamageHex --max 16
+& $Client $ToyPid disasm $DamageHex --max 24
 ```
 
-The verified build selected backend `1`, Zydis. Its first 16 instructions were:
+The verified build selected backend `1`, Zydis. Its relevant instructions were:
 
 ```text
 00007ff652b71cc0  mov      [rsp+0x10], edx
@@ -402,52 +467,37 @@ The verified build selected backend `1`, Zydis. Its first 16 instructions were:
 00007ff652b71cf8  mov      ecx, [rsp+0x48]
 00007ff652b71cfc  mov      eax, [rax+0x08]
 00007ff652b71cff  sub      eax, ecx
+00007ff652b71d01  mov      rcx, [rsp+0x20]
+00007ff652b71d06  mov      [rcx+0x08], eax
+00007ff652b71d09  mov      rax, [rsp+0x20]
+00007ff652b71d0e  cmp      dword ptr [rax+0x08], 0x00
+00007ff652b71d12  jnl      0x00007FF652B71D20
+00007ff652b71d14  mov      rax, [rsp+0x20]
+00007ff652b71d19  mov      dword ptr [rax+0x08], 0x00
+00007ff652b71d20  add      rsp, 0x38
 ```
 
-This gives useful information without source access:
+This supplies useful facts without source or symbols:
 
-- Windows x64 passes the first two integer arguments in `ECX` and `EDX`; the
-  function spills them at entry.
-- The call target equals the resolved `HdlToyGetEntity` address.
-- The first argument becomes the getter's entity index.
-- A negative second argument is replaced with zero.
-- The returned object pointer is in `RAX`.
-- The function reads a 32-bit field at `[RAX+0x08]`.
-- It subtracts the second argument from that field.
+- Windows x64 passes the first two integer arguments in `ECX` and `EDX`, and
+  the entry spills both;
+- the first argument is forwarded to a helper that returns an object in `RAX`;
+- negative values of the second argument are changed to zero;
+- the routine reads a 32-bit field at object offset `+0x08`, subtracts the
+  second argument, and writes the result back at `...1D06`;
+- the watch RIP `...1D09` is exactly the instruction after that write;
+- the following comparison and store clamp the field to zero.
 
-That independently confirms the scan result: `health` is an `i32` at entity
-offset `+0x08`.
+The dataflow therefore identifies this as the damage routine and independently
+confirms the scan result: health is an `i32` at entity offset `+0x08`.
 
-### 3.2 Find callers and function boundaries
-
-Find direct references to damage:
+Remove the watch before installing an inline hook, then restore the simple
+`150` baseline used below:
 
 ```powershell
-& $Client $ToyPid xrefs-to $DamageHex `
-    --module hdl_toy_arena.exe --max 16 --exact
+& $Client $ToyPid watch unwatch $HealthWatch
+& $Client $ToyPid write $HealthHex "96 00 00 00"
 ```
-
-Captured output:
-
-```text
-status=OK count=1
-  00007ff652b71cb4 -> 00007ff652b71cc0 kind=1
-```
-
-The single direct call is inside `HdlToyCallDamage`. The hook trace later
-reports caller `...1CB9`, which is the return address immediately after this
-five-byte call at `...1CB4`.
-
-You can also hand HDLLib an interior address and ask it to recover the enclosing
-function:
-
-```powershell
-$DamageInterior = "0x{0:x}" -f ($Damage + 4)
-& $Client $ToyPid resolve-function $DamageInterior `
-    --module hdl_toy_arena.exe
-```
-
-The reported `start` should equal `$Damage`.
 
 ## 4. Hook the function and observe live arguments
 
@@ -469,10 +519,15 @@ $Hook = $Damage
 $HookHex = $DamageHex
 ```
 
-Trigger the wrapper and read health:
+In Terminal A, trigger the same black-box action:
+
+```text
+damage 0 5
+```
+
+Then read the value and trace queue in Terminal B:
 
 ```powershell
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:5
 & $Client $ToyPid read $HealthHex 4
 & $Client $ToyPid hookhits --timeout 500 --max 8
 ```
@@ -491,7 +546,7 @@ The evidence agrees in four ways:
 - health changed from `150` to `145` (`0x91`);
 - `a0=0` is the hero index;
 - `a1=5` is the damage amount;
-- the caller is five bytes after the xref call instruction.
+- the caller is five bytes after the call xref at `...1CB4`.
 
 The `ret=` field is not meaningful because the hooked function returns `void`.
 
@@ -499,7 +554,11 @@ Now disable only the instrumentation:
 
 ```powershell
 & $Client $ToyPid hook-enable $HookHex 0
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:3
+```
+
+Type `damage 0 3` in Terminal A, then poll from Terminal B:
+
+```powershell
 & $Client $ToyPid read $HealthHex 4
 & $Client $ToyPid hookhits --timeout 0 --max 8
 ```
@@ -519,7 +578,11 @@ Re-enable it and prove events resume:
 
 ```powershell
 & $Client $ToyPid hook-enable $HookHex 1
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:2
+```
+
+Type `damage 0 2` in Terminal A, then finish in Terminal B:
+
+```powershell
 & $Client $ToyPid read $HealthHex 4
 & $Client $ToyPid hookhits --timeout 500 --max 8
 & $Client $ToyPid unhook $HookHex
@@ -705,11 +768,24 @@ process's absolute `$Hero`, `$Health`, `$Damage`, or `$Cave`.
 $Hero = Invoke-HdlHex `
     -Arguments @($ToyPid, "call", "HdlToyGetEntity", "u64:0") `
     -Field "return="
-$HealthHex = "0x{0:x}" -f ($Hero + 8)
-$Damage = Invoke-HdlHex `
-    -Arguments @($ToyPid, "resolve", "HdlToyDamage") `
-    -Field "addr="
-$DamageHex = "0x{0:x}" -f $Damage
+$Health = $Hero + 8
+$HealthHex = "0x{0:x}" -f $Health
+```
+
+Now repeat [Catch the instruction that changes
+health](#31-catch-the-instruction-that-changes-health) and [Resolve the
+instruction-aligned function entry](#32-resolve-the-instruction-aligned-function-entry)
+against this process. Use `damage 0 1` as the Terminal A trigger. The repeated
+watchpoint and aligned resolution produce fresh `$Damage` and `$DamageHex`
+values.
+Do not replace this rediscovery with `resolve HdlToyDamage`; the old absolute
+address is stale, and the point is to recover the unknown routine again under
+the current layout.
+
+Remove the second-run hardware watch before continuing:
+
+```powershell
+& $Client $ToyPid watch unwatch $HealthWatch
 ```
 
 Search only executable image regions in the toy module. The default fill byte
@@ -757,9 +833,9 @@ instead. Do not copy the sample cave address.
 ## 7. Demonstrate control with a reversible cave-backed detour
 
 This final phase is intentionally toy-only. It converts the selected cave into
-a one-byte `RET` function, then patches the start of `HdlToyDamage` to jump
-there. With the detour enabled, damage returns immediately. With it disabled,
-the original bytes and behavior return.
+a one-byte `RET` function, then patches the recovered damage entry to jump
+there. With the detour enabled, the unknown routine returns immediately. With
+it disabled, the original bytes and behavior return.
 
 ### 7.1 Verify the overwrite boundary
 
@@ -855,11 +931,15 @@ status=OK count=2
   handle=2 addr=00007ff652b71cc0 en=1 name=damage_to_ret_cave
 ```
 
-Set health to a simple baseline, call damage, and read it:
+Set health to a simple baseline in Terminal B:
 
 ```powershell
 & $Client $ToyPid write $HealthHex "64 00 00 00"
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:7
+```
+
+Type `damage 0 7` in Terminal A, then read health in Terminal B:
+
+```powershell
 & $Client $ToyPid read $HealthHex 4
 ```
 
@@ -870,14 +950,18 @@ status=OK bytes=4
 64 00 00 00
 ```
 
-Health remained `100`: `HdlToyCallDamage` called `HdlToyDamage`, the entry
-jumped to the cave, and the cave returned immediately.
+Health remained `100`: the normal console path reached the recovered entry,
+the entry jumped to the cave, and the cave returned immediately.
 
 Disable only the damage detour and repeat:
 
 ```powershell
 & $Client $ToyPid patch disable $DamagePatch
-& $Client $ToyPid call HdlToyCallDamage u64:0 i64:7
+```
+
+Type `damage 0 7` in Terminal A again, then read health in Terminal B:
+
+```powershell
 & $Client $ToyPid read $HealthHex 4
 ```
 
@@ -938,8 +1022,9 @@ more than one observation:
 | Conclusion | Evidence |
 |---|---|
 | `hero+8` is health | decreased scan hit, direct read/write, Terminal A status, disassembly `[rax+0x08]` |
-| second damage argument is amount | chosen call input, hook `a1`, disassembly subtraction |
-| wrapper calls damage | `xrefs-to`, hook caller return address |
+| `...1CC0` is the damage entry | health write watch, instruction-aligned resolution, direct-call xref, disassembled read/subtract/write, live hook |
+| second damage argument is amount | console input, hook `a1`, disassembly subtraction |
+| normal command path calls the recovered entry | `xrefs-to`, hook caller return address, matching behavioral change |
 | bag locator is restart-safe | module + RVA JSON, changed heap address, successful revalidation |
 | cave detour controlled behavior | patch list, unchanged health while enabled, decreased health after disable |
 | cleanup restored original state | disabled ledger entries, original behavior, empty patch list |
@@ -950,6 +1035,8 @@ more than one observation:
 |---|---|
 | `ping` cannot connect | Injection failed, the PID is stale, or the toy exited. Re-read Terminal A's PID and inject again. |
 | Initial scan does not return two hits | `$Hero` came from an older process, health is no longer `100`, or `--size` is not `0x38`. Restart the toy. |
+| Health watch returns `count=0` | Trigger `damage` in Terminal A so the write occurs on the already-watched console thread. If relevant threads were created after installation, run `watch refresh` and retry. |
+| `resolve-function` returns an internal block | The injected DLL is older than the client or target. Rebuild HDLLib, reinject it, and retry; current x64 builds prefer compiler-authored unwind ranges before heuristic fallback. |
 | `store add ... path` saves an unexpected path | It stores the first REPL pointer-scan result. Inspect the printed order; any saved path must have an image root in `hdl_toy_arena.exe`. |
 | Bag address does not change after `bag 0` | The heap allocator may reuse an address. A full process restart is stronger; validate the path and object contents, not inequality alone. |
 | Module base is identical after restart | Windows may reuse an ASLR base during one boot. Inspect the store: module + RVA, not an absolute root, is the ASLR-safe property. |
@@ -976,6 +1063,8 @@ more than one observation:
   [`tools/client/recipes.cpp`](../tools/client/recipes.cpp)
 - disassembly and xrefs:
   [`src/disasm/`](../src/disasm/), [`src/graph.cpp`](../src/graph.cpp), and
+  [`tools/client/cmds_place.cpp`](../tools/client/cmds_place.cpp)
+- hardware write watches: [`src/watch.cpp`](../src/watch.cpp) and
   [`tools/client/cmds_place.cpp`](../tools/client/cmds_place.cpp)
 - trace hooks: [`src/hooks.cpp`](../src/hooks.cpp) and
   [`tools/client/cmds_hooks.cpp`](../tools/client/cmds_hooks.cpp)

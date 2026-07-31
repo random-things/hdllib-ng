@@ -26,6 +26,53 @@ bool IsExec(DWORD p) {
            x == PAGE_EXECUTE_WRITECOPY;
 }
 
+bool IsLikelyFunctionPrologue(const uint8_t* raw, size_t size) {
+    if (!raw || size < 4) {
+        return false;
+    }
+    /* Keep this deliberately narrow. Broad prefixes such as 48 89 and 48 83
+       occur throughout ordinary function bodies and fragment the index. */
+    return raw[0] == 0x55 ||                                      /* push rbp */
+           (raw[0] == 0x40 && raw[1] == 0x55) ||                  /* push rbp */
+           (raw[0] == 0x48 && raw[1] == 0x89 && raw[2] == 0xE5) || /* mov rbp,rsp */
+           (raw[0] == 0x48 && raw[1] == 0x8B && raw[2] == 0xEC) || /* mov rbp,rsp */
+           (raw[0] == 0x48 && raw[1] == 0x83 && raw[2] == 0xEC) || /* sub rsp,imm8 */
+           (raw[0] == 0x48 && raw[1] == 0x81 && raw[2] == 0xEC) || /* sub rsp,imm32 */
+           (raw[0] == 0x48 && raw[1] == 0x8B && raw[2] == 0xC4) || /* mov rax,rsp */
+           (raw[0] == 0x4C && raw[1] == 0x8B && raw[2] == 0xDC);   /* mov r11,rsp */
+}
+
+bool LookupRuntimeFunction(uint64_t addr, uint64_t module_start, uint64_t module_end,
+                           HdlFunctionInfo* out) {
+#if defined(_M_X64) || defined(__x86_64__)
+    if (!addr || !out) {
+        return false;
+    }
+    DWORD64 image_base = 0;
+    const PRUNTIME_FUNCTION runtime =
+        RtlLookupFunctionEntry(static_cast<DWORD64>(addr), &image_base, nullptr);
+    if (!runtime || !image_base) {
+        return false;
+    }
+    const uint64_t start = static_cast<uint64_t>(image_base) + runtime->BeginAddress;
+    const uint64_t end = static_cast<uint64_t>(image_base) + runtime->EndAddress;
+    if (start < module_start || end > module_end || start >= end || addr < start || addr >= end) {
+        return false;
+    }
+    out->start = start;
+    out->end = end;
+    out->confidence = 100;
+    out->flags = 0;
+    return true;
+#else
+    (void)addr;
+    (void)module_start;
+    (void)module_end;
+    (void)out;
+    return false;
+#endif
+}
+
 struct FnCacheKey {
     uint64_t base = 0;
     uint64_t size = 0;
@@ -159,13 +206,14 @@ HdlStatus BuildFunctionList(uint64_t scan_start, uint64_t scan_end, uint32_t /*s
                 }
                 uint8_t raw[8]{};
                 size_t got = 0;
-                if (ReadMemory(cur, raw, 4, &got) == HDL_OK) {
-                    if ((raw[0] == 0x40 && raw[1] == 0x55) || (raw[0] == 0x55) ||
-                        (raw[0] == 0x48 && raw[1] == 0x89) || (raw[0] == 0x48 && raw[1] == 0x83)) {
+                if (ReadMemory(cur, raw, sizeof(raw), &got) == HDL_OK) {
+                    if (IsLikelyFunctionPrologue(raw, got)) {
                         bump(cur, HDL_FN_PROLOGUE, 45);
                     }
                 }
-                if ((d.flags & (HDL_INSN_CALL | HDL_INSN_JMP)) && (d.flags & HDL_INSN_BRANCH) &&
+                /* A conditional or local jump names a basic block, not a function. Calls are
+                   instruction-aligned entry evidence; jump edges remain available via Xrefs*. */
+                if ((d.flags & HDL_INSN_CALL) && (d.flags & HDL_INSN_BRANCH) &&
                     d.branch_target >= scan_start && d.branch_target < scan_end) {
                     bump(d.branch_target, HDL_FN_CALLED, 75);
                 }
@@ -368,6 +416,22 @@ HdlStatus ResolveFunction(uint64_t addr, uint32_t search_flags, const wchar_t* m
     if (fns.empty()) {
         return HDL_E_NOT_FOUND;
     }
+
+    /* On x64, compiler-authored unwind metadata is the strongest available
+       instruction-aligned function boundary. It also accepts an arbitrary
+       interior byte address, including a post-watchpoint RIP. */
+    HdlFunctionInfo runtime{};
+    if (LookupRuntimeFunction(addr, scan_start, scan_end, &runtime)) {
+        const auto exact = std::lower_bound(
+            fns.begin(), fns.end(), runtime.start,
+            [](const HdlFunctionInfo& f, uint64_t start) { return f.start < start; });
+        if (exact != fns.end() && exact->start == runtime.start) {
+            runtime.flags = exact->flags;
+        }
+        *out = runtime;
+        return HDL_OK;
+    }
+
     size_t lo = 0, hi = fns.size();
     while (lo + 1 < hi) {
         const size_t mid = lo + (hi - lo) / 2;
