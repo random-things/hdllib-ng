@@ -103,7 +103,8 @@ HdlStatus InjectDllEx(uint32_t pid, const wchar_t* dll_path, int method,
     }
 }
 
-HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base) {
+HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint32_t shutdown_flags,
+                    uint64_t* out_base) {
     if (!dll_path || !dll_path[0]) {
         return HDL_E_INVALID_ARG;
     }
@@ -120,7 +121,7 @@ HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t*
     if (pid == 0 || pid == self) {
         return inject::UnloadLocal(full.c_str(), reload, out_base);
     }
-    return inject::UnloadRemote(pid, full.c_str(), reload, out_base);
+    return inject::UnloadRemoteEx(pid, full.c_str(), reload, shutdown_flags, out_base);
 }
 
 }  // namespace hdl

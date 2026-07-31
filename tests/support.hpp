@@ -331,6 +331,74 @@ inline bool PingPipe(uint32_t pid, DWORD timeout_ms = 8000) {
     return status == HDL_OK;
 }
 
+/* One-shot framed request. Returns false on transport failure; *out_status from reply body. */
+inline bool PipeRequest(uint32_t pid, const void* req, uint32_t req_size, int32_t* out_status,
+                        DWORD timeout_ms = 8000) {
+    if (out_status) {
+        *out_status = HDL_E_FAILED;
+    }
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        return false;
+    }
+    const DWORD start = GetTickCount();
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    for (;;) {
+        pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE) {
+            break;
+        }
+        if (GetLastError() != ERROR_PIPE_BUSY && GetLastError() != ERROR_FILE_NOT_FOUND) {
+            return false;
+        }
+        if (GetTickCount() - start > timeout_ms) {
+            return false;
+        }
+        WaitNamedPipeW(name, 200);
+        Sleep(50);
+    }
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+    DWORD wrote = 0;
+    if (!WriteFile(pipe, &req_size, sizeof(req_size), &wrote, nullptr) || wrote != sizeof(req_size) ||
+        !WriteFile(pipe, req, req_size, &wrote, nullptr) || wrote != req_size) {
+        CloseHandle(pipe);
+        return false;
+    }
+    uint32_t resp_size = 0;
+    DWORD got = 0;
+    if (!ReadFile(pipe, &resp_size, sizeof(resp_size), &got, nullptr) || got != sizeof(resp_size) ||
+        resp_size < sizeof(int32_t) || resp_size > (1u << 20)) {
+        CloseHandle(pipe);
+        return false;
+    }
+    std::vector<uint8_t> body(resp_size);
+    size_t off = 0;
+    while (off < body.size()) {
+        if (!ReadFile(pipe, body.data() + off, static_cast<DWORD>(body.size() - off), &got, nullptr) ||
+            got == 0) {
+            CloseHandle(pipe);
+            return false;
+        }
+        off += got;
+    }
+    CloseHandle(pipe);
+    int32_t status = -1;
+    memcpy(&status, body.data(), sizeof(status));
+    if (out_status) {
+        *out_status = status;
+    }
+    return true;
+}
+
+inline bool PipeShutdown(uint32_t pid, uint32_t flags, int32_t* out_status = nullptr) {
+    uint8_t req[8];
+    uint32_t op = 94; /* OpShutdown */
+    memcpy(req, &op, 4);
+    memcpy(req + 4, &flags, 4);
+    return PipeRequest(pid, req, sizeof(req), out_status);
+}
+
 inline bool VerifyInjected(uint32_t pid, const wchar_t* dll_path, int method, uint64_t base) {
     if (base == 0) {
         return false;

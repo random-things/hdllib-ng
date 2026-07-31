@@ -31,7 +31,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         break;
     case DLL_PROCESS_DETACH:
         if (reserved == nullptr) {
-            hdl::CoreShutdown();
+            hdl::CoreShutdownDetach();
         }
         break;
     default:

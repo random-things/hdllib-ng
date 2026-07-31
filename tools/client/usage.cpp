@@ -12,7 +12,7 @@ Local inject (no pipe; former hdlinjector):
   hdlclient inject --recommend --title <substr> [--class <name>] [dll-path] [--stealth]
   hdlclient inject --early-bird <exe-path> <dll-path> [--stealth]
   hdlclient inject --help
-  hdlclient unload <pid> <dll-path> [--reload]
+  hdlclient unload <pid> <dll-path> [--reload] [--modules]
   hdlclient reload <pid> <dll-path>
 
 Pipe commands (DLL already loaded in <pid>):
@@ -115,6 +115,7 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> scan --close|--reset --session ID
   hdlclient <pid> inject <dll-path> [--target-pid N] [--method NAME] [--exe PATH] [--hook-export NAME]
   hdlclient <pid> unload <dll-path> [--target-pid N] [--reload]
+  hdlclient <pid> shutdown [--modules]
   hdlclient <pid> reload <dll-path> [--target-pid N]
   hdlclient <pid> log <0-3>
 

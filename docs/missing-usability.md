@@ -189,6 +189,11 @@ so leftovers accumulate in long REPL sessions and affect later ranks/heats.
 **Acceptance:** One command returns the target to a known quiet instrumentation
 state without killing the process or unloading the DLL.
 
+**Note:** `hdlclient <pid> shutdown` / `OpShutdown` already restores hooks, patches,
+watches, and health and stops the pipe (optional `--modules` unloads tracked
+payload DLLs) without `FreeLibrary` of `hdllib`. A selective `cleanup` verb that
+leaves the helper running remains useful for long sessions.
+
 ---
 
 ## 8. Annotated `read` / scan hit views

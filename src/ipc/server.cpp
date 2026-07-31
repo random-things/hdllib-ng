@@ -179,6 +179,25 @@ void Stop() {
     }
 }
 
+void StopNoJoin() {
+    g_stop = true;
+    if (g_stop_event) {
+        SetEvent(g_stop_event);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_clients_mu);
+        for (HANDLE h : g_client_pipes) {
+            CancelIoEx(h, nullptr);
+            DisconnectNamedPipe(h);
+        }
+    }
+    if (g_thread.joinable()) {
+        g_thread.detach();
+    }
+    /* Leave g_stop_event for the detached thread; do not close under loader lock. */
+    g_running = false;
+}
+
 bool IsRunning() {
     return g_running.load();
 }

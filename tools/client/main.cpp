@@ -46,6 +46,7 @@ static const CmdEntry kCommands[] = {
     {L"inject", CmdInject},
     {L"unload", CmdUnload},
     {L"reload", CmdUnload},
+    {L"shutdown", CmdShutdown},
     {L"discover-create", CmdDiscoverCreate},
     {L"discover-close", CmdDiscoverClose},
     {L"discover-add", CmdDiscoverAdd},

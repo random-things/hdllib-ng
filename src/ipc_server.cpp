@@ -24,6 +24,10 @@ void StopIpcServer() {
     ipc::Stop();
 }
 
+void StopIpcServerNoJoin() {
+    ipc::StopNoJoin();
+}
+
 bool IsIpcServerRunning() {
     return ipc::IsRunning();
 }

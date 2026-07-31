@@ -1975,6 +1975,92 @@ HdlStatus InjectSealed(uint32_t pid, const wchar_t* dll_path, int method, const 
     return st;
 }
 
+void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {
+    std::printf("\n== Clean unload / shutdown ==\n");
+    fflush(stdout);
+
+    TargetProfile profile{};
+    profile.name = "clean_unload";
+    profile.window = false;
+    profile.alertable = true;
+    profile.integrity = IlLevel::Medium;
+
+    TargetProc target;
+    if (!hdltest::SpawnTarget(target_exe, profile, target)) {
+        Report(c, false, false, "clean_unload/spawn", "spawn failed");
+        return;
+    }
+
+    uint64_t base = 0;
+    const HdlStatus ist =
+        InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
+                     nullptr, &base);
+    const bool injected = ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path,
+                                                                   HDL_INJECT_CREATE_REMOTE_THREAD,
+                                                                   base);
+    Report(c, injected, false, "clean_unload/inject", "");
+    if (!injected) {
+        target.Close();
+        return;
+    }
+
+    /* Secondary module-list DLL into the same target; track then unload via shutdown flag. */
+    wchar_t sys[MAX_PATH];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    wcscat_s(sys, L"\\wintrust.dll");
+    uint64_t secondary = 0;
+    const HdlStatus sst =
+        HdlInjectDll(target.pid, sys, &secondary);
+    Report(c, sst == HDL_OK && secondary != 0, true, "clean_unload/inject secondary", "");
+    if (sst == HDL_OK && secondary != 0) {
+        /* OpTrackLoadedDll: opcode 95, base u64, wstring path */
+        std::vector<uint8_t> treq;
+        const uint32_t op = 95;
+        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&op),
+                    reinterpret_cast<const uint8_t*>(&op) + 4);
+        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&secondary),
+                    reinterpret_cast<const uint8_t*>(&secondary) + 8);
+        const uint32_t nbytes =
+            static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
+        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&nbytes),
+                    reinterpret_cast<const uint8_t*>(&nbytes) + 4);
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(sys);
+        treq.insert(treq.end(), p, p + nbytes);
+        int32_t track_st = HDL_E_FAILED;
+        Report(c, hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
+                                       &track_st) &&
+                       track_st == HDL_OK,
+               false, "clean_unload/track secondary", "");
+    }
+
+    int32_t shut_st = HDL_E_FAILED;
+    const bool shut_ok =
+        hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
+        shut_st == HDL_OK;
+    Report(c, shut_ok, false, "clean_unload/OpShutdown modules", "");
+
+    Sleep(300);
+    Report(c, !hdltest::PingPipe(target.pid, 500), false, "clean_unload/pipe dead after shutdown",
+           "");
+
+    if (sst == HDL_OK && secondary != 0) {
+        /* Single FreeLibrary may leave the module if something else holds a ref. */
+        const bool gone = hdltest::FindModuleBaseByPath(target.pid, sys) == 0;
+        Report(c, gone, true, "clean_unload/secondary unloaded", "");
+    }
+
+    uint64_t ubase = 0;
+    const HdlStatus ust = HdlUnloadDllEx(target.pid, dll_path, 0, 0, &ubase);
+    Report(c, ust == HDL_OK || ust == HDL_E_NOT_FOUND, false, "clean_unload/FreeLibrary hdllib",
+           "");
+
+    Sleep(200);
+    const bool alive = WaitForSingleObject(target.process, 0) == WAIT_TIMEOUT;
+    Report(c, alive, false, "clean_unload/target still alive", "");
+
+    target.Close();
+}
+
 void RunInjectMatrix(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {
     std::printf("\n== Injection matrix ==\n");
     fflush(stdout);
@@ -2141,6 +2227,7 @@ int wmain(int argc, wchar_t** argv) {
         RunDiscoverTargetTests(c, target_full, payload.c_str());
     }
     if (!api_only && !locate_only) {
+        RunCleanUnloadTests(c, target_full, payload.c_str());
         RunInjectMatrix(c, target_full, payload.c_str());
     }
 

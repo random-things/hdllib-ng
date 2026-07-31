@@ -17,6 +17,7 @@ HdlStatus InjectDllEx(
     uint32_t* out_pid,
     uint64_t* out_base);
 
-HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint64_t* out_base);
+HdlStatus UnloadDll(uint32_t pid, const wchar_t* dll_path, int reload, uint32_t shutdown_flags,
+                    uint64_t* out_base);
 
 }  // namespace hdl

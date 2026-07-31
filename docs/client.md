@@ -53,6 +53,26 @@ Typical first checks after inject: `ping`, then `modules` / `fingerprint` for ba
 
 Quiet defaults after inject (log off, health VEH off). Raise logging with `hdlclient <pid> log 2` when debugging.
 
+### Clean unload (leave the target intact)
+
+Always prepare before ejecting `hdllib.dll`. Blind `FreeLibrary` under the loader
+lock is what used to crash targets after hooks/patches.
+
+```bat
+rem Prepare only: restore hooks/patches/watches, optional tracked payload DLLs, stop pipe
+hdlclient <pid> shutdown
+hdlclient <pid> shutdown --modules
+
+rem Preferred eject: OpShutdown (when the helper exports HdlShutdown) then FreeLibrary
+hdlclient unload <pid> C:\full\path\to\hdllib.dll
+hdlclient unload <pid> C:\full\path\to\hdllib.dll --modules
+```
+
+`--modules` / `HDL_SHUTDOWN_UNLOAD_MODULES` FreeLibrary's module-list DLLs that were
+tracked via inject/track (never the helper itself). Manual-map / module-stomp
+images are not unloadable this way. Pipe `unload` cannot eject the helper in-process
+(`HDL_E_BUSY`); use the local `hdlclient unload` command.
+
 ---
 
 ## 2. Everyday CLI workflows

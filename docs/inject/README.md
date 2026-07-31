@@ -1,6 +1,8 @@
 # Injection techniques
 
-Live DLL injection methods implemented under `src/inject/`. The public entry points are `HdlInjectDll` / `HdlInjectDllEx` / `HdlUnloadDll` (see `include/hdllib/hdllib.h`); `src/inject.cpp` dispatches to technique implementations and unload.
+Live DLL injection methods implemented under `src/inject/`. The public entry points are `HdlInjectDll` / `HdlInjectDllEx` / `HdlUnloadDll` / `HdlUnloadDllEx` (see `include/hdllib/hdllib.h`); `src/inject.cpp` dispatches to technique implementations and unload.
+
+When unloading `hdllib` itself, [`unload.cpp`](../../src/inject/unload.cpp) first sends `OpShutdown` over the target pipe (if the module exports `HdlShutdown`) so hooks/patches/watches are restored **outside** the loader lock, waits for the pipe to disappear, then `CreateRemoteThread(FreeLibrary)`.
 
 ## Layout
 
@@ -11,7 +13,7 @@ src/inject/
   common.hpp|.cpp           Shared remote alloc, path, module/thread/window helpers
   select.hpp|.cpp           Requirement catalog, target profile, confidence scoring
   techniques.hpp            Per-technique declarations
-  unload.cpp                FreeLibrary unload + optional same-path reload
+  unload.cpp                FreeLibrary unload + OpShutdown prepare + optional reload
   create_remote_thread.cpp
   nt_create_thread_ex.cpp
   rtl_create_user_thread.cpp

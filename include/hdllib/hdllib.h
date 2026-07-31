@@ -109,6 +109,10 @@ typedef void* HdlHookHandle;
 /* Lifecycle */
 HDL_API HdlStatus HdlInit(void);
 HDL_API void      HdlShutdown(void);
+/* Same as HdlShutdown when flags==0. HDL_SHUTDOWN_UNLOAD_MODULES also FreeLibrary-tracks
+ * module-list DLLs registered via inject/track (never unloads the calling module). */
+#define HDL_SHUTDOWN_UNLOAD_MODULES 1u
+HDL_API void      HdlShutdownEx(uint32_t flags);
 HDL_API int       HdlIsInitialized(void);
 
 /* Logging */
@@ -153,9 +157,16 @@ HDL_API HdlStatus HdlInjectDllEx(
  * *out_base receives the new base (or 0 when reload==0).
  * Unloading the module that contains the calling code in-process returns HDL_E_BUSY;
  * eject that module from another process instead.
+ * Remote unload of a helper that still has a live pipe first sends OpShutdown(shutdown_flags)
+ * so hooks/patches/watches are restored outside the loader lock before FreeLibrary.
  */
 HDL_API HdlStatus HdlUnloadDll(uint32_t pid, const wchar_t* dll_path, int reload,
                                uint64_t* out_base);
+HDL_API HdlStatus HdlUnloadDllEx(uint32_t pid, const wchar_t* dll_path, int reload,
+                                 uint32_t shutdown_flags, uint64_t* out_base);
+
+/* Announce a module-list DLL loaded into this process (controller remote inject). */
+HDL_API HdlStatus HdlTrackLoadedDll(const wchar_t* dll_path, uint64_t base);
 
 /*
  * Resolve pid/hwnd from HdlTargetSpec (pid and/or window title substring / class).

@@ -14,7 +14,8 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 ## 1. IPC protocol versioning / capability handshake
 
 **Why it matters:** The named pipe is the remote ABI. Opcodes already span
-`1…91` plus `OpUnloadDll = 92` and `OpFingerprint = 93`, and are deliberately
+`1…91` plus `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
+`OpTrackLoadedDll = 95`, and are deliberately
 non-contiguous. Docs state the protocol is not self-describing or
 version-negotiated. A newer `hdlclient` against an older DLL (or the reverse)
 can mis-parse frames or treat unknown opcodes as `HDL_E_INVALID_ARG` with no

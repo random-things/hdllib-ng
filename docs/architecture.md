@@ -89,7 +89,10 @@ creates a new suspended process and is never auto-selected for a PID attach.
 ## DLL lifecycle
 
 [`src/dllmain.cpp`](../src/dllmain.cpp) defers initialization to a new thread to
-avoid doing MinHook, thread, and pipe work under the loader lock.
+avoid doing MinHook, thread, and pipe work under the loader lock. Explicit unload
+should call `OpShutdown` / `HdlShutdownEx` **before** `FreeLibrary` so teardown
+also runs off the loader lock; `DLL_PROCESS_DETACH` only runs a join-free residual
+path if prepare was skipped.
 
 ```mermaid
 flowchart TD
@@ -104,18 +107,26 @@ flowchart TD
     NoIPC -- "yes" --> Ready["Core ready without IPC"]
     Server --> Ready
 
-    Detach["Explicit DLL_PROCESS_DETACH"] --> Stop["Stop pipe and clients"]
-    Stop --> Sessions["Close discover/search sessions and jobs"]
-    Sessions --> Watches["Remove watches and patches"]
-    Watches --> HealthDown["Stop health and hooks"]
-    HealthDown --> Allocs["Release tracked allocations"]
-    Allocs --> DisasmDown["Shutdown disassembly registry"]
+    Prepare["OpShutdown / HdlShutdownEx"] --> WaitBoot["Wait for bootstrap done"]
+    WaitBoot --> Jobs["Cancel jobs and close sessions"]
+    Jobs --> Restore["Restore watches, patches, health VEH, hooks"]
+    Restore --> Modules{"UNLOAD_MODULES?"}
+    Modules -- "yes" --> FreeTracked["FreeLibrary tracked module-list DLLs"]
+    Modules -- "no" --> StopPipe
+    FreeTracked --> StopPipe["Stop IPC then free allocs"]
+    StopPipe --> Idle["Core down; DLL may still be mapped"]
+
+    Detach["DLL_PROCESS_DETACH without prior prepare"] --> DetachSafe["Detach-safe teardown: no IPC join"]
+    Idle --> FreeLib["Controller FreeLibrary"]
+    FreeLib --> DetachNoop["DETACH no-op when already shut down"]
 ```
 
-`CoreInit` and `CoreShutdown` are idempotent through an atomic flag. Initialization
-rolls back already-started subsystems when hooks, health, or IPC fails.
-`DLL_PROCESS_DETACH` skips explicit shutdown during process termination
-(`reserved != nullptr`), when Windows is already tearing down the process.
+`CoreInit` and `CoreShutdown` / `CoreShutdownEx` / `CoreShutdownPrepare` are
+idempotent through an atomic flag plus a bootstrap barrier so unload cannot race
+an incomplete init. Initialization rolls back already-started subsystems when
+hooks, health, or IPC fails. `DLL_PROCESS_DETACH` skips teardown during process
+termination (`reserved != nullptr`) and uses `CoreShutdownDetach` (no thread join)
+on explicit unload.
 
 ## IPC request path
 
@@ -243,7 +254,8 @@ the target. Handles and IDs are not durable across unload/reload.
 
 | State | Owner | Synchronization | Cleanup |
 |---|---|---|---|
-| Core initialized flag | [`core.cpp`](../src/core.cpp) | Atomic | `CoreShutdown` |
+| Core initialized flag | [`core.cpp`](../src/core.cpp) | Atomic + bootstrap CV | `CoreShutdown*` |
+| Tracked loaded modules | [`loaded_modules.cpp`](../src/loaded_modules.cpp) | Mutex | `UnloadTrackedExcept` / `OpShutdown` |
 | Pipe accept/client list | [`ipc/server.cpp`](../src/ipc/server.cpp) | Atomics + client mutex | `ipc::Stop`; active pipe I/O is cancelled |
 | IPC search ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
 | Search candidates and snapshots | [`memory.cpp`](../src/memory.cpp) | Owned by opaque session; no internal per-session mutex | `SearchClose` |

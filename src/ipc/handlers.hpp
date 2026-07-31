@@ -13,6 +13,8 @@ bool HandlePing(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r);
 bool HandleInjectDll(HANDLE pipe, proto::Reader& r);
 bool HandleUnloadDll(HANDLE pipe, proto::Reader& r);
+bool HandleShutdown(HANDLE pipe, proto::Reader& r);
+bool HandleTrackLoadedDll(HANDLE pipe, proto::Reader& r);
 bool HandleReadMemory(HANDLE pipe, proto::Reader& r);
 bool HandleWriteMemory(HANDLE pipe, proto::Reader& r);
 bool HandleEnumRegions(HANDLE pipe, proto::Reader& r);

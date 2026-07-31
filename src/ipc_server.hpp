@@ -8,6 +8,7 @@ namespace hdl {
 
 HdlStatus StartIpcServer();
 void StopIpcServer();
+void StopIpcServerNoJoin();
 bool IsIpcServerRunning();
 
 // Shared with client tool

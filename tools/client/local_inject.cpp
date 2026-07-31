@@ -3,8 +3,12 @@
 #include "inject.hpp"
 #include "inject/select.hpp"
 #include "log.hpp"
+#include "session_modules.hpp"
 
 #include "hdllib/pipe_name.h"
+#include "hdllib/hdllib.h"
+#include "pipe_client.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -439,6 +443,7 @@ int RunLocalInject(int argc, wchar_t** argv) {
     wprintf(L"Injected into pid %lu.\n", static_cast<unsigned long>(report_pid));
     PrintPipe(report_pid);
     wprintf(L"Module base: 0x%llX\n", static_cast<unsigned long long>(base));
+    hdlcli::RememberInjectedModule(report_pid, inject_dll, base);
     return 0;
 }
 
@@ -446,11 +451,14 @@ void PrintLocalUnloadUsage() {
     wprintf(LR"(hdlclient unload — FreeLibrary a DLL in a process (local, no pipe)
 
 Usage:
-  hdlclient unload <pid> <dll-path> [--reload]
+  hdlclient unload <pid> <dll-path> [--reload] [--modules]
   hdlclient reload <pid> <dll-path>
 
 Notes:
   Uses CreateRemoteThread(FreeLibrary) (or FreeLibrary in-process for pid 0/self).
+  For hdllib, OpShutdown is sent first (when the pipe is up) so hooks/patches/watches
+  are restored outside the loader lock before FreeLibrary.
+  --modules / HDL_SHUTDOWN_UNLOAD_MODULES also FreeLibrary tracked payload DLLs first.
   --reload / the reload subcommand loads the same path again after unload.
   Manual-mapped / stomped images without a module-list entry cannot be unloaded this way.
   To eject hdllib itself, prefer this local command over the pipe verb.
@@ -465,9 +473,12 @@ int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
     const uint32_t pid = static_cast<uint32_t>(_wtoi(argv[0]));
     const wchar_t* path = argv[1];
     int reload = reload_default;
+    uint32_t shutdown_flags = 0;
     for (int i = 2; i < argc; ++i) {
         if (_wcsicmp(argv[i], L"--reload") == 0) {
             reload = 1;
+        } else if (_wcsicmp(argv[i], L"--modules") == 0) {
+            shutdown_flags |= HDL_SHUTDOWN_UNLOAD_MODULES;
         } else if (_wcsicmp(argv[i], L"--help") == 0 || wcscmp(argv[i], L"/?") == 0) {
             PrintLocalUnloadUsage();
             return 0;
@@ -476,12 +487,28 @@ int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
     wchar_t full[MAX_PATH];
     GetFullPathNameW(path, MAX_PATH, full, nullptr);
 
+    if (shutdown_flags & HDL_SHUTDOWN_UNLOAD_MODULES) {
+        PipeClient client(pid);
+        if (client.Connect(2000)) {
+            for (const auto& m : hdlcli::ListInjectedModules(pid)) {
+                std::vector<uint8_t> req;
+                std::vector<uint8_t> resp;
+                hdl::proto::AppendPod(req, static_cast<uint32_t>(hdl::proto::OpTrackLoadedDll));
+                hdl::proto::AppendPod(req, m.base);
+                hdl::proto::AppendWString(req, m.path.c_str());
+                client.Request(req, resp);
+            }
+            client.Close();
+        }
+    }
+
     uint64_t base = 0;
-    const HdlStatus st = hdl::UnloadDll(pid, full, reload, &base);
+    const HdlStatus st = hdl::UnloadDll(pid, full, reload, shutdown_flags, &base);
     if (st != HDL_OK) {
         wprintf(L"Unload failed: %ls\n", StatusName(st));
         return 1;
     }
+    hdlcli::ClearInjectedModules(pid);
     if (reload) {
         wprintf(L"Reloaded into pid %lu at 0x%llX\n", static_cast<unsigned long>(pid),
                 static_cast<unsigned long long>(base));

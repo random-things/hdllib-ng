@@ -61,6 +61,7 @@ int CmdProbe(CmdCtx& ctx);
 int CmdScan(CmdCtx& ctx);
 int CmdInject(CmdCtx& ctx);
 int CmdUnload(CmdCtx& ctx);
+int CmdShutdown(CmdCtx& ctx);
 int CmdDiscoverCreate(CmdCtx& ctx);
 int CmdDiscoverClose(CmdCtx& ctx);
 int CmdDiscoverAdd(CmdCtx& ctx);
