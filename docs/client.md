@@ -1,6 +1,6 @@
 # hdlclient workflows
 
-How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, interactive REPL/TUI, `discover-*` sessions, and interest-store recipes. Full opcode / wire reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
+How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, interactive REPL/TUI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Full opcode / wire reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
 
 ## Modes
 
