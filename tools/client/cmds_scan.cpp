@@ -21,6 +21,15 @@ static int FailIpc(CmdCtx& ctx) {
     return 1;
 }
 
+static int FailBadResp(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+    } else {
+        wprintf(L"Bad response\n");
+    }
+    return 1;
+}
+
 static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
     if (ctx.json) {
         EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), hint);
@@ -222,7 +231,8 @@ bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
 
 /* Growable collector for search frames: total, count, u64[count] (no offset). */
 bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
-                         uint32_t* out_total, std::vector<uint64_t>* out_hits) {
+                         uint32_t* out_total, std::vector<uint64_t>* out_hits,
+                         bool* out_bad_resp) {
     using namespace hdl::proto;
     if (!out_st || !out_total || !out_hits) {
         return false;
@@ -230,11 +240,16 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
     out_hits->clear();
     *out_st = HDL_E_FAILED;
     *out_total = 0;
-    return client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+    if (out_bad_resp) {
+        *out_bad_resp = false;
+    }
+    bool bad_resp = false;
+    bool ok = client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
         Reader r(p, n);
         uint32_t total = 0;
         uint32_t count = 0;
         if (!r.TakePod(total) || !r.TakePod(count)) {
+            bad_resp = true;
             return false;
         }
         const size_t need = out_hits->size() + count;
@@ -248,6 +263,7 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t hit = 0;
             if (!r.TakePod(hit)) {
+                bad_resp = true;
                 return false;
             }
             out_hits->push_back(hit);
@@ -258,6 +274,10 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
         }
         return true;
     });
+    if (out_bad_resp) {
+        *out_bad_resp = bad_resp;
+    }
+    return ok;
 }
 
 void PrintHitList(const std::vector<uint64_t>& hits, uint32_t max_print) {
@@ -284,8 +304,9 @@ int PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
     int32_t st = 0;
     uint32_t total = 0;
     std::vector<uint64_t> hits;
-    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
-        return FailIpc(ctx);
+    bool bad_resp = false;
+    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+        return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
     if (ctx.json) {
         EmitHitsJson(ctx, st, session, true, total, hits);
@@ -389,8 +410,9 @@ int CmdScan(CmdCtx& ctx) {
         int32_t st = 0;
         uint32_t total = 0;
         std::vector<uint64_t> hits;
-        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
-            return FailIpc(ctx);
+        bool bad_resp = false;
+        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
             EmitHitsJson(ctx, st, 0, false, total, hits);
@@ -560,8 +582,9 @@ int CmdScan(CmdCtx& ctx) {
     int32_t st = 0;
     uint32_t total = 0;
     std::vector<uint64_t> hits;
-    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits)) {
-        return FailIpc(ctx);
+    bool bad_resp = false;
+    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+        return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
     if (ctx.json) {
         EmitHitsJson(ctx, st, session, true, total, hits);

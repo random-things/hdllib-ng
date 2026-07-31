@@ -315,7 +315,7 @@ int CmdXrefs(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t a = 0;
             if (!r.TakePod(a)) {
-                break;
+                return FailBadResp(ctx);
             }
             w.HexStr(a);
         }
@@ -328,7 +328,7 @@ int CmdXrefs(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         uint64_t a = 0;
         if (!r.TakePod(a)) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx\n", static_cast<unsigned long long>(a));
     }
@@ -388,7 +388,7 @@ int CmdPtrscan(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlPointerPath path{};
             if (!r.Take(&path, sizeof(path))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i == 0) {
                 hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
@@ -415,7 +415,7 @@ int CmdPtrscan(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
         if (!r.Take(&path, sizeof(path))) {
-            break;
+            return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
@@ -469,7 +469,7 @@ int CmdProbe(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlStructField f{};
             if (!r.Take(&f, sizeof(f))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("offset");
@@ -489,7 +489,7 @@ int CmdProbe(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlStructField f{};
         if (!r.Take(&f, sizeof(f))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  +0x%x kind=%u value=%016llx\n", f.offset, f.kind,
                 static_cast<unsigned long long>(f.value));

@@ -32,6 +32,15 @@ static int FailIpc(CmdCtx& ctx) {
     return 1;
 }
 
+static int FailBadResp(CmdCtx& ctx) {
+    if (ctx.json) {
+        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
+    } else {
+        wprintf(L"Bad response\n");
+    }
+    return 1;
+}
+
 static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
     if (ctx.json) {
         EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), hint);
@@ -41,13 +50,14 @@ static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
     return 1;
 }
 
-static void JsonWriteCandidates(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
+static bool JsonWriteCandidates(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
     w.Key("candidates");
     w.BeginArray();
     for (uint32_t i = 0; i < count; ++i) {
         HdlCandidate cand{};
         if (!r.Take(&cand, sizeof(cand))) {
-            break;
+            w.EndArray();
+            return false;
         }
         w.BeginObject();
         w.Key("id");
@@ -63,15 +73,17 @@ static void JsonWriteCandidates(JsonWriter& w, hdl::proto::Reader& r, uint32_t c
         w.EndObject();
     }
     w.EndArray();
+    return true;
 }
 
-static void JsonWriteHeatFields(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
+static bool JsonWriteHeatFields(JsonWriter& w, hdl::proto::Reader& r, uint32_t count) {
     w.Key("fields");
     w.BeginArray();
     for (uint32_t i = 0; i < count; ++i) {
         HdlHeatField hf{};
         if (!r.Take(&hf, sizeof(hf))) {
-            break;
+            w.EndArray();
+            return false;
         }
         w.BeginObject();
         w.Key("offset");
@@ -87,6 +99,7 @@ static void JsonWriteHeatFields(JsonWriter& w, hdl::proto::Reader& r, uint32_t c
         w.EndObject();
     }
     w.EndArray();
+    return true;
 }
 
 static std::string Narrow(const wchar_t* w) {
@@ -442,7 +455,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlPointerPath path{};
             if (!r.Take(&path, sizeof(path))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i == 0) {
                 hdlcli::RememberPath(ctx.controller, path,
@@ -464,7 +477,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
         if (!r.Take(&path, sizeof(path))) {
-            break;
+            return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
@@ -540,7 +553,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
         for (uint32_t i = 0; i < kept; ++i) {
             HdlPointerPath p{};
             if (!r.Take(&p, sizeof(p))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i == 0) {
                 hdlcli::RememberPath(ctx.controller, p, nullptr);
@@ -561,7 +574,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
     for (uint32_t i = 0; i < kept; ++i) {
         HdlPointerPath p{};
         if (!r.Take(&p, sizeof(p))) {
-            break;
+            return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, p, nullptr);
@@ -685,8 +698,10 @@ int CmdDiscoverScan(CmdCtx& ctx) {
         return 1;
     }
     std::vector<uint64_t> hits(got);
+    bool bad_resp = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (!r2.TakePod(hits[i])) {
+            bad_resp = true;
             break;
         }
     }
@@ -696,6 +711,10 @@ int CmdDiscoverScan(CmdCtx& ctx) {
     AppendPod(req, static_cast<uint32_t>(OpSearchClose));
     AppendPod(req, search_id);
     ctx.client.Request(req, resp);
+
+    if (bad_resp) {
+        return FailBadResp(ctx);
+    }
 
     uint32_t added = 0;
     struct ScanAddEntry {
@@ -771,15 +790,16 @@ static bool OpenOutWide(const wchar_t* path, std::ofstream* out) {
     return static_cast<bool>(*out);
 }
 
-static void PrintHeatFields(hdl::proto::Reader& r, uint32_t count) {
+static bool PrintHeatFields(hdl::proto::Reader& r, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlHeatField hf{};
         if (!r.Take(&hf, sizeof(hf))) {
-            break;
+            return false;
         }
         wprintf(L"  +0x%x changes=%u kind=%u size=%u value=%016llx\n", hf.offset, hf.changes,
                 hf.kind, hf.reserved, static_cast<unsigned long long>(hf.last_value));
     }
+    return true;
 }
 
 int CmdDiscoverMisc(CmdCtx& ctx) {
@@ -964,13 +984,17 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         if (ctx.json) {
             JsonWriter w;
             w.BeginObject();
-            JsonWriteHeatFields(w, r, count);
+            if (!JsonWriteHeatFields(w, r, count)) {
+                return FailBadResp(ctx);
+            }
             w.EndObject();
             EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
             return st == HDL_OK ? 0 : 1;
         }
         wprintf(L"status=%ls fields=%u\n", StatusName(st), count);
-        PrintHeatFields(r, count);
+        if (!PrintHeatFields(r, count)) {
+            return FailBadResp(ctx);
+        }
     } else if (ctx.cmd == L"discover-rank" || ctx.cmd == L"discover-cands") {
         uint32_t count = 0;
         r.TakePod(count);
@@ -979,7 +1003,9 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
             w.BeginObject();
             w.Key("count");
             w.Num(count);
-            JsonWriteCandidates(w, r, count);
+            if (!JsonWriteCandidates(w, r, count)) {
+                return FailBadResp(ctx);
+            }
             w.EndObject();
             EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
             return st == HDL_OK ? 0 : 1;
@@ -988,7 +1014,7 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlCandidate cand{};
             if (!r.Take(&cand, sizeof(cand))) {
-                break;
+                return FailBadResp(ctx);
             }
             wprintf(L"  id=%llu kind=%u conf=%u addr=%016llx tag=%hs\n",
                     static_cast<unsigned long long>(cand.id), cand.kind, cand.confidence,

@@ -117,11 +117,13 @@ int CmdModules(CmdCtx& ctx) {
         std::vector<HdlModuleInfo> all;
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
+        bool bad_resp = false;
         if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
                                               size_t n) {
                 Reader r(p, n);
                 uint32_t tot = 0, off = 0, count = 0;
                 if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
+                    bad_resp = true;
                     return false;
                 }
                 total = tot;
@@ -129,6 +131,7 @@ int CmdModules(CmdCtx& ctx) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlModuleInfo info{};
                     if (!r.Take(&info, sizeof(info))) {
+                        bad_resp = true;
                         return false;
                     }
                     all.push_back(info);
@@ -136,7 +139,7 @@ int CmdModules(CmdCtx& ctx) {
                 (void)flags;
                 return true;
             })) {
-            return FailIpc(ctx);
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
             JsonWriter w;
@@ -187,7 +190,7 @@ int CmdModules(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlModuleInfo info{};
             if (!r.Take(&info, sizeof(info))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("base");
@@ -207,7 +210,7 @@ int CmdModules(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlModuleInfo info{};
         if (!r.Take(&info, sizeof(info))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx  %8llx  %ls\n", static_cast<unsigned long long>(info.base),
                 static_cast<unsigned long long>(info.size), info.path);
@@ -235,10 +238,12 @@ int CmdRegions(CmdCtx& ctx) {
         std::vector<HdlRegionInfo> all;
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
+        bool bad_resp = false;
         if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t, const uint8_t* p, size_t n) {
                 Reader r(p, n);
                 uint32_t tot = 0, off = 0, count = 0;
                 if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
+                    bad_resp = true;
                     return false;
                 }
                 total = tot;
@@ -246,13 +251,14 @@ int CmdRegions(CmdCtx& ctx) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlRegionInfo info{};
                     if (!r.Take(&info, sizeof(info))) {
+                        bad_resp = true;
                         return false;
                     }
                     all.push_back(info);
                 }
                 return true;
             })) {
-            return FailIpc(ctx);
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
             JsonWriter w;
@@ -303,7 +309,7 @@ int CmdRegions(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlRegionInfo info{};
             if (!r.Take(&info, sizeof(info))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("base");
@@ -324,7 +330,7 @@ int CmdRegions(CmdCtx& ctx) {
     for (uint32_t i = 0; i < show; ++i) {
         HdlRegionInfo info{};
         if (!r.Take(&info, sizeof(info))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx  %8llx  prot=%08x\n", static_cast<unsigned long long>(info.base),
                 static_cast<unsigned long long>(info.size), info.protect);
@@ -355,10 +361,12 @@ int CmdThreads(CmdCtx& ctx) {
         std::vector<HdlThreadInfo> all;
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
+        bool bad_resp = false;
         if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t, const uint8_t* p, size_t n) {
                 Reader r(p, n);
                 uint32_t tot = 0, off = 0, count = 0;
                 if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
+                    bad_resp = true;
                     return false;
                 }
                 total = tot;
@@ -366,13 +374,14 @@ int CmdThreads(CmdCtx& ctx) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlThreadInfo info{};
                     if (!r.Take(&info, sizeof(info))) {
+                        bad_resp = true;
                         return false;
                     }
                     all.push_back(info);
                 }
                 return true;
             })) {
-            return FailIpc(ctx);
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
             JsonWriter w;
@@ -421,7 +430,7 @@ int CmdThreads(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlThreadInfo info{};
             if (!r.Take(&info, sizeof(info))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("tid");
@@ -443,7 +452,7 @@ int CmdThreads(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlThreadInfo info{};
         if (!r.Take(&info, sizeof(info))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  tid=%u start=%016llx user=%llu kernel=%llu\n", info.tid,
                 static_cast<unsigned long long>(info.start_address),
@@ -591,11 +600,13 @@ int CmdFingerprint(CmdCtx& ctx) {
         std::vector<HdlFingerprintTag> all;
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
+        bool bad_resp = false;
         if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
                                               size_t n) {
                 Reader r(p, n);
                 uint32_t tot = 0, off = 0, count = 0;
                 if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
+                    bad_resp = true;
                     return false;
                 }
                 total = tot;
@@ -603,6 +614,7 @@ int CmdFingerprint(CmdCtx& ctx) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlFingerprintTag tag{};
                     if (!r.Take(&tag, sizeof(tag))) {
+                        bad_resp = true;
                         return false;
                     }
                     all.push_back(tag);
@@ -610,7 +622,7 @@ int CmdFingerprint(CmdCtx& ctx) {
                 (void)flags;
                 return true;
             })) {
-            return FailIpc(ctx);
+            return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
             JsonWriter w;
@@ -669,7 +681,7 @@ int CmdFingerprint(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlFingerprintTag tag{};
             if (!r.Take(&tag, sizeof(tag))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("primary");
@@ -695,7 +707,7 @@ int CmdFingerprint(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlFingerprintTag tag{};
         if (!r.Take(&tag, sizeof(tag))) {
-            break;
+            return FailBadResp(ctx);
         }
         const wchar_t* prim = (tag.flags & HDL_FP_PRIMARY) ? L"*" : L" ";
         wprintf(L"  %ls %-10ls %-16hs  conf=%u  flags=0x%x  %hs\n", prim,
@@ -741,7 +753,7 @@ int CmdEvents(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlEvent ev{};
             if (!r.Take(&ev, sizeof(ev))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("type");
@@ -763,7 +775,7 @@ int CmdEvents(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlEvent ev{};
         if (!r.Take(&ev, sizeof(ev))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  type=%u code=0x%x ts=%llu addr=%016llx\n", ev.type, ev.code,
                 static_cast<unsigned long long>(ev.timestamp_ms),
@@ -877,7 +889,7 @@ int CmdRead(CmdCtx& ctx) {
         for (uint32_t i = 0; i < got; ++i) {
             uint8_t b = 0;
             if (!r.TakePod(b)) {
-                break;
+                return FailBadResp(ctx);
             }
             char tmp[3];
             snprintf(tmp, sizeof(tmp), "%02X", b);
@@ -899,7 +911,7 @@ int CmdRead(CmdCtx& ctx) {
     for (uint32_t i = 0; i < got; ++i) {
         uint8_t b = 0;
         if (!r.TakePod(b)) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"%02X%s", b, ((i + 1) % 16 == 0 || i + 1 == got) ? L"\n" : L" ");
     }

@@ -173,7 +173,7 @@ int CmdHookhits(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlHookHit hit{};
         if (!r.Take(&hit, sizeof(hit))) {
-            break;
+            return FailBadResp(ctx);
         }
         hits.push_back(hit);
     }

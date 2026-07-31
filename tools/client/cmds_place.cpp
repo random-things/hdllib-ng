@@ -113,6 +113,7 @@ int CmdCaves(CmdCtx& ctx) {
         w.Num(count);
         w.Key("caves");
         w.BeginArray();
+        for (uint32_t i = 0; i < count; ++i) {
             HdlCaveInfo c{};
             if (!r.Take(&c, sizeof(c))) {
                 return FailBadResp(ctx);
@@ -135,7 +136,7 @@ int CmdCaves(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlCaveInfo c{};
         if (!r.Take(&c, sizeof(c))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx size=%llu region=%016llx\n",
                 static_cast<unsigned long long>(c.addr),
@@ -284,7 +285,7 @@ int CmdDisasmBackend(CmdCtx& ctx) {
             for (uint32_t i = 0; i < count; ++i) {
                 HdlDisasmBackendInfo info{};
                 if (!r.Take(&info, sizeof(info))) {
-                    break;
+                return FailBadResp(ctx);
                 }
                 w.BeginObject();
                 w.Key("id");
@@ -302,7 +303,7 @@ int CmdDisasmBackend(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlDisasmBackendInfo info{};
             if (!r.Take(&info, sizeof(info))) {
-                break;
+            return FailBadResp(ctx);
             }
             wprintf(L"  id=%d name=%hs\n", info.id, info.name);
         }
@@ -386,7 +387,7 @@ int CmdDisasm(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlInsn insn{};
             if (!r.Take(&insn, sizeof(insn))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("addr");
@@ -406,7 +407,7 @@ int CmdDisasm(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlInsn insn{};
         if (!r.Take(&insn, sizeof(insn))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"%016llx  %-8hs %hs\n", static_cast<unsigned long long>(insn.addr), insn.mnemonic,
                 insn.op_str);
@@ -477,7 +478,7 @@ int CmdSections(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlSectionInfo s{};
             if (!r.Take(&s, sizeof(s))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("name");
@@ -497,7 +498,7 @@ int CmdSections(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlSectionInfo s{};
         if (!r.Take(&s, sizeof(s))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %-8hs va=%016llx vsize=%llx\n", s.name,
                 static_cast<unsigned long long>(s.va),
@@ -537,7 +538,7 @@ int CmdExports(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlExportInfo e{};
             if (!r.Take(&e, sizeof(e))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i >= show) {
                 continue;
@@ -560,7 +561,7 @@ int CmdExports(CmdCtx& ctx) {
     for (uint32_t i = 0; i < show; ++i) {
         HdlExportInfo e{};
         if (!r.Take(&e, sizeof(e))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %hs ord=%u va=%016llx\n", e.name, e.ordinal,
                 static_cast<unsigned long long>(e.va));
@@ -599,7 +600,7 @@ int CmdImports(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlImportInfo e{};
             if (!r.Take(&e, sizeof(e))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i >= show) {
                 continue;
@@ -622,7 +623,7 @@ int CmdImports(CmdCtx& ctx) {
     for (uint32_t i = 0; i < show; ++i) {
         HdlImportInfo e{};
         if (!r.Take(&e, sizeof(e))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %hs!%hs iat=%016llx\n", e.module, e.name[0] ? e.name : "(ord)",
                 static_cast<unsigned long long>(e.iat_va));
@@ -669,7 +670,7 @@ int CmdFunctions(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlFunctionInfo f{};
             if (!r.Take(&f, sizeof(f))) {
-                break;
+                return FailBadResp(ctx);
             }
             if (i >= 32) {
                 continue;
@@ -690,7 +691,7 @@ int CmdFunctions(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count && i < 32; ++i) {
         HdlFunctionInfo f{};
         if (!r.Take(&f, sizeof(f))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx conf=%u\n", static_cast<unsigned long long>(f.start), f.confidence);
     }
@@ -732,7 +733,7 @@ int CmdXrefsFrom(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlXrefEdge e{};
             if (!r.Take(&e, sizeof(e))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("from");
@@ -752,7 +753,7 @@ int CmdXrefsFrom(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlXrefEdge e{};
         if (!r.Take(&e, sizeof(e))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx -> %016llx kind=%u\n", static_cast<unsigned long long>(e.from),
                 static_cast<unsigned long long>(e.to), e.kind);
@@ -865,7 +866,7 @@ int CmdXrefsTo(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlXrefEdge e{};
             if (!r.Take(&e, sizeof(e))) {
-                break;
+                return FailBadResp(ctx);
             }
             w.BeginObject();
             w.Key("from");
@@ -885,7 +886,7 @@ int CmdXrefsTo(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlXrefEdge e{};
         if (!r.Take(&e, sizeof(e))) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  %016llx -> %016llx kind=%u\n", static_cast<unsigned long long>(e.from),
                 static_cast<unsigned long long>(e.to), e.kind);
@@ -953,7 +954,7 @@ int CmdVtable(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t slot = 0;
             if (!r.TakePod(slot)) {
-                break;
+                return FailBadResp(ctx);
             }
             w.HexStr(slot);
         }
@@ -966,7 +967,7 @@ int CmdVtable(CmdCtx& ctx) {
     for (uint32_t i = 0; i < count; ++i) {
         uint64_t slot = 0;
         if (!r.TakePod(slot)) {
-            break;
+            return FailBadResp(ctx);
         }
         wprintf(L"  [%u] %016llx\n", i, static_cast<unsigned long long>(slot));
     }
@@ -1060,7 +1061,7 @@ int CmdWatch(CmdCtx& ctx) {
             for (uint32_t i = 0; i < count; ++i) {
                 HdlWatchHit h{};
                 if (!r.Take(&h, sizeof(h))) {
-                    break;
+                    return FailBadResp(ctx);
                 }
                 w.BeginObject();
                 w.Key("handle");
@@ -1084,7 +1085,7 @@ int CmdWatch(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlWatchHit h{};
             if (!r.Take(&h, sizeof(h))) {
-                break;
+                return FailBadResp(ctx);
             }
             wprintf(L"  handle=%llu rip=%016llx accessed=%016llx size=%u tid=%u\n",
                     static_cast<unsigned long long>(h.watch_handle),
@@ -1117,7 +1118,7 @@ int CmdWatch(CmdCtx& ctx) {
             for (uint32_t i = 0; i < count; ++i) {
                 HdlWatchInfo wi{};
                 if (!r.Take(&wi, sizeof(wi))) {
-                    break;
+                    return FailBadResp(ctx);
                 }
                 w.BeginObject();
                 w.Key("handle");
@@ -1137,7 +1138,7 @@ int CmdWatch(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlWatchInfo w{};
             if (!r.Take(&w, sizeof(w))) {
-                break;
+                return FailBadResp(ctx);
             }
             wprintf(L"  handle=%llu addr=%016llx type=%u\n",
                     static_cast<unsigned long long>(w.handle),
@@ -1285,7 +1286,7 @@ int CmdPatch(CmdCtx& ctx) {
             for (uint32_t i = 0; i < count; ++i) {
                 HdlPatchInfo p{};
                 if (!r.Take(&p, sizeof(p))) {
-                    break;
+                    return FailBadResp(ctx);
                 }
                 w.BeginObject();
                 w.Key("handle");
@@ -1307,7 +1308,7 @@ int CmdPatch(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlPatchInfo p{};
             if (!r.Take(&p, sizeof(p))) {
-                break;
+                return FailBadResp(ctx);
             }
             wprintf(L"  handle=%llu addr=%016llx en=%u name=%hs\n",
                     static_cast<unsigned long long>(p.handle),

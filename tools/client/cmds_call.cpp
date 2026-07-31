@@ -143,7 +143,7 @@ int PrintCallReply(CmdCtx& ctx, const wchar_t* verb, const std::vector<uint8_t>&
             uint32_t idx = 0;
             uint32_t sz = 0;
             if (!r.TakePod(idx) || !r.TakePod(sz) || r.left < sz) {
-                break;
+                return FailBadResp(ctx);
             }
             BufDump bd;
             bd.idx = idx;
