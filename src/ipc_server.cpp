@@ -24,8 +24,8 @@ void StopIpcServer() {
     ipc::Stop();
 }
 
-void StopIpcServerNoJoin() {
-    ipc::StopNoJoin();
+void StopIpcServerNoJoin(void* keep_alive_pipe) {
+    ipc::StopNoJoin(keep_alive_pipe);
 }
 
 bool IsIpcServerRunning() {

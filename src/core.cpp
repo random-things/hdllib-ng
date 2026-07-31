@@ -141,8 +141,8 @@ void CoreShutdownPrepare(uint32_t flags) {
     BeginShutdown(flags);
 }
 
-void CoreShutdownFinish() {
-    StopIpcServerNoJoin();
+void CoreShutdownFinish(void* keep_alive_pipe) {
+    StopIpcServerNoJoin(keep_alive_pipe);
     FinishShutdownResources();
 }
 

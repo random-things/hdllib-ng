@@ -103,7 +103,11 @@ bool HandleShutdown(HANDLE pipe, proto::Reader& r) {
     CoreShutdownPrepare(flags);
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     const bool wrote = WriteFrame(pipe, resp);
-    CoreShutdownFinish();
+    if (wrote) {
+        FlushFileBuffers(pipe);
+    }
+    /* Keep this pipe connected until ServeClient returns so the client can read OK. */
+    CoreShutdownFinish(pipe);
     return wrote;
 }
 

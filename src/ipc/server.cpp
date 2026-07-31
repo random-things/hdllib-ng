@@ -146,16 +146,22 @@ void ThreadMain() {
         std::thread(ServeClient, pipe).detach();
     }
 
-    // Nudge active clients so ServeClient readers unblock.
+    /* Wake blocked readers first; wait for workers to finish before DisconnectNamedPipe
+     * so an already-written reply (OpShutdown) is not discarded mid-read. */
     {
         std::lock_guard<std::mutex> lock(g_clients_mu);
         for (HANDLE h : g_client_pipes) {
             CancelIoEx(h, nullptr);
-            DisconnectNamedPipe(h);
         }
     }
     for (int i = 0; i < 100 && g_client_count.load() > 0; ++i) {
         Sleep(20);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_clients_mu);
+        for (HANDLE h : g_client_pipes) {
+            DisconnectNamedPipe(h);
+        }
     }
 
     CloseAllSessions();
@@ -205,11 +211,15 @@ void Stop() {
     }
 }
 
-void StopNoJoin() {
+void StopNoJoin(void* keep_alive_pipe) {
+    const HANDLE keep = static_cast<HANDLE>(keep_alive_pipe);
     SignalStop();
     {
         std::lock_guard<std::mutex> lock(g_clients_mu);
         for (HANDLE h : g_client_pipes) {
+            if (h == keep) {
+                continue; /* Leave in-flight reply readable; ServeClient will close it. */
+            }
             CancelIoEx(h, nullptr);
             DisconnectNamedPipe(h);
         }
