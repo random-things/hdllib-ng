@@ -67,7 +67,7 @@ that holds production credentials to workflows which may execute untrusted code.
 1. Install current Visual Studio 2022 Build Tools with the Desktop development
    with C++ workload, CMake 3.20 or newer, Git, and PowerShell 5.1 or newer.
 2. Create a dedicated local runner account. Give it only the permissions the
-   tests need and write access to `C:\hdllib-ci`.
+   tests need and write access to the runner's work directory.
 3. In the repository's **Settings > Actions > Runners** page, add a self-hosted
    Windows x64 runner. The workflows use its default `self-hosted`, `Windows`,
    and `X64` labels.
@@ -87,6 +87,66 @@ that holds production credentials to workflows which may execute untrusted code.
    version 2.329.0 or later. The runner normally updates itself, but an offline
    runner can fall behind.
 
+### Convert an existing service runner
+
+Running `run.cmd` does not require registering a second runner. To preserve the
+existing GitHub registration while moving an installed runner out of session 0,
+open PowerShell as Administrator and run:
+
+```powershell
+$runnerRoot = 'C:\actions-runner'
+$runnerService = Get-CimInstance Win32_Service |
+    Where-Object {
+        $_.Name -like 'actions.runner.*' -and
+        $_.PathName -like "*$runnerRoot\bin\RunnerService.exe*"
+    }
+
+if ($null -eq $runnerService) {
+    throw "No GitHub Actions service found under $runnerRoot."
+}
+
+Stop-Service -Name $runnerService.Name
+Set-Service -Name $runnerService.Name -StartupType Disabled
+
+$runnerUser = "$env:USERDOMAIN\$env:USERNAME"
+$action = New-ScheduledTaskAction `
+    -Execute "$env:SystemRoot\System32\cmd.exe" `
+    -Argument "/d /s /c `"`"$runnerRoot\run.cmd`"`"" `
+    -WorkingDirectory $runnerRoot
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $runnerUser
+$principal = New-ScheduledTaskPrincipal `
+    -UserId $runnerUser `
+    -LogonType Interactive `
+    -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -MultipleInstances IgnoreNew
+
+Register-ScheduledTask `
+    -TaskName 'GitHub Actions Runner (interactive)' `
+    -Action $action `
+    -Trigger $trigger `
+    -Principal $principal `
+    -Settings $settings `
+    -Force
+Start-ScheduledTask -TaskName 'GitHub Actions Runner (interactive)'
+```
+
+Verify that `Runner.Listener.exe` moved to the signed-in user's nonzero session:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" |
+    Select-Object ProcessId, SessionId
+tools/ci/assert-interactive-desktop.ps1
+```
+
+The scheduled task starts automatically only after that user signs in. Keep the
+session signed in and unlocked for GUI runs; Windows services cannot be moved
+onto the interactive desktop by changing the workflow.
+
 The GUI smoke job runs after the hosted build on every trusted push to `main`.
 The GUI stress job runs nightly. Both can also be dispatched manually against
 `main`; pull-request code is never sent to this runner. If the PC is offline,
@@ -94,9 +154,13 @@ the job remains queued until the runner comes online or the workflow is
 cancelled. If you do not want GitHub orchestration for a particular run, use
 the `ci-gui-smoke` and `ci-gui-full` presets locally instead.
 
-The workflows place FetchContent checkouts in
-`C:\hdllib-ci\fetchcontent`. This directory is only a dependency download
-cache; repository build trees are cleaned by checkout on each job.
+The workflows place FetchContent checkouts under
+`$env:RUNNER_TEMP\hdllib-fetchcontent`. On the example installation at
+`C:\actions-runner`, this resolves beneath `C:\actions-runner\_work\_temp`.
+It is separate from the repository checkout because it contains only downloaded
+and built third-party dependencies. The `add-vs-cmake-to-path.ps1` helper finds
+Visual Studio's bundled CMake through `vswhere`; the runner account does not
+need a machine-wide CMake `PATH` entry.
 
 ## Security boundary
 

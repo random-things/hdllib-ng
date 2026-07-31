@@ -179,10 +179,13 @@ jobs:
       - name: Verify interactive desktop
         run: ./tools/ci/assert-interactive-desktop.ps1
 
+      - name: Add Visual Studio CMake to PATH
+        run: ./tools/ci/add-vs-cmake-to-path.ps1
+
       - name: Configure
         run: >-
           cmake --preset ci-gui
-          "-DFETCHCONTENT_BASE_DIR=C:\hdllib-ci\fetchcontent"
+          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
 
       - name: Build
         run: cmake --build --preset ci-gui --parallel
