@@ -4,13 +4,14 @@
  * Shared named-pipe path for hdllib IPC (DLL server, hdlclient, tests).
  * Default name avoids the literal "hdllib" substring. Override with env HDL_PIPE:
  *   - Exact local pipe path: \\.\pipe\<name>
- *   - Or a swprintf format that expands to such a path with one unsigned pid
- *     conversion (e.g. "\\\\.\\pipe\\mine_%lu"). Other format conversions are rejected.
- * Resulting paths are validated as local \\.\pipe\... before use with CreateFileW.
+ *   - Or the same with one literal pid placeholder: %lu, %u, %x, %X, %08X, %08x
+ *     (expanded by string replacement; never passed to swprintf as a format string).
+ * The final CreateFileW path is always rebuilt as \\.\pipe\ + sanitized name.
  */
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -36,16 +37,33 @@ static inline uint32_t HdlPipeNameHash(uint32_t pid) {
 }
 
 #ifdef _WIN32
+enum { HDL_PIPE_PREFIX_LEN = 9 }; /* \\.\pipe\ */
+
+static inline int HdlPipeNameCharsOk(const wchar_t* name) {
+    if (!name || !*name) {
+        return 0;
+    }
+    for (; *name; ++name) {
+        const wchar_t c = *name;
+        if (c < 0x20 || c == L'/' || c == L'\\' || c == L':' || c == L'"' || c == L'|' ||
+            c == L'<' || c == L'>' || c == L'*' || c == L'?' || c == L'%') {
+            return 0;
+        }
+        if (c == L'.' && name[1] == L'.') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* True if path is a local named pipe: \\.\pipe\<non-empty single-segment name>. */
 static inline int HdlIsLocalPipePath(const wchar_t* path) {
     static const wchar_t kPrefix[] = L"\\\\.\\pipe\\";
-    enum { kPrefixLen = 9 };
     size_t i;
-    const wchar_t* name;
     if (!path) {
         return 0;
     }
-    for (i = 0; i < kPrefixLen; ++i) {
+    for (i = 0; i < HDL_PIPE_PREFIX_LEN; ++i) {
         wchar_t a = path[i];
         wchar_t b = kPrefix[i];
         if (b == L'\\' || b == L'.') {
@@ -64,19 +82,8 @@ static inline int HdlIsLocalPipePath(const wchar_t* path) {
             return 0;
         }
     }
-    name = path + kPrefixLen;
-    if (!*name) {
+    if (!HdlPipeNameCharsOk(path + HDL_PIPE_PREFIX_LEN)) {
         return 0;
-    }
-    for (; *name; ++name) {
-        const wchar_t c = *name;
-        if (c < 0x20 || c == L'/' || c == L'\\' || c == L':' || c == L'"' || c == L'|' ||
-            c == L'<' || c == L'>' || c == L'*' || c == L'?') {
-            return 0;
-        }
-        if (c == L'.' && name[1] == L'.') {
-            return 0;
-        }
     }
     if (wcslen(path) >= 256) {
         return 0;
@@ -84,39 +91,107 @@ static inline int HdlIsLocalPipePath(const wchar_t* path) {
     return 1;
 }
 
-/* Allow at most one unsigned integer conversion for the pid; reject %n/%s/%p/etc. */
-static inline int HdlPipeFormatIsSafe(const wchar_t* fmt) {
-    int conversions = 0;
-    const wchar_t* p;
-    if (!fmt) {
-        return 0;
+/* Rebuild \\.\pipe\<name> from a sanitized name (literal prefix copy, no user format). */
+static inline int HdlWriteLocalPipePath(wchar_t* out, size_t out_cch, const wchar_t* pipe_name) {
+    static const wchar_t kPrefix[HDL_PIPE_PREFIX_LEN] = {L'\\', L'\\', L'.', L'\\', L'p',
+                                                         L'i',  L'p',  L'e', L'\\'};
+    const size_t nlen = pipe_name ? wcslen(pipe_name) : 0;
+    if (!out || !HdlPipeNameCharsOk(pipe_name) || nlen + HDL_PIPE_PREFIX_LEN + 1 > out_cch ||
+        nlen + HDL_PIPE_PREFIX_LEN >= 256) {
+        return 1;
     }
-    for (p = fmt; *p; ++p) {
+    memcpy(out, kPrefix, HDL_PIPE_PREFIX_LEN * sizeof(wchar_t));
+    memcpy(out + HDL_PIPE_PREFIX_LEN, pipe_name, (nlen + 1) * sizeof(wchar_t));
+    return 0;
+}
+
+/* Render pid with a string-literal format only. kind: 'u' decimal, 'x'/'X' hex, 8 => %08X. */
+static inline int HdlFormatPidToken(wchar_t* dst, size_t dst_cch, uint32_t pid, wchar_t kind,
+                                    int width8) {
+    if (kind == L'u') {
+        return swprintf_s(dst, dst_cch, L"%lu", (unsigned long)pid) < 0 ? 1 : 0;
+    }
+    if (kind == L'x') {
+        return width8 ? (swprintf_s(dst, dst_cch, L"%08x", (unsigned)pid) < 0 ? 1 : 0)
+                      : (swprintf_s(dst, dst_cch, L"%x", (unsigned)pid) < 0 ? 1 : 0);
+    }
+    if (kind == L'X') {
+        return width8 ? (swprintf_s(dst, dst_cch, L"%08X", (unsigned)pid) < 0 ? 1 : 0)
+                      : (swprintf_s(dst, dst_cch, L"%X", (unsigned)pid) < 0 ? 1 : 0);
+    }
+    return 1;
+}
+
+/*
+ * Expand at most one literal placeholder (%lu / %u / %x / %X / %08X / %08x) by
+ * concatenation. Never passes `tmpl` to swprintf as a format string.
+ */
+static inline int HdlExpandPipeTemplate(const wchar_t* tmpl, uint32_t pid, wchar_t* out,
+                                        size_t out_cch) {
+    const wchar_t* p;
+    const wchar_t* token = NULL;
+    size_t token_len = 0;
+    wchar_t kind = 0;
+    int width8 = 0;
+    wchar_t pid_txt[32];
+    wchar_t expanded[512];
+    size_t prefix_len;
+    size_t suffix_len;
+    size_t pid_len;
+    size_t total;
+
+    if (!tmpl || !out) {
+        return 1;
+    }
+    for (p = tmpl; *p; ++p) {
+        size_t len = 0;
+        wchar_t k = 0;
+        int w8 = 0;
         if (*p != L'%') {
             continue;
         }
-        ++p;
-        if (*p == L'%') {
-            continue;
+        if (wcsncmp(p, L"%08X", 4) == 0 || wcsncmp(p, L"%08x", 4) == 0) {
+            len = 4;
+            k = p[3];
+            w8 = 1;
+        } else if (wcsncmp(p, L"%lu", 3) == 0) {
+            len = 3;
+            k = L'u';
+        } else if (p[1] == L'u' || p[1] == L'x' || p[1] == L'X') {
+            len = 2;
+            k = p[1];
+        } else {
+            return 1; /* unknown / unsafe % sequence */
         }
-        if (*p == L'0') {
-            ++p;
+        if (token) {
+            return 1; /* more than one placeholder */
         }
-        while (*p >= L'0' && *p <= L'9') {
-            ++p;
-        }
-        if (*p == L'l' && (p[1] == L'u' || p[1] == L'x' || p[1] == L'X')) {
-            ++conversions;
-            ++p;
-            continue;
-        }
-        if (*p == L'u' || *p == L'x' || *p == L'X') {
-            ++conversions;
-            continue;
-        }
-        return 0;
+        token = p;
+        token_len = len;
+        kind = k;
+        width8 = w8;
+        p += len - 1;
     }
-    return conversions <= 1;
+    if (!token) {
+        return 1;
+    }
+    if (HdlFormatPidToken(pid_txt, sizeof(pid_txt) / sizeof(pid_txt[0]), pid, kind, width8) != 0) {
+        return 1;
+    }
+    prefix_len = (size_t)(token - tmpl);
+    suffix_len = wcslen(token + token_len);
+    pid_len = wcslen(pid_txt);
+    total = prefix_len + pid_len + suffix_len;
+    if (total + 1 > sizeof(expanded) / sizeof(expanded[0])) {
+        return 1;
+    }
+    memcpy(expanded, tmpl, prefix_len * sizeof(wchar_t));
+    memcpy(expanded + prefix_len, pid_txt, pid_len * sizeof(wchar_t));
+    memcpy(expanded + prefix_len + pid_len, token + token_len, (suffix_len + 1) * sizeof(wchar_t));
+    if (!HdlIsLocalPipePath(expanded)) {
+        return 1;
+    }
+    return HdlWriteLocalPipePath(out, out_cch, expanded + HDL_PIPE_PREFIX_LEN);
 }
 #endif
 
@@ -130,27 +205,24 @@ static inline int HdlFormatPipeName(uint32_t pid, wchar_t* out, size_t out_cch) 
     const DWORD n = GetEnvironmentVariableW(L"HDL_PIPE", env, 512);
     if (n > 0 && n < 512) {
         if (wcschr(env, L'%')) {
-            if (!HdlPipeFormatIsSafe(env) ||
-                swprintf_s(out, out_cch, env, (unsigned long)pid) < 0) {
-                return 1;
-            }
-        } else if (wcscpy_s(out, out_cch, env) != 0) {
+            return HdlExpandPipeTemplate(env, pid, out, out_cch);
+        }
+        if (!HdlIsLocalPipePath(env)) {
             return 1;
         }
-        if (!HdlIsLocalPipePath(out)) {
-            return 1;
-        }
-        return 0;
+        /* Copy only the validated pipe name; rebuild with a fixed prefix. */
+        return HdlWriteLocalPipePath(out, out_cch, env + HDL_PIPE_PREFIX_LEN);
     }
 #endif
     {
+        wchar_t name[32];
         const uint32_t tag = HdlPipeNameHash(pid);
-        /* Bland system-ish name; no "hdllib" token. */
-        if (swprintf_s(out, out_cch, L"\\\\.\\pipe\\RPCControl_%08X", (unsigned)tag) < 0) {
+        if (swprintf_s(name, sizeof(name) / sizeof(name[0]), L"RPCControl_%08X", (unsigned)tag) <
+            0) {
             return 1;
         }
+        return HdlWriteLocalPipePath(out, out_cch, name);
     }
-    return 0;
 }
 
 #ifdef __cplusplus

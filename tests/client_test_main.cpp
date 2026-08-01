@@ -1190,11 +1190,18 @@ int wmain(int argc, wchar_t** argv) {
         SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\%s");
         Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_format_string_hdl_pipe",
                "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\hdl_test_%n");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_percent_n_hdl_pipe", "");
         SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\hdl_test_%lu");
         Report(c,
                HdlFormatPipeName(0xABCDu, name, 128) == 0 &&
                    wcscmp(name, L"\\\\.\\pipe\\hdl_test_43981") == 0,
                false, "ipc/accept_safe_pipe_format", "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\ExactPipeName");
+        Report(c,
+               HdlFormatPipeName(1, name, 128) == 0 &&
+                   wcscmp(name, L"\\\\.\\pipe\\ExactPipeName") == 0,
+               false, "ipc/accept_exact_pipe_rebuild", "");
         if (prev_n > 0 && prev_n < 512) {
             SetEnvironmentVariableW(L"HDL_PIPE", prev);
         } else {

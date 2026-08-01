@@ -133,6 +133,6 @@ Inject methods: auto, create_remote_thread, nt_create_thread_ex, rtl_create_user
   kernel_callback_table, veh, set_win_event_hook, rtl_remote_call, special_user_apc,
   thread_pool, etw_callback
 
-Pipe: HdlFormatPipeName(pid) -> \\.\pipe\RPCControl_<hash> (override with HDL_PIPE)
+Pipe: HdlFormatPipeName(pid) -> \\.\pipe\RPCControl_<hash> (HDL_PIPE: \\.\pipe\... or %%lu/%%08X)
 )");
 }
