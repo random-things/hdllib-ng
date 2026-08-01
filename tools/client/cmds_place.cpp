@@ -1,7 +1,7 @@
 #include "cmd.hpp"
+#include "ipc/wire.hpp"
 #include "json_out.hpp"
 #include "protocol.hpp"
-#include "ipc/wire.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -139,8 +139,7 @@ int CmdCaves(CmdCtx& ctx) {
         if (!hdl::proto::TakeHdlCaveInfo(r, c)) {
             return FailBadResp(ctx);
         }
-        wprintf(L"  %016llx size=%llu region=%016llx\n",
-                static_cast<unsigned long long>(c.addr),
+        wprintf(L"  %016llx size=%llu region=%016llx\n", static_cast<unsigned long long>(c.addr),
                 static_cast<unsigned long long>(c.size),
                 static_cast<unsigned long long>(c.region_base));
     }
@@ -286,7 +285,7 @@ int CmdDisasmBackend(CmdCtx& ctx) {
             for (uint32_t i = 0; i < count; ++i) {
                 HdlDisasmBackendInfo info{};
                 if (!hdl::proto::TakeHdlDisasmBackendInfo(r, info)) {
-                return FailBadResp(ctx);
+                    return FailBadResp(ctx);
                 }
                 w.BeginObject();
                 w.Key("id");
@@ -304,7 +303,7 @@ int CmdDisasmBackend(CmdCtx& ctx) {
         for (uint32_t i = 0; i < count; ++i) {
             HdlDisasmBackendInfo info{};
             if (!hdl::proto::TakeHdlDisasmBackendInfo(r, info)) {
-            return FailBadResp(ctx);
+                return FailBadResp(ctx);
             }
             wprintf(L"  id=%d name=%hs\n", info.id, info.name);
         }
@@ -501,8 +500,7 @@ int CmdSections(CmdCtx& ctx) {
         if (!hdl::proto::TakeHdlSectionInfo(r, s)) {
             return FailBadResp(ctx);
         }
-        wprintf(L"  %-8hs va=%016llx vsize=%llx\n", s.name,
-                static_cast<unsigned long long>(s.va),
+        wprintf(L"  %-8hs va=%016llx vsize=%llx\n", s.name, static_cast<unsigned long long>(s.va),
                 static_cast<unsigned long long>(s.vsize));
     }
     PrintStatusHint(ctx.cmd, st);

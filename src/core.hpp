@@ -22,4 +22,4 @@ HdlStatus StartIpc();
 void StopIpc();
 bool IsIpcRunning();
 
-}  // namespace hdl
+} // namespace hdl

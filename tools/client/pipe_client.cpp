@@ -1,7 +1,7 @@
 #include "pipe_client.hpp"
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -50,7 +50,7 @@ bool ReadFrame(HANDLE pipe, std::vector<uint8_t>& resp) {
     return true;
 }
 
-}  // namespace
+} // namespace
 
 PipeClient::PipeClient(uint32_t pid) : pid_(pid) {}
 
@@ -60,6 +60,7 @@ PipeClient::~PipeClient() {
 
 bool PipeClient::Connect(DWORD timeout_ms) {
     Close();
+    negotiate_error_.clear();
     wchar_t name[128];
     if (HdlFormatPipeName(pid_, name, 128) != 0) {
         return false;
@@ -67,13 +68,21 @@ bool PipeClient::Connect(DWORD timeout_ms) {
 
     const DWORD start = GetTickCount();
     for (;;) {
-        HANDLE h = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        HANDLE h =
+            CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
             DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
             SetNamedPipeHandleState(h, &mode, nullptr, nullptr);
             handle_ = h;
             if (!Negotiate()) {
-                Close();
+                /* Preserve negotiate_error_ set by Negotiate(); do not call Close(). */
+                if (handle_) {
+                    CloseHandle(static_cast<HANDLE>(handle_));
+                    handle_ = nullptr;
+                }
+                proto_major_ = 0;
+                proto_minor_ = 0;
+                capabilities_ = 0;
                 return false;
             }
             return true;

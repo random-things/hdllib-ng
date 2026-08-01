@@ -104,10 +104,11 @@ inline bool TakeHdlRegionInfo(Reader& r, HdlRegionInfo& v) {
 inline void AppendHdlModuleInfo(std::vector<uint8_t>& buf, const HdlModuleInfo& v) {
     AppendPod(buf, v.base);
     AppendPod(buf, v.size);
-    AppendFixedWChars(buf, v.path, 260);
+    AppendFixedWChars(buf, v.path, sizeof(v.path) / sizeof(v.path[0]));
 }
 inline bool TakeHdlModuleInfo(Reader& r, HdlModuleInfo& v) {
-    return r.TakePod(v.base) && r.TakePod(v.size) && TakeFixedWChars(r, v.path, 260);
+    return r.TakePod(v.base) && r.TakePod(v.size) &&
+           TakeFixedWChars(r, v.path, sizeof(v.path) / sizeof(v.path[0]));
 }
 
 inline void AppendHdlPatternResult(std::vector<uint8_t>& buf, const HdlPatternResult& v) {
@@ -163,9 +164,10 @@ inline void AppendHdlCandidate(std::vector<uint8_t>& buf, const HdlCandidate& v)
     AppendFixedChars(buf, v.tag, sizeof(v.tag));
 }
 inline bool TakeHdlCandidate(Reader& r, HdlCandidate& v) {
-    return r.TakePod(v.id) && r.TakePod(v.kind) && r.TakePod(v.confidence) && r.TakePod(v.address) &&
-           r.TakePod(v.module_base) && r.TakePod(v.rva) && r.TakePod(v.field_offset) &&
-           r.TakePod(v.flags) && TakeFixedChars(r, v.tag, sizeof(v.tag));
+    return r.TakePod(v.id) && r.TakePod(v.kind) && r.TakePod(v.confidence) &&
+           r.TakePod(v.address) && r.TakePod(v.module_base) && r.TakePod(v.rva) &&
+           r.TakePod(v.field_offset) && r.TakePod(v.flags) &&
+           TakeFixedChars(r, v.tag, sizeof(v.tag));
 }
 
 inline void AppendHdlSynthesizedPattern(std::vector<uint8_t>& buf, const HdlSynthesizedPattern& v) {
@@ -432,8 +434,7 @@ inline bool TakeHdlWatchHit(Reader& r, HdlWatchHit& v) {
 }
 
 /* Generic dispatch used by WriteStreamed. */
-template <typename T>
-inline void AppendWire(std::vector<uint8_t>& buf, const T& v) {
+template <typename T> inline void AppendWire(std::vector<uint8_t>& buf, const T& v) {
     AppendBytes(buf, &v, sizeof(T));
 }
 
@@ -453,8 +454,7 @@ template <>
 inline void AppendWire<HdlThreadInfo>(std::vector<uint8_t>& buf, const HdlThreadInfo& v) {
     AppendHdlThreadInfo(buf, v);
 }
-template <>
-inline void AppendWire<HdlEvent>(std::vector<uint8_t>& buf, const HdlEvent& v) {
+template <> inline void AppendWire<HdlEvent>(std::vector<uint8_t>& buf, const HdlEvent& v) {
     AppendHdlEvent(buf, v);
 }
 template <>
@@ -462,12 +462,10 @@ inline void AppendWire<HdlDisasmBackendInfo>(std::vector<uint8_t>& buf,
                                              const HdlDisasmBackendInfo& v) {
     AppendHdlDisasmBackendInfo(buf, v);
 }
-template <>
-inline void AppendWire<HdlInsn>(std::vector<uint8_t>& buf, const HdlInsn& v) {
+template <> inline void AppendWire<HdlInsn>(std::vector<uint8_t>& buf, const HdlInsn& v) {
     AppendHdlInsn(buf, v);
 }
-template <>
-inline void AppendWire<HdlPatchInfo>(std::vector<uint8_t>& buf, const HdlPatchInfo& v) {
+template <> inline void AppendWire<HdlPatchInfo>(std::vector<uint8_t>& buf, const HdlPatchInfo& v) {
     AppendHdlPatchInfo(buf, v);
 }
 template <>
@@ -486,24 +484,19 @@ template <>
 inline void AppendWire<HdlFunctionInfo>(std::vector<uint8_t>& buf, const HdlFunctionInfo& v) {
     AppendHdlFunctionInfo(buf, v);
 }
-template <>
-inline void AppendWire<HdlXrefEdge>(std::vector<uint8_t>& buf, const HdlXrefEdge& v) {
+template <> inline void AppendWire<HdlXrefEdge>(std::vector<uint8_t>& buf, const HdlXrefEdge& v) {
     AppendHdlXrefEdge(buf, v);
 }
-template <>
-inline void AppendWire<HdlWatchInfo>(std::vector<uint8_t>& buf, const HdlWatchInfo& v) {
+template <> inline void AppendWire<HdlWatchInfo>(std::vector<uint8_t>& buf, const HdlWatchInfo& v) {
     AppendHdlWatchInfo(buf, v);
 }
-template <>
-inline void AppendWire<HdlWatchHit>(std::vector<uint8_t>& buf, const HdlWatchHit& v) {
+template <> inline void AppendWire<HdlWatchHit>(std::vector<uint8_t>& buf, const HdlWatchHit& v) {
     AppendHdlWatchHit(buf, v);
 }
-template <>
-inline void AppendWire<HdlCaveInfo>(std::vector<uint8_t>& buf, const HdlCaveInfo& v) {
+template <> inline void AppendWire<HdlCaveInfo>(std::vector<uint8_t>& buf, const HdlCaveInfo& v) {
     AppendHdlCaveInfo(buf, v);
 }
-template <>
-inline void AppendWire<HdlHookHit>(std::vector<uint8_t>& buf, const HdlHookHit& v) {
+template <> inline void AppendWire<HdlHookHit>(std::vector<uint8_t>& buf, const HdlHookHit& v) {
     AppendHdlHookHit(buf, v);
 }
 template <>
@@ -514,12 +507,10 @@ template <>
 inline void AppendWire<HdlStructField>(std::vector<uint8_t>& buf, const HdlStructField& v) {
     AppendHdlStructField(buf, v);
 }
-template <>
-inline void AppendWire<HdlHeatField>(std::vector<uint8_t>& buf, const HdlHeatField& v) {
+template <> inline void AppendWire<HdlHeatField>(std::vector<uint8_t>& buf, const HdlHeatField& v) {
     AppendHdlHeatField(buf, v);
 }
-template <>
-inline void AppendWire<HdlCandidate>(std::vector<uint8_t>& buf, const HdlCandidate& v) {
+template <> inline void AppendWire<HdlCandidate>(std::vector<uint8_t>& buf, const HdlCandidate& v) {
     AppendHdlCandidate(buf, v);
 }
 
@@ -529,5 +520,5 @@ inline void AppendWire<HdlCandidate>(std::vector<uint8_t>& buf, const HdlCandida
 #undef HDL_WIRE_POD5
 #undef HDL_WIRE_POD6
 
-}  // namespace proto
-}  // namespace hdl
+} // namespace proto
+} // namespace hdl

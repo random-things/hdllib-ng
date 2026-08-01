@@ -4,9 +4,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
-#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -392,7 +392,8 @@ int CmdPtrscan(CmdCtx& ctx) {
                 return FailBadResp(ctx);
             }
             if (i == 0) {
-                hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
+                hdlcli::RememberPath(ctx.controller, path,
+                                     module.empty() ? nullptr : module.c_str());
             }
             w.BeginObject();
             w.Key("base");
@@ -421,8 +422,8 @@ int CmdPtrscan(CmdCtx& ctx) {
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
         }
-        wprintf(L"  base=%016llx depth=%u offs=",
-                static_cast<unsigned long long>(path.static_base), path.depth);
+        wprintf(L"  base=%016llx depth=%u offs=", static_cast<unsigned long long>(path.static_base),
+                path.depth);
         for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
             wprintf(L"%s0x%x", d ? L"," : L"", path.offsets[d]);
         }

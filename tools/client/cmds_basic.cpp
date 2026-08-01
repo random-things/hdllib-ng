@@ -3,9 +3,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
-#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -221,27 +221,27 @@ int CmdModules(CmdCtx& ctx) {
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
         bool bad_resp = false;
-        if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
-                                              size_t n) {
-                Reader r(p, n);
-                uint32_t tot = 0, off = 0, count = 0;
-                if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
-                    bad_resp = true;
-                    return false;
-                }
-                total = tot;
-                final_st = st;
-                for (uint32_t i = 0; i < count; ++i) {
-                    HdlModuleInfo info{};
-                    if (!hdl::proto::TakeHdlModuleInfo(r, info)) {
+        if (!ctx.client.RequestStream(
+                req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+                    Reader r(p, n);
+                    uint32_t tot = 0, off = 0, count = 0;
+                    if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
                         bad_resp = true;
                         return false;
                     }
-                    all.push_back(info);
-                }
-                (void)flags;
-                return true;
-            })) {
+                    total = tot;
+                    final_st = st;
+                    for (uint32_t i = 0; i < count; ++i) {
+                        HdlModuleInfo info{};
+                        if (!hdl::proto::TakeHdlModuleInfo(r, info)) {
+                            bad_resp = true;
+                            return false;
+                        }
+                        all.push_back(info);
+                    }
+                    (void)flags;
+                    return true;
+                })) {
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
@@ -704,27 +704,27 @@ int CmdFingerprint(CmdCtx& ctx) {
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
         bool bad_resp = false;
-        if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
-                                              size_t n) {
-                Reader r(p, n);
-                uint32_t tot = 0, off = 0, count = 0;
-                if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
-                    bad_resp = true;
-                    return false;
-                }
-                total = tot;
-                final_st = st;
-                for (uint32_t i = 0; i < count; ++i) {
-                    HdlFingerprintTag tag{};
-                    if (!hdl::proto::TakeHdlFingerprintTag(r, tag)) {
+        if (!ctx.client.RequestStream(
+                req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+                    Reader r(p, n);
+                    uint32_t tot = 0, off = 0, count = 0;
+                    if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
                         bad_resp = true;
                         return false;
                     }
-                    all.push_back(tag);
-                }
-                (void)flags;
-                return true;
-            })) {
+                    total = tot;
+                    final_st = st;
+                    for (uint32_t i = 0; i < count; ++i) {
+                        HdlFingerprintTag tag{};
+                        if (!hdl::proto::TakeHdlFingerprintTag(r, tag)) {
+                            bad_resp = true;
+                            return false;
+                        }
+                        all.push_back(tag);
+                    }
+                    (void)flags;
+                    return true;
+                })) {
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
@@ -931,8 +931,8 @@ int CmdJob(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     const uint64_t id = _wcstoui64(ctx.argv[4], nullptr, 0);
-    AppendPod(req, static_cast<uint32_t>(wcscmp(ctx.argv[3], L"cancel") == 0 ? OpJobCancel
-                                                                            : OpJobClose));
+    AppendPod(
+        req, static_cast<uint32_t>(wcscmp(ctx.argv[3], L"cancel") == 0 ? OpJobCancel : OpJobClose));
     AppendPod(req, id);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);

@@ -3,9 +3,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
-#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>

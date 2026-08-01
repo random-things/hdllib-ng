@@ -1,7 +1,7 @@
 #include "domain_api.hpp"
-#include "protocol.hpp"
 #include "ipc/common.hpp"
 #include "ipc/wire.hpp"
+#include "protocol.hpp"
 #include "support.hpp"
 
 #include <atomic>
@@ -29,7 +29,7 @@ int DetourAdd(int a, int b) {
 }
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 __declspec(noinline) int AddNums(int a, int b) {
     // Pad so MinHook has room for a trampoline (small leafs often fail to hook).
@@ -88,7 +88,7 @@ struct RttiProbe {
     virtual int Tag() { return 42; }
 };
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 struct LocalDiscoverObj {
@@ -126,8 +126,9 @@ void RunLocalDiscoverTests(Counters& c) {
     HdlSynthesizedPattern pat{};
     st = hdl::DiscoverSynthesizePattern(session, cand_id, 0, 24, HDL_SEARCH_IMAGE, nullptr, &pat,
                                         nullptr);
-    Report(c, st == HDL_OK && pat.pattern[0] && pat.unique_hits >= 1 &&
-                   pat.resolved_addr == reinterpret_cast<uint64_t>(&LocalDiscoverLeaf),
+    Report(c,
+           st == HDL_OK && pat.pattern[0] && pat.unique_hits >= 1 &&
+               pat.resolved_addr == reinterpret_cast<uint64_t>(&LocalDiscoverLeaf),
            false, "HdlDiscoverSynthesizePattern", "");
 
     {
@@ -389,8 +390,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             hdl::SearchGetCount(session, &scount);
             Report(c, st == HDL_OK && scount == 2, false, "HdlSearchFirst i32 exact", "");
 
-            *v0 = 90;   // decreased
-            *v1 = 100;  // unchanged
+            *v0 = 90;  // decreased
+            *v1 = 100; // unchanged
             st = hdl::SearchNext(session, HDL_CMP_DECREASED, nullptr, 0, nullptr);
             hdl::SearchGetCount(session, &scount);
             Report(c, st == HDL_OK && scount == 1, false, "HdlSearchNext decreased", "");
@@ -398,8 +399,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             uint64_t typed_hits[4]{};
             uint32_t typed_n = 4;
             st = hdl::SearchGetHits(session, typed_hits, &typed_n);
-            Report(c, st == HDL_OK && typed_n == 1 &&
-                          typed_hits[0] == reinterpret_cast<uint64_t>(v0),
+            Report(c,
+                   st == HDL_OK && typed_n == 1 && typed_hits[0] == reinterpret_cast<uint64_t>(v0),
                    false, "HdlSearchGetHits after next", "");
 
             const int32_t next_val = 90;
@@ -451,7 +452,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             desc.size = sizeof(mis);
             desc.value_type = HDL_VALUE_I32;
             desc.cmp = HDL_CMP_EXACT;
-            desc.alignment = 0; /* natural = 4 */
+            desc.alignment = 0;   /* natural = 4 */
             desc.max_results = 0; /* unlimited */
             desc.value = &needle;
             desc.value_size = sizeof(needle);
@@ -520,7 +521,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         st = hdl::EnableHook(hook, 0);
         g_hook_hits = 0;
         const int sum2 = AddNums(2, 3);
-        Report(c, st == HDL_OK && g_hook_hits == 0 && sum2 == 5, false, "HdlEnableHook disable", "");
+        Report(c, st == HDL_OK && g_hook_hits == 0 && sum2 == 5, false, "HdlEnableHook disable",
+               "");
 
         st = hdl::EnableHook(hook, 1);
         const int sum3 = AddNums(2, 3);
@@ -594,16 +596,17 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                     tags[i].confidence >= 35) {
                     win32_ok = true;
                 }
-                if (tags[i].category == HDL_FP_CAT_APP && strcmp(tags[i].id, "subsystem_gui") == 0) {
+                if (tags[i].category == HDL_FP_CAT_APP &&
+                    strcmp(tags[i].id, "subsystem_gui") == 0) {
                     gui_app = true;
                 }
             }
-            Report(c, st == HDL_OK && d3d11_primary && d3d11_conf >= 75 && win32_ok && gui_app, false,
-                   "HdlClassifyFingerprint d3d11+win32", "");
+            Report(c, st == HDL_OK && d3d11_primary && d3d11_conf >= 75 && win32_ok && gui_app,
+                   false, "HdlClassifyFingerprint d3d11+win32", "");
         }
         {
             const wchar_t* mods[] = {L"coreclr.dll", L"hostfxr.dll", L"PresentationFramework.dll",
-                                    L"user32.dll", L"dxgi.dll"};
+                                     L"user32.dll", L"dxgi.dll"};
             uint32_t cn = 0;
             st = hdl::ClassifyFingerprintApi(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
                                              HDL_FP_SCAN_DEFAULT, nullptr, &cn);
@@ -681,8 +684,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         HdlCallResult cres{};
         st = hdl::CallExport(L"kernel32.dll", "GetCurrentProcessId", nullptr, 0, &cres, 2000,
                              nullptr);
-        Report(c, st == HDL_OK && cres.return_value == GetCurrentProcessId(), false, "HdlCallExport",
-               "");
+        Report(c, st == HDL_OK && cres.return_value == GetCurrentProcessId(), false,
+               "HdlCallExport", "");
 
         {
             HdlCallArg args[2]{};
@@ -1071,10 +1074,10 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             uint64_t root = reinterpret_cast<uint64_t>(&mid);
             int64_t offs[2] = {0, 0};
             uint64_t out = 0;
-            /* Follow: *root (+0) -> mid, *mid (+0) -> leaf address value? 
+            /* Follow: *root (+0) -> mid, *mid (+0) -> leaf address value?
                Our impl: cur=base; for each: cur=*cur; cur+=off
-               start root: *root=mid, +0 -> mid; *mid=leaf_addr? mid holds &leaf so *mid = leaf value address... 
-               mid = &leaf, *mid = leaf value 0xABCD, +0 = 0xABCD */
+               start root: *root=mid, +0 -> mid; *mid=leaf_addr? mid holds &leaf so *mid = leaf
+               value address... mid = &leaf, *mid = leaf value 0xABCD, +0 = 0xABCD */
             st = hdl::FollowPointers(root, offs, 2, &out);
             Report(c, st == HDL_OK && out == 0xABCD, false, "HdlFollowPointers", "");
         }
@@ -1125,7 +1128,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                 HdlCallResult r{};
                 st = hdl::Call(&desc, &r, nullptr);
                 DWORD ui_tid = GetWindowThreadProcessId(ui.hwnd, nullptr);
-                Report(c, st == HDL_OK && r.return_value == 0xC0FFEEull && g_main_call_tid == ui_tid,
+                Report(c,
+                       st == HDL_OK && r.return_value == 0xC0FFEEull && g_main_call_tid == ui_tid,
                        false, "HdlCall THREAD_MAIN", "");
                 PostMessageW(ui.hwnd, WM_QUIT, 0, 0);
                 WaitForSingleObject(ui.done, 5000);
@@ -1252,7 +1256,8 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     const HdlStatus ist = hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
                                            nullptr, nullptr, nullptr, &base);
     const bool verified =
-        ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
+        ist == HDL_OK &&
+        hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
     Report(c, verified, false, "locate inject", "");
     if (!verified) {
         return;
@@ -1284,10 +1289,12 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     uint64_t truth_obj = 0;
     uint64_t truth_str_ptr = 0;
     Report(c, resolve_export("HdlTestLocateFn", &truth_fn), false, "locate truth Fn export", "");
-    Report(c, resolve_export("HdlTestLocateString", &truth_str), false, "locate truth String export",
+    Report(c, resolve_export("HdlTestLocateString", &truth_str), false,
+           "locate truth String export", "");
+    Report(c, resolve_export("HdlTestLocateLeaf", &truth_leaf), false, "locate truth Leaf export",
            "");
-    Report(c, resolve_export("HdlTestLocateLeaf", &truth_leaf), false, "locate truth Leaf export", "");
-    Report(c, resolve_export("HdlTestLocateRoot", &truth_root), false, "locate truth Root export", "");
+    Report(c, resolve_export("HdlTestLocateRoot", &truth_root), false, "locate truth Root export",
+           "");
     Report(c, resolve_export("HdlTestLocateObj", &truth_obj), false, "locate truth Obj export", "");
     Report(c, resolve_export("HdlTestLocateStringPtr", &truth_str_ptr), false,
            "locate truth StringPtr export", "");
@@ -1434,8 +1441,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
                     if (!hdl::proto::TakeHdlStructField(r, f)) {
                         break;
                     }
-                    if (f.offset == 0 &&
-                        (f.kind == HDL_FIELD_VTABLE || f.kind == HDL_FIELD_PTR)) {
+                    if (f.offset == 0 && (f.kind == HDL_FIELD_VTABLE || f.kind == HDL_FIELD_PTR)) {
                         has_vt = true;
                     }
                 }
@@ -1458,8 +1464,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             Reader r(resp);
             int32_t st = 0;
             uint64_t out = 0;
-            const bool ok =
-                r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_str;
+            const bool ok = r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_str;
             Report(c, ok, false, "locate FollowPointers StringPtr", "");
         }
     }
@@ -1479,8 +1484,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             Reader r(resp);
             int32_t st = 0;
             uint64_t out = 0;
-            const bool ok =
-                r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_leaf;
+            const bool ok = r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_leaf;
             Report(c, ok, false, "locate FollowPointers Root to leaf", "");
         }
     }
@@ -1561,10 +1565,12 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     uint64_t truth_obj_b = 0;
     uint64_t truth_dyn_root = 0;
     Report(c, resolve_export("HdlTestDiscoverLeaf", &truth_leaf), false, "discover truth Leaf", "");
-    Report(c, resolve_export("HdlTestDiscoverAction", &truth_action), false, "discover truth Action",
+    Report(c, resolve_export("HdlTestDiscoverAction", &truth_action), false,
+           "discover truth Action", "");
+    Report(c, resolve_export("HdlTestDiscoverObjA", &truth_obj_a), false, "discover truth ObjA",
            "");
-    Report(c, resolve_export("HdlTestDiscoverObjA", &truth_obj_a), false, "discover truth ObjA", "");
-    Report(c, resolve_export("HdlTestDiscoverObjB", &truth_obj_b), false, "discover truth ObjB", "");
+    Report(c, resolve_export("HdlTestDiscoverObjB", &truth_obj_b), false, "discover truth ObjB",
+           "");
     Report(c, resolve_export("HdlTestDiscoverDynRoot", &truth_dyn_root), false,
            "discover truth DynRoot", "");
 
@@ -1588,8 +1594,8 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
                     if (!hdl::proto::TakeHdlFunctionInfo(r, fi)) {
                         break;
                     }
-                    if (truth_leaf && fi.start == truth_leaf &&
-                        (fi.flags & HDL_FN_EXPORT) && fi.confidence >= 50) {
+                    if (truth_leaf && fi.start == truth_leaf && (fi.flags & HDL_FN_EXPORT) &&
+                        fi.confidence >= 50) {
                         saw_export = true;
                     }
                 }
@@ -1948,7 +1954,8 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     }
 }
 
-void EvaluateInject(Counters& c, const char* case_name, Expect expect, HdlStatus st, bool verified) {
+void EvaluateInject(Counters& c, const char* case_name, Expect expect, HdlStatus st,
+                    bool verified) {
     char detail[128];
     snprintf(detail, sizeof(detail), "status=%s verified=%d", hdltest::StatusNameA(st),
              verified ? 1 : 0);
@@ -2278,9 +2285,8 @@ void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar
             continue;
         }
         uint64_t base = 0;
-        const HdlStatus ist =
-            InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
-                         nullptr, &base);
+        const HdlStatus ist = InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                           nullptr, nullptr, nullptr, &base);
         const bool injected =
             ist == HDL_OK &&
             hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
@@ -2317,12 +2323,11 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
     }
 
     uint64_t base = 0;
-    const HdlStatus ist =
-        InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
-                     nullptr, &base);
-    const bool injected = ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path,
-                                                                   HDL_INJECT_CREATE_REMOTE_THREAD,
-                                                                   base);
+    const HdlStatus ist = InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                       nullptr, nullptr, nullptr, &base);
+    const bool injected =
+        ist == HDL_OK &&
+        hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
     Report(c, injected, false, "clean_unload/inject", "");
     if (!injected) {
         target.Close();
@@ -2344,23 +2349,22 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
                     reinterpret_cast<const uint8_t*>(&op) + 4);
         treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&secondary),
                     reinterpret_cast<const uint8_t*>(&secondary) + 8);
-        const uint32_t nbytes =
-            static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
+        const uint32_t nbytes = static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
         treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&nbytes),
                     reinterpret_cast<const uint8_t*>(&nbytes) + 4);
         const uint8_t* p = reinterpret_cast<const uint8_t*>(sys);
         treq.insert(treq.end(), p, p + nbytes);
         int32_t track_st = HDL_E_FAILED;
-        Report(c, hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
-                                       &track_st) &&
-                       track_st == HDL_OK,
+        Report(c,
+               hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
+                                    &track_st) &&
+                   track_st == HDL_OK,
                false, "clean_unload/track secondary", "");
     }
 
     int32_t shut_st = HDL_E_FAILED;
-    const bool shut_ok =
-        hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
-        shut_st == HDL_OK;
+    const bool shut_ok = hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
+                         shut_st == HDL_OK;
     Report(c, shut_ok, false, "clean_unload/OpShutdown modules", "");
 
     Sleep(300);
@@ -2399,15 +2403,24 @@ void RunInjectMatrix(Counters& c, const wchar_t* target_exe, const wchar_t* dll_
     };
 
     static const int kMethods[] = {
-        HDL_INJECT_CREATE_REMOTE_THREAD,      HDL_INJECT_NT_CREATE_THREAD_EX,
-        HDL_INJECT_RTL_CREATE_USER_THREAD,    HDL_INJECT_QUEUE_USER_APC,
-        HDL_INJECT_SET_WINDOWS_HOOK_EX,       HDL_INJECT_THREAD_HIJACK,
-        HDL_INJECT_MANUAL_MAP,                HDL_INJECT_ATOM_BOMBING,
-        HDL_INJECT_MODULE_STOMP,              HDL_INJECT_SECTION_MAP,
-        HDL_INJECT_WINDOW_SUBCLASS,           HDL_INJECT_INSTRUMENTATION_CALLBACK,
-        HDL_INJECT_KERNEL_CALLBACK_TABLE,     HDL_INJECT_VEH,
-        HDL_INJECT_SET_WIN_EVENT_HOOK,        HDL_INJECT_RTL_REMOTE_CALL,
-        HDL_INJECT_SPECIAL_USER_APC,          HDL_INJECT_THREAD_POOL,
+        HDL_INJECT_CREATE_REMOTE_THREAD,
+        HDL_INJECT_NT_CREATE_THREAD_EX,
+        HDL_INJECT_RTL_CREATE_USER_THREAD,
+        HDL_INJECT_QUEUE_USER_APC,
+        HDL_INJECT_SET_WINDOWS_HOOK_EX,
+        HDL_INJECT_THREAD_HIJACK,
+        HDL_INJECT_MANUAL_MAP,
+        HDL_INJECT_ATOM_BOMBING,
+        HDL_INJECT_MODULE_STOMP,
+        HDL_INJECT_SECTION_MAP,
+        HDL_INJECT_WINDOW_SUBCLASS,
+        HDL_INJECT_INSTRUMENTATION_CALLBACK,
+        HDL_INJECT_KERNEL_CALLBACK_TABLE,
+        HDL_INJECT_VEH,
+        HDL_INJECT_SET_WIN_EVENT_HOOK,
+        HDL_INJECT_RTL_REMOTE_CALL,
+        HDL_INJECT_SPECIAL_USER_APC,
+        HDL_INJECT_THREAD_POOL,
         HDL_INJECT_ETW_CALLBACK,
     };
 
@@ -2456,8 +2469,8 @@ void RunInjectMatrix(Counters& c, const wchar_t* target_exe, const wchar_t* dll_
         fflush(stdout);
         uint64_t base = 0;
         uint32_t out_pid = 0;
-        const HdlStatus st =
-            InjectSealed(0, dll_path, HDL_INJECT_EARLY_BIRD_APC, target_exe, nullptr, &out_pid, &base);
+        const HdlStatus st = InjectSealed(0, dll_path, HDL_INJECT_EARLY_BIRD_APC, target_exe,
+                                          nullptr, &out_pid, &base);
         bool verified = false;
         if (st == HDL_OK && out_pid) {
             Sleep(500);
@@ -2481,7 +2494,7 @@ void PrintUsage() {
                  L"            [--api-only] [--inject-only] [--locate-only] [--lifecycle-only]\n");
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     std::wstring dll_path;

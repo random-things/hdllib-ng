@@ -85,7 +85,7 @@ void FinishShutdownResources() {
     disasm::RegistryShutdown();
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus CoreInit() {
     int expected = kUninit;
@@ -188,4 +188,4 @@ bool IsIpcRunning() {
     return IsIpcServerRunning();
 }
 
-}  // namespace hdl
+} // namespace hdl

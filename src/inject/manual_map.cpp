@@ -92,7 +92,8 @@ HMODULE LoadRemoteModule(HANDLE process, const char* mod_name) {
 
 FARPROC ResolveForwarder(HANDLE process, const char* forwarder, int depth);
 
-FARPROC GetRemoteProcAddress(HANDLE process, HMODULE remote_mod, const char* export_name, int depth = 0);
+FARPROC GetRemoteProcAddress(HANDLE process, HMODULE remote_mod, const char* export_name,
+                             int depth = 0);
 FARPROC GetRemoteProcByOrdinal(HANDLE process, HMODULE remote_mod, WORD ordinal, int depth = 0);
 
 FARPROC ResolveForwarder(HANDLE process, const char* forwarder, int depth) {
@@ -146,7 +147,8 @@ FARPROC FinishExportRva(HANDLE process, HMODULE remote_mod, const IMAGE_DATA_DIR
     return reinterpret_cast<FARPROC>(remote_bytes + func_rva);
 }
 
-FARPROC GetRemoteProcAddress(HANDLE process, HMODULE remote_mod, const char* export_name, int depth) {
+FARPROC GetRemoteProcAddress(HANDLE process, HMODULE remote_mod, const char* export_name,
+                             int depth) {
     if (depth > 8) {
         return nullptr;
     }
@@ -177,19 +179,16 @@ FARPROC GetRemoteProcAddress(HANDLE process, HMODULE remote_mod, const char* exp
     std::vector<uint32_t> names(exp.NumberOfNames);
     std::vector<uint16_t> ords(exp.NumberOfNames);
     std::vector<uint32_t> funcs(exp.NumberOfFunctions);
-    if (!names.empty() &&
-        !ReadRemote(process, remote_bytes + exp.AddressOfNames, names.data(),
-                    names.size() * sizeof(uint32_t))) {
+    if (!names.empty() && !ReadRemote(process, remote_bytes + exp.AddressOfNames, names.data(),
+                                      names.size() * sizeof(uint32_t))) {
         return nullptr;
     }
-    if (!ords.empty() &&
-        !ReadRemote(process, remote_bytes + exp.AddressOfNameOrdinals, ords.data(),
-                    ords.size() * sizeof(uint16_t))) {
+    if (!ords.empty() && !ReadRemote(process, remote_bytes + exp.AddressOfNameOrdinals, ords.data(),
+                                     ords.size() * sizeof(uint16_t))) {
         return nullptr;
     }
-    if (!funcs.empty() &&
-        !ReadRemote(process, remote_bytes + exp.AddressOfFunctions, funcs.data(),
-                    funcs.size() * sizeof(uint32_t))) {
+    if (!funcs.empty() && !ReadRemote(process, remote_bytes + exp.AddressOfFunctions, funcs.data(),
+                                      funcs.size() * sizeof(uint32_t))) {
         return nullptr;
     }
 
@@ -241,7 +240,8 @@ FARPROC GetRemoteProcByOrdinal(HANDLE process, HMODULE remote_mod, WORD ordinal,
         return nullptr;
     }
     uint32_t func_rva = 0;
-    if (!ReadRemote(process, remote_bytes + exp.AddressOfFunctions + (ordinal - exp.Base) * sizeof(uint32_t),
+    if (!ReadRemote(process,
+                    remote_bytes + exp.AddressOfFunctions + (ordinal - exp.Base) * sizeof(uint32_t),
                     &func_rva, sizeof(func_rva))) {
         return nullptr;
     }
@@ -259,9 +259,13 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const PeImageVie
     }
 
     uint32_t desc_rva = dir.VirtualAddress;
-    const uint32_t dir_end = dir.VirtualAddress + dir.Size;
+    const uint64_t dir_end = static_cast<uint64_t>(dir.VirtualAddress) + dir.Size;
+    if (dir.Size && dir_end > nt->OptionalHeader.SizeOfImage) {
+        return false;
+    }
     for (;;) {
-        if (desc_rva + sizeof(IMAGE_IMPORT_DESCRIPTOR) > dir_end && dir.Size) {
+        if (dir.Size &&
+            static_cast<uint64_t>(desc_rva) + sizeof(IMAGE_IMPORT_DESCRIPTOR) > dir_end) {
             return false;
         }
         const auto* import_desc = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(
@@ -298,8 +302,8 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const PeImageVie
             return false;
         }
 
-        uint32_t thunk_rva =
-            import_desc->OriginalFirstThunk ? import_desc->OriginalFirstThunk : import_desc->FirstThunk;
+        uint32_t thunk_rva = import_desc->OriginalFirstThunk ? import_desc->OriginalFirstThunk
+                                                             : import_desc->FirstThunk;
         uint32_t iat_rva = import_desc->FirstThunk;
         for (;; thunk_rva += sizeof(IMAGE_THUNK_DATA64), iat_rva += sizeof(IMAGE_THUNK_DATA64)) {
             if (!pe.VaInImage(iat_rva, sizeof(uint64_t))) {
@@ -317,8 +321,8 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const PeImageVie
 
             FARPROC func = nullptr;
             if (thunk.u1.Ordinal & IMAGE_ORDINAL_FLAG64) {
-                func = GetRemoteProcByOrdinal(process, remote_mod,
-                                              static_cast<WORD>(IMAGE_ORDINAL64(thunk.u1.Ordinal)), 0);
+                func = GetRemoteProcByOrdinal(
+                    process, remote_mod, static_cast<WORD>(IMAGE_ORDINAL64(thunk.u1.Ordinal)), 0);
             } else {
                 const uint32_t ibn_rva = static_cast<uint32_t>(thunk.u1.AddressOfData);
                 const auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
@@ -326,12 +330,14 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const PeImageVie
                 if (!ibn) {
                     return false;
                 }
-                func = GetRemoteProcAddress(process, remote_mod, reinterpret_cast<const char*>(ibn->Name), 0);
+                func = GetRemoteProcAddress(process, remote_mod,
+                                            reinterpret_cast<const char*>(ibn->Name), 0);
             }
             if (!func) {
                 if (thunk.u1.Ordinal & IMAGE_ORDINAL_FLAG64) {
                     HDL_LOG_ERROR("Manual map: failed to resolve ordinal %u from %s",
-                                  static_cast<unsigned>(IMAGE_ORDINAL64(thunk.u1.Ordinal)), mod_name);
+                                  static_cast<unsigned>(IMAGE_ORDINAL64(thunk.u1.Ordinal)),
+                                  mod_name);
                 } else {
                     HDL_LOG_ERROR("Manual map: failed to resolve import from %s", mod_name);
                 }
@@ -376,7 +382,7 @@ bool ApplyRelocationsRemote(uint8_t* remote_base, HANDLE process, const PeImageV
     });
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     HANDLE file = CreateFileW(dll_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
@@ -416,7 +422,8 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
         return HDL_E_NO_MEM;
     }
 
-    if (!WriteProcessMemory(process, remote, buf.data(), nt->OptionalHeader.SizeOfHeaders, nullptr)) {
+    if (!WriteProcessMemory(process, remote, buf.data(), nt->OptionalHeader.SizeOfHeaders,
+                            nullptr)) {
         VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         CloseHandle(process);
         return HDL_E_FAILED;
@@ -453,7 +460,8 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
         return HDL_E_FAILED;
     }
 
-    const uint64_t entry = reinterpret_cast<uint64_t>(remote) + nt->OptionalHeader.AddressOfEntryPoint;
+    const uint64_t entry =
+        reinterpret_cast<uint64_t>(remote) + nt->OptionalHeader.AddressOfEntryPoint;
 
 #if defined(_M_X64) || defined(__x86_64__)
 #pragma pack(push, 1)
@@ -484,9 +492,9 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
         return HDL_E_NO_MEM;
     }
 
-    HANDLE thread = ::CreateRemoteThread(
-        process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub.ptr), nullptr, 0,
-        nullptr);
+    HANDLE thread = ::CreateRemoteThread(process, nullptr, 0,
+                                         reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub.ptr),
+                                         nullptr, 0, nullptr);
     if (!thread) {
         VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         CloseHandle(process);
@@ -507,5 +515,5 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
     return HDL_OK;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

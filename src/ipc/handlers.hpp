@@ -123,5 +123,5 @@ bool HandleEnumWatches(HANDLE pipe, proto::Reader& r);
 bool HandleWatchRefresh(HANDLE pipe, proto::Reader& r);
 bool HandlePollWatchHits(HANDLE pipe, proto::Reader& r);
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

@@ -84,7 +84,7 @@ std::thread StartJobWatcher(const std::shared_ptr<Job>& job, volatile int* local
     });
 }
 
-}  // namespace
+} // namespace
 
 bool HandleResolveExport(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
@@ -130,10 +130,9 @@ bool HandleCallExport(HANDLE pipe, proto::Reader& r) {
     }
 
     HdlCallResult result{};
-    const HdlStatus st =
-        CallExport(module.empty() ? nullptr : module.c_str(), name.c_str(),
-                   arg_count ? args.data() : nullptr, arg_count, &result, timeout_ms,
-                   job ? &local_cancel : nullptr);
+    const HdlStatus st = CallExport(module.empty() ? nullptr : module.c_str(), name.c_str(),
+                                    arg_count ? args.data() : nullptr, arg_count, &result,
+                                    timeout_ms, job ? &local_cancel : nullptr);
 
     if (job) {
         local_cancel = 1;
@@ -258,8 +257,7 @@ bool HandleFollowPointers(HANDLE pipe, proto::Reader& r) {
         }
     }
     uint64_t out = 0;
-    const HdlStatus st =
-        FollowPointers(base, count ? offsets.data() : nullptr, count, &out);
+    const HdlStatus st = FollowPointers(base, count ? offsets.data() : nullptr, count, &out);
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, out);
     return WriteFrame(pipe, resp);
@@ -291,8 +289,7 @@ bool HandleCallVtable(HANDLE pipe, proto::Reader& r) {
     uint32_t timeout_ms = 0;
     uint64_t job_id = 0;
     if (!r.TakePod(obj) || !r.TakePod(index) || !r.TakePod(arg_count) || !r.TakePod(prepend_this) ||
-        !r.TakePod(thread_mode) || !r.TakePod(timeout_ms) || !r.TakePod(job_id) ||
-        arg_count > 16) {
+        !r.TakePod(thread_mode) || !r.TakePod(timeout_ms) || !r.TakePod(job_id) || arg_count > 16) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
@@ -322,5 +319,5 @@ bool HandleCallVtable(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

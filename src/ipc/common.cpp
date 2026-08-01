@@ -41,7 +41,7 @@ void CloseDiscoverHolder(const std::shared_ptr<DiscoverSessionHolder>& holder) {
     }
 }
 
-}  // namespace
+} // namespace
 
 bool WriteFrame(HANDLE pipe, const std::vector<uint8_t>& resp) {
     return WriteFrameBytes(pipe, resp.data(), static_cast<uint32_t>(resp.size()));
@@ -162,5 +162,5 @@ void CloseAllDiscoverSessions() {
     }
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

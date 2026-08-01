@@ -11,7 +11,7 @@ bool Fits(size_t size, size_t offset, size_t need) {
     return need <= size && offset <= size - need;
 }
 
-}  // namespace
+} // namespace
 
 bool PeImageView::TryOpen(std::span<const uint8_t> file, PeImageView* out) {
     if (!out || file.size() < sizeof(IMAGE_DOS_HEADER) || file.size() > kMaxImageBytes) {
@@ -36,8 +36,8 @@ bool PeImageView::TryOpen(std::span<const uint8_t> file, PeImageView* out) {
     if (nsec == 0 || nsec > kMaxSections) {
         return false;
     }
-    const size_t sec_off = nt_off + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) +
-                           nt->FileHeader.SizeOfOptionalHeader;
+    const size_t sec_off =
+        nt_off + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt->FileHeader.SizeOfOptionalHeader;
     const size_t sec_bytes = static_cast<size_t>(nsec) * sizeof(IMAGE_SECTION_HEADER);
     if (!Fits(file.size(), sec_off, sec_bytes)) {
         return false;
@@ -59,14 +59,12 @@ bool PeImageView::TryOpen(std::span<const uint8_t> file, PeImageView* out) {
         if (sec->SizeOfRawData == 0) {
             continue;
         }
-        const uint64_t end =
-            static_cast<uint64_t>(sec->PointerToRawData) + sec->SizeOfRawData;
+        const uint64_t end = static_cast<uint64_t>(sec->PointerToRawData) + sec->SizeOfRawData;
         if (end > file.size()) {
             return false;
         }
-        const uint64_t va_end =
-            static_cast<uint64_t>(sec->VirtualAddress) +
-            (std::max)(sec->Misc.VirtualSize, sec->SizeOfRawData);
+        const uint64_t va_end = static_cast<uint64_t>(sec->VirtualAddress) +
+                                (std::max)(sec->Misc.VirtualSize, sec->SizeOfRawData);
         if (va_end > size_of_image) {
             return false;
         }
@@ -85,6 +83,9 @@ const IMAGE_DOS_HEADER* PeImageView::dos() const {
 }
 
 const IMAGE_NT_HEADERS64* PeImageView::nt() const {
+    if (!data_ || !ContainsFileRange(nt_offset_, sizeof(IMAGE_NT_HEADERS64))) {
+        return nullptr;
+    }
     return reinterpret_cast<const IMAGE_NT_HEADERS64*>(data_ + nt_offset_);
 }
 
@@ -94,6 +95,9 @@ uint16_t PeImageView::number_of_sections() const {
 
 const IMAGE_SECTION_HEADER* PeImageView::section(uint16_t index) const {
     if (index >= section_count_) {
+        return nullptr;
+    }
+    if (!data_ || !ContainsFileRange(nt_offset_, sizeof(IMAGE_NT_HEADERS64))) {
         return nullptr;
     }
     return reinterpret_cast<const IMAGE_SECTION_HEADER*>(data_ + sections_offset_) + index;
@@ -148,5 +152,5 @@ const uint8_t* PeImageView::SliceRva(uint32_t rva, size_t need) const {
     return data_ + off;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

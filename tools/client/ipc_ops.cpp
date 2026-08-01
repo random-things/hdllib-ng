@@ -1,7 +1,7 @@
 #include "ipc_ops.hpp"
 
-#include "protocol.hpp"
 #include "ipc/wire.hpp"
+#include "protocol.hpp"
 #include "util.hpp"
 
 #include <cstring>
@@ -19,7 +19,7 @@ IpcStatus TakeStatus(const std::vector<uint8_t>&, Reader* r) {
     return s;
 }
 
-}  // namespace
+} // namespace
 
 IpcStatus Ping(PipeClient& c, uint32_t* out_pid) {
     std::vector<uint8_t> req, resp;
@@ -563,7 +563,8 @@ IpcStatus WatchHw(PipeClient& c, uint64_t addr, uint32_t size, uint32_t access, 
     return s;
 }
 
-IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode, uint64_t* out_handle) {
+IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode,
+                    uint64_t* out_handle) {
     std::vector<uint8_t> req, resp;
     AppendPod(req, static_cast<uint32_t>(OpWatchPage));
     AppendPod(req, addr);
@@ -593,7 +594,8 @@ IpcStatus Unwatch(PipeClient& c, uint64_t handle) {
     return TakeStatus(resp, &r);
 }
 
-IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name, uint64_t* out_addr) {
+IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name,
+                        uint64_t* out_addr) {
     std::vector<uint8_t> req, resp;
     AppendPod(req, static_cast<uint32_t>(OpResolveExport));
     AppendWString(req, module ? module : L"");
@@ -651,4 +653,4 @@ IpcStatus Fingerprint(PipeClient& c, uint32_t scan_flags, std::vector<HdlFingerp
     return s;
 }
 
-}  // namespace hdlcli
+} // namespace hdlcli

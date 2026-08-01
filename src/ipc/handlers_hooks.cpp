@@ -55,8 +55,8 @@ bool HandleEnableHook(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    AppendPod(resp, static_cast<int32_t>(
-                        EnableHook(reinterpret_cast<HdlHookHandle>(handle), enable)));
+    AppendPod(resp,
+              static_cast<int32_t>(EnableHook(reinterpret_cast<HdlHookHandle>(handle), enable)));
     return WriteFrame(pipe, resp);
 }
 
@@ -90,7 +90,8 @@ bool HandlePollHookHits(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlHookHit(resp, hits[_i]);
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlHookHit(resp, hits[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -108,13 +109,12 @@ bool HandleHookImport(HANDLE pipe, proto::Reader& r) {
         return WriteFrame(pipe, resp);
     }
     HdlHookHandle handle = nullptr;
-    const HdlStatus st =
-        HookImport(module.empty() ? nullptr : module.c_str(), dll.c_str(), import_name.c_str(),
-                   arg_count, &handle);
+    const HdlStatus st = HookImport(module.empty() ? nullptr : module.c_str(), dll.c_str(),
+                                    import_name.c_str(), arg_count, &handle);
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, reinterpret_cast<uint64_t>(handle));
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

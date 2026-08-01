@@ -3,9 +3,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
-#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -50,7 +50,7 @@ static int FailBadArg(CmdCtx& ctx, const wchar_t* arg) {
 }
 
 bool EncodeCallArg(const wchar_t* s, int32_t* kind, uint32_t* size, uint64_t* u64,
-                          std::vector<uint8_t>* blob) {
+                   std::vector<uint8_t>* blob) {
     if (!s || !kind || !size || !u64 || !blob) {
         return false;
     }
@@ -113,7 +113,7 @@ bool EncodeCallArg(const wchar_t* s, int32_t* kind, uint32_t* size, uint64_t* u6
 }
 
 void AppendCallArg(std::vector<uint8_t>& req, int32_t kind, uint32_t size, uint64_t u64,
-                          const std::vector<uint8_t>& blob) {
+                   const std::vector<uint8_t>& blob) {
     using namespace hdl::proto;
     AppendPod(req, kind);
     AppendPod(req, size);
@@ -351,8 +351,8 @@ int CmdVcall(CmdCtx& ctx) {
     AppendPod(req, index);
     AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
     AppendPod(req, prepend_this);
-    AppendPod(req, static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN
-                                                     : HDL_CALL_THREAD_WORKER));
+    AppendPod(req,
+              static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN : HDL_CALL_THREAD_WORKER));
     AppendPod(req, timeout_ms);
     AppendPod(req, job_id);
     for (const auto& t : arg_texts) {

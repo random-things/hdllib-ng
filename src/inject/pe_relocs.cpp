@@ -3,9 +3,8 @@
 namespace hdl {
 namespace inject {
 
-bool WalkBaseRelocDirectory(
-    const PeImageView& pe,
-    const std::function<bool(uint32_t rva, uint16_t type)>& on_entry) {
+bool WalkBaseRelocDirectory(const PeImageView& pe,
+                            const std::function<bool(uint32_t rva, uint16_t type)>& on_entry) {
     if (!on_entry) {
         return false;
     }
@@ -29,8 +28,7 @@ bool WalkBaseRelocDirectory(
         if (!pe.SliceRva(dir.VirtualAddress + offset, block->SizeOfBlock)) {
             return false;
         }
-        const DWORD count =
-            (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
+        const DWORD count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
         const auto* entries = reinterpret_cast<const uint16_t*>(block + 1);
         for (DWORD i = 0; i < count; ++i) {
             const uint16_t type = entries[i] >> 12;
@@ -68,5 +66,5 @@ bool ApplyRelocations(uint8_t* image, size_t image_bytes, const PeImageView& pe,
     });
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

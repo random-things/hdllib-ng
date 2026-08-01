@@ -48,7 +48,8 @@ std::shared_ptr<DiscoverSessionHolder> TakeDiscoverSession(uint64_t id);
 void CloseAllDiscoverSessions();
 
 // Chunked reply: status, flags(MORE), total, offset, count, items[count].
-// `stream_count` items are written; `total` is the reported collection size (may be >= stream_count).
+// `stream_count` items are written; `total` is the reported collection size (may be >=
+// stream_count).
 template <typename T>
 bool WriteStreamed(HANDLE pipe, HdlStatus st, const T* items, uint32_t total, uint32_t stream_count,
                    uint32_t chunk) {
@@ -102,7 +103,7 @@ inline bool WriteSearchStreamError(HANDLE pipe, HdlStatus st) {
 }
 
 inline bool WriteSearchHitsStreamed(HANDLE pipe, HdlStatus st, const uint64_t* items,
-                                   uint32_t total, uint32_t stream_count, uint32_t chunk) {
+                                    uint32_t total, uint32_t stream_count, uint32_t chunk) {
     using namespace proto;
     if (stream_count == 0 || !items) {
         return WriteSearchStreamError(pipe, st);
@@ -129,9 +130,7 @@ struct SearchHitStreamer {
     uint32_t emitted = 0;
     bool failed = false;
 
-    explicit SearchHitStreamer(HANDLE p) : pipe(p) {
-        buf.reserve(kSearchStreamCap);
-    }
+    explicit SearchHitStreamer(HANDLE p) : pipe(p) { buf.reserve(kSearchStreamCap); }
 
     static HdlStatus OnHitThunk(uint64_t address, void* user) {
         return static_cast<SearchHitStreamer*>(user)->OnHit(address);
@@ -193,5 +192,5 @@ struct SearchHitStreamer {
     }
 };
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

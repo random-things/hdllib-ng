@@ -113,10 +113,9 @@ bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
     }
     uint64_t base = 0;
     uint32_t out_pid = 0;
-    const HdlStatus st = InjectDllEx(pid, path.c_str(), static_cast<int>(method),
-                                     exe_path.empty() ? nullptr : exe_path.c_str(),
-                                     hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid,
-                                     &base);
+    const HdlStatus st = InjectDllEx(
+        pid, path.c_str(), static_cast<int>(method), exe_path.empty() ? nullptr : exe_path.c_str(),
+        hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid, &base);
     if (st == HDL_OK && base) {
         const DWORD self = GetCurrentProcessId();
         const uint32_t effective = out_pid ? out_pid : (pid ? pid : self);
@@ -244,7 +243,8 @@ bool HandleEnumRegions(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlRegionInfo(resp, regions[_i]);
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlRegionInfo(resp, regions[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -271,7 +271,8 @@ bool HandleEnumModules(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlModuleInfo(resp, modules[_i]);
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlModuleInfo(resp, modules[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -308,7 +309,8 @@ bool HandleFingerprint(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlFingerprintTag(resp, tags[_i]);
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlFingerprintTag(resp, tags[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -390,7 +392,8 @@ bool HandleEnumThreads(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlThreadInfo(resp, threads[_i]);
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlThreadInfo(resp, threads[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -412,10 +415,11 @@ bool HandlePollEvents(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     AppendPod(resp, got);
     if (got) {
-        for (uint32_t _i = 0; _i < got; ++_i) proto::AppendHdlEvent(resp, events[_i]);
+        for (uint32_t _i = 0; _i < got; ++_i)
+            proto::AppendHdlEvent(resp, events[_i]);
     }
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

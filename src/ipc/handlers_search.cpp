@@ -39,7 +39,7 @@ bool HandleSearchMemory(HANDLE pipe, proto::Reader& r) {
         desc.size = size;
         desc.value_type = HDL_VALUE_BYTES;
         desc.cmp = HDL_CMP_EXACT;
-        desc.alignment = 1; /* AOB is always byte-unaligned */
+        desc.alignment = 1;          /* AOB is always byte-unaligned */
         desc.max_results = max_hits; /* 0 = unlimited */
         desc.value = pattern.c_str();
         desc.value_size = 0;
@@ -279,5 +279,5 @@ bool HandleSearchGetHits(HANDLE pipe, proto::Reader& r) {
     return WriteSearchHitsStreamed(pipe, st, all_hits.data(), total, got, kSearchStreamCap);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

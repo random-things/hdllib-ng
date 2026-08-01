@@ -230,5 +230,5 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
     }
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

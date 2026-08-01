@@ -149,7 +149,7 @@ inline uint32_t DefaultCapabilityBits() {
 /* Optional request trailer / streaming response flags. */
 enum : uint32_t {
     HDL_IPC_REQ_STREAM = 1u,
-    HDL_IPC_MORE       = 1u,
+    HDL_IPC_MORE = 1u,
 };
 
 inline void AppendBytes(std::vector<uint8_t>& buf, const void* data, size_t n) {
@@ -157,8 +157,7 @@ inline void AppendBytes(std::vector<uint8_t>& buf, const void* data, size_t n) {
     buf.insert(buf.end(), p, p + n);
 }
 
-template <typename T>
-inline void AppendPod(std::vector<uint8_t>& buf, const T& v) {
+template <typename T> inline void AppendPod(std::vector<uint8_t>& buf, const T& v) {
     AppendBytes(buf, &v, sizeof(T));
 }
 
@@ -195,10 +194,7 @@ struct Reader {
         return true;
     }
 
-    template <typename T>
-    bool TakePod(T& out) {
-        return Take(&out, sizeof(T));
-    }
+    template <typename T> bool TakePod(T& out) { return Take(&out, sizeof(T)); }
 
     bool TakeWString(std::wstring& out) {
         uint32_t n = 0;
@@ -226,5 +222,5 @@ struct Reader {
     }
 };
 
-}  // namespace proto
-}  // namespace hdl
+} // namespace proto
+} // namespace hdl

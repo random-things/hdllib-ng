@@ -228,7 +228,7 @@ void TestWireRoundTrip() {
     Expect(HDL_IPC_PROTO_MAJOR != 99, "wire/forced_mismatch_constant");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     TestMalformedPe();

@@ -154,15 +154,9 @@ void ThreadMain() {
         std::vector<uint8_t> sd_storage;
         SECURITY_ATTRIBUTES* sa = BuildPipeSa(sd_storage);
 
-        HANDLE pipe = CreateNamedPipeW(
-            name.c_str(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            PIPE_UNLIMITED_INSTANCES,
-            64 * 1024,
-            64 * 1024,
-            0,
-            sa);
+        HANDLE pipe = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                       PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, sa);
 
         if (pipe == INVALID_HANDLE_VALUE) {
             HDL_LOG_ERROR("CreateNamedPipeW failed: %lu", GetLastError());
@@ -237,7 +231,7 @@ void ThreadMain() {
     CoreOnIpcServerExited();
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus Start() {
     /* Healthy server already up — do not disturb. */
@@ -311,5 +305,5 @@ bool IsRunning() {
     return g_running.load() && g_ready.load();
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

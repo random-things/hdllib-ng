@@ -5,7 +5,7 @@
 #include <span>
 
 #ifndef WIN32_LEAN_AND_MEAN
-#  define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
 
@@ -14,7 +14,7 @@ namespace inject {
 
 /* Bounds-checked view over a PE file image in memory. Fail-closed on malformed input. */
 class PeImageView {
-public:
+  public:
     static constexpr size_t kMaxImageBytes = 256u * 1024u * 1024u;
     static constexpr size_t kMaxSections = 96;
 
@@ -34,7 +34,7 @@ public:
     bool ContainsFileRange(size_t offset, size_t need) const;
     bool VaInImage(uint32_t rva, size_t need) const;
 
-private:
+  private:
     const uint8_t* data_ = nullptr;
     size_t size_ = 0;
     size_t nt_offset_ = 0;
@@ -42,5 +42,5 @@ private:
     uint16_t section_count_ = 0;
 };
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl
