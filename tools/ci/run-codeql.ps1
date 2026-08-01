@@ -22,7 +22,7 @@ param(
     [string]$SarifOut = 'codeql-results.sarif',
     [string]$CsvOut = 'codeql-results.csv',
 
-    # Query suite (matches .github/codeql/hdllib-security-extended.qls / workflow).
+    # Must be the same single suite the GitHub workflow loads via codeql-config.yml.
     [string]$QuerySuite = '.github/codeql/hdllib-security-extended.qls'
 )
 
@@ -181,7 +181,10 @@ exit /b %ERRORLEVEL%
 }
 
 Write-Host "Analyzing with $QuerySuite ..."
+# Always --rerun: incremental "No need to rerun" after a DB recreate has produced
+# false greens (stale empty results while GitHub Actions still fails).
 & $codeql database analyze $dbPath $QuerySuite `
+    --rerun `
     --format=sarif-latest `
     --output=$sarifPath `
     --sarif-category=/language:c-cpp
@@ -190,6 +193,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & $codeql database analyze $dbPath $QuerySuite `
+    --rerun `
     --format=csv `
     --output=$csvPath
 if ($LASTEXITCODE -ne 0) {
@@ -199,24 +203,26 @@ if ($LASTEXITCODE -ne 0) {
 function Test-CodeQlAlertActionable {
     param($Result)
 
-    # In-source // codeql[...] suppressions (requires AlertSuppression.ql in the suite).
+    # Match GitHub code scanning: only ignore alerts GitHub itself would drop.
+    # In-source suppressions must still be present in SARIF with suppressions[];
+    # do NOT silently drop unsuppressed alerts (that caused local false greens).
+    $hasAcceptedSuppression = $false
     foreach ($sup in @($Result.suppressions)) {
         if ($null -eq $sup) { continue }
         $status = if ($sup.PSObject.Properties['status']) { [string]$sup.status } else { '' }
-        if ([string]::IsNullOrEmpty($status) -or $status -eq 'accepted') {
-            return $false
+        $kind = if ($sup.PSObject.Properties['kind']) { [string]$sup.kind } else { '' }
+        if ($kind -eq 'inSource' -and ([string]::IsNullOrEmpty($status) -or $status -eq 'accepted')) {
+            $hasAcceptedSuppression = $true
+            break
         }
+    }
+    if ($hasAcceptedSuppression) {
+        return $false
     }
 
-    # paths-ignore does not drop compiled third_party objects from a traced C/C++ DB.
-    foreach ($loc in @($Result.locations)) {
-        $uri = $loc.physicalLocation.artifactLocation.uri
-        if (-not $uri) { continue }
-        $norm = ([string]$uri) -replace '\\', '/'
-        if ($norm -match '(^|/)third_party/') {
-            return $false
-        }
-    }
+    # paths-ignore does not drop compiled third_party from a traced C/C++ DB;
+    # GitHub still surfaces them unless suppressed — keep them actionable so
+    # local/CI stay aligned (prefer in-source suppressions in third_party).
     return $true
 }
 

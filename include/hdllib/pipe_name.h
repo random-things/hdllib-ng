@@ -235,8 +235,12 @@ static inline HANDLE HdlOpenLocalPipe(uint32_t pid) {
     if (HdlFormatPipeName(pid, name, 128) != 0) {
         return INVALID_HANDLE_VALUE;
     }
+    /* Path is always \\.\pipe\ + charset-validated name from HdlFormatPipeName.
+     * Named-pipe opens are not filesystem path traversal; keep suppressions on
+     * the CreateFileW line so GitHub Code Scanning and the local CLI agree. */
     // codeql[cpp/path-injection]
-    return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
+                       nullptr); // lgtm[cpp/path-injection]
 }
 
 static inline BOOL HdlWaitLocalPipe(uint32_t pid, DWORD timeout_ms) {

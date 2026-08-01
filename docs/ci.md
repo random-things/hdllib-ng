@@ -83,8 +83,10 @@ What it does:
    (security-extended + alert suppression; excludes intentional
    `cpp/uncontrolled-process-operation` for this injection toolkit).
 4. Writes `codeql-results.sarif` / `codeql-results.csv` and fails if any
-   actionable alerts remain (in-source suppressions and `third_party/**` are
-   ignored; override with `-AllowFindings`).
+   actionable alerts remain (only in-source `// codeql[...]` / `// lgtm[...]`
+   suppressions are ignored — same as GitHub Code Scanning; override with
+   `-AllowFindings`). Always passes `--rerun` so incremental cache cannot
+   false-green after a database recreate.
 
 If CodeQL is already on `PATH`, omit `-InstallBundle`. Pass `-CodeQlHome` to
 point at an unpacked bundle. Use `-AnalyzeOnly` to re-query an existing

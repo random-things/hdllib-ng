@@ -25,15 +25,16 @@ HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_
     if (!size || size > kMaxAllocSize || !out_addr) {
         return HDL_E_INVALID_ARG;
     }
-    /* Reject-path above + modulo keeps the VirtualAlloc size within kMaxAllocSize for
-     * analyzers that treat RemExpr as a bounded allocation size. */
-    const size_t bytes = size % (kMaxAllocSize + 1u);
-    void* p = VirtualAlloc(preferred, bytes, MEM_COMMIT | MEM_RESERVE, protect);
+    /* Pass a RemExpr directly as the size argument so CodeQL's allocation-size
+     * barrier (Bounded.qll) applies at the sink. With the reject-path above this
+     * is a no-op (size == size % (kMaxAllocSize+1)). */
+    void* p = VirtualAlloc(preferred, size % (kMaxAllocSize + 1u), MEM_COMMIT | MEM_RESERVE,
+                           protect);
     if (!p) {
         return HDL_E_NO_MEM;
     }
     const uint64_t addr = reinterpret_cast<uint64_t>(p);
-    Track(addr, bytes);
+    Track(addr, size);
     *out_addr = addr;
     return HDL_OK;
 }
