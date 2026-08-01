@@ -108,16 +108,24 @@ bool PeImageView::ContainsFileRange(size_t offset, size_t need) const {
 }
 
 bool PeImageView::VaInImage(uint32_t rva, size_t need) const {
+    const auto* headers = nt();
+    if (!headers) {
+        return false;
+    }
     const uint64_t end = static_cast<uint64_t>(rva) + need;
-    return end >= rva && end <= nt()->OptionalHeader.SizeOfImage;
+    return end >= rva && end <= headers->OptionalHeader.SizeOfImage;
 }
 
 bool PeImageView::RvaToOffset(uint32_t rva, size_t need, size_t* out_offset) const {
-    if (!out_offset || !VaInImage(rva, need ? need : 1)) {
+    const auto* headers = nt();
+    if (!out_offset || !headers || !VaInImage(rva, need ? need : 1)) {
         return false;
     }
     for (uint16_t i = 0; i < section_count_; ++i) {
         const auto* sec = section(i);
+        if (!sec) {
+            return false;
+        }
         const uint32_t vsize = (std::max)(sec->Misc.VirtualSize, sec->SizeOfRawData);
         if (rva < sec->VirtualAddress || rva >= sec->VirtualAddress + vsize) {
             continue;
@@ -134,7 +142,7 @@ bool PeImageView::RvaToOffset(uint32_t rva, size_t need, size_t* out_offset) con
         return true;
     }
     /* Headers / non-section RVA */
-    if (rva < nt()->OptionalHeader.SizeOfHeaders) {
+    if (rva < headers->OptionalHeader.SizeOfHeaders) {
         if (!ContainsFileRange(rva, need)) {
             return false;
         }

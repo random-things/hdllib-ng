@@ -25,6 +25,12 @@ void Expect(bool ok, const char* name) {
 
 void TestMalformedPe() {
     using hdl::inject::PeImageView;
+    PeImageView unset;
+    Expect(!unset.VaInImage(0, 1), "pe/default_vainimage");
+    Expect(unset.nt() == nullptr, "pe/default_nt_null");
+    size_t off = 1;
+    Expect(!unset.RvaToOffset(0, 1, &off), "pe/default_rva_to_offset");
+
     std::vector<uint8_t> empty;
     PeImageView pe;
     Expect(!PeImageView::TryOpen(empty, &pe), "pe/empty");

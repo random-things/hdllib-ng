@@ -1404,10 +1404,13 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             int32_t st = 0;
             uint32_t count = 0;
             bool found_root = false;
-            if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
+            bool decoded = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
+            if (decoded) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlPointerPath path{};
                     if (!hdl::proto::TakeHdlPointerPath(r, path)) {
+                        decoded = false;
+                        found_root = false;
                         break;
                     }
                     /* depth-1 path with offset 0 at g_locate_mid location, or root */
@@ -1416,7 +1419,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
                     }
                 }
             }
-            Report(c, found_root && count >= 1, false, "locate ptrscan finds path", "");
+            Report(c, decoded && found_root, false, "locate ptrscan finds path", "");
         }
     }
 
@@ -1880,11 +1883,13 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             Reader r(resp);
             int32_t st = 0;
             uint32_t count = 0;
-            const bool ok = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
+            bool ok = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
             if (ok) {
                 paths.resize(count);
                 for (uint32_t i = 0; i < count; ++i) {
                     if (!hdl::proto::TakeHdlPointerPath(r, paths[i])) {
+                        ok = false;
+                        paths.clear();
                         break;
                     }
                 }
@@ -1923,10 +1928,13 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             int32_t st = 0;
             uint32_t kept = 0;
             bool has_root = false;
-            if (r.TakePod(st) && r.TakePod(kept) && st == HDL_OK) {
+            bool decoded = r.TakePod(st) && r.TakePod(kept) && st == HDL_OK;
+            if (decoded) {
                 for (uint32_t i = 0; i < kept; ++i) {
                     HdlPointerPath p{};
                     if (!hdl::proto::TakeHdlPointerPath(r, p)) {
+                        decoded = false;
+                        has_root = false;
                         break;
                     }
                     if (p.static_base == truth_dyn_root && p.depth == 1 && p.offsets[0] == 0) {
@@ -1934,7 +1942,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
                     }
                 }
             }
-            Report(c, has_root && dyn1 != 0 && dyn2 != 0, false,
+            Report(c, decoded && has_root && dyn1 != 0 && dyn2 != 0, false,
                    "discover pathvalidate keeps DynRoot", "");
         }
     }
