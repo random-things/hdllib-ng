@@ -226,6 +226,8 @@ static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin)
     if (pBlock != NULL)
     {
         // Build a linked list of all the slots.
+        // Slot freelist overlays MEMORY_BLOCK; intentional layout (not type confusion).
+        // codeql[cpp/suspicious-pointer-scaling] codeql[cpp/type-confusion]
         PMEMORY_SLOT pSlot = (PMEMORY_SLOT)pBlock + 1;
         pBlock->pFree = NULL;
         pBlock->usedCount = 0;

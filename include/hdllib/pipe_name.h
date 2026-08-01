@@ -225,6 +225,29 @@ static inline int HdlFormatPipeName(uint32_t pid, wchar_t* out, size_t out_cch) 
     }
 }
 
+#ifdef _WIN32
+/*
+ * Open the local control pipe for `pid`. The path is always produced by
+ * HdlFormatPipeName (fixed \\.\pipe\ prefix + character-validated name).
+ */
+static inline HANDLE HdlOpenLocalPipe(uint32_t pid) {
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        return INVALID_HANDLE_VALUE;
+    }
+    // codeql[cpp/path-injection]
+    return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+}
+
+static inline BOOL HdlWaitLocalPipe(uint32_t pid, DWORD timeout_ms) {
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        return FALSE;
+    }
+    return WaitNamedPipeW(name, timeout_ms);
+}
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -29,7 +29,6 @@ jobs:
         with:
           languages: c-cpp
           config-file: ./.github/codeql/codeql-config.yml
-          queries: security-extended
 
       - name: Configure
         run: >-

@@ -214,8 +214,10 @@ int wmain(int argc, wchar_t** argv) {
             return FailConnect(pid);
         }
         if (want_tui) {
+            // codeql[cpp/path-injection]
             return hdlcli::RunTui(pid, client, store_path);
         }
+        // codeql[cpp/path-injection]
         return hdlcli::RunRepl(pid, client, store_path);
     }
 

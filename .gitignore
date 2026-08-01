@@ -35,6 +35,12 @@ CMakeUserPresets.json
 .gitnexus
 .claude
 
+# Local CodeQL (tools/ci/run-codeql.ps1)
+.codeql-db/
+codeql-results.sarif
+codeql-results.csv
+tools/.cache/
+
 # Python
 __pycache__/
 *.pyc

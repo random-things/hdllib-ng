@@ -385,6 +385,8 @@ bool ApplyRelocationsRemote(uint8_t* remote_base, HANDLE process, const PeImageV
 } // namespace
 
 HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
+    // Inject API: dll_path is a NormalizePath'd caller-chosen module file.
+    // codeql[cpp/path-injection]
     HANDLE file = CreateFileW(dll_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {

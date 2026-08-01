@@ -73,6 +73,8 @@ HdlStatus InjectDllEx(uint32_t pid, const wchar_t* dll_path, int method,
     case HDL_INJECT_THREAD_HIJACK:
         return inject::ThreadHijackMethod(pid, full.c_str(), out_base);
     case HDL_INJECT_MANUAL_MAP:
+        // Caller-chosen DLL path is the inject API; path was NormalizePath'd above.
+        // codeql[cpp/path-injection]
         return inject::ManualMapMethod(pid, full.c_str(), out_base);
     case HDL_INJECT_ATOM_BOMBING:
         return inject::AtomBombingMethod(pid, full.c_str(), out_base);

@@ -39,8 +39,19 @@ bool SetLogFile(const wchar_t* path_or_null) {
     if (!path_or_null || !path_or_null[0]) {
         return true;
     }
-    g_file = CreateFileW(path_or_null, FILE_APPEND_DATA, FILE_SHARE_READ,
-                         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const size_t len = wcslen(path_or_null);
+    if (len >= MAX_PATH) {
+        return false;
+    }
+    wchar_t full[MAX_PATH];
+    const DWORD n = GetFullPathNameW(path_or_null, MAX_PATH, full, nullptr);
+    if (n == 0 || n >= MAX_PATH) {
+        return false;
+    }
+    // Trusted control-pipe clients may choose the log path (see HandleSetLogFile).
+    // codeql[cpp/path-injection]
+    g_file = CreateFileW(full, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
     return g_file != INVALID_HANDLE_VALUE;
 }
 

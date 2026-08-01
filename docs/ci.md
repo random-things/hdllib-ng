@@ -57,6 +57,39 @@ For a local ASan run, execute
 before CTest. Visual Studio does not place its ASan runtime DLL on an ordinary
 shell's `PATH`; the nightly workflow performs this step explicitly.
 
+## Local CodeQL (same gate as GitHub)
+
+Before pushing, you can run the same C/C++ `security-extended` analysis as
+[`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) without waiting
+on Actions:
+
+```powershell
+# First time: download the win64 CodeQL bundle into tools/.cache/codeql (~large; needs network)
+powershell -NoProfile -File tools/ci/run-codeql.ps1 -InstallBundle -RebuildDatabase
+
+# After CodeQL is cached / on PATH: recreate DB from a clean traced build, then analyze
+powershell -NoProfile -File tools/ci/run-codeql.ps1 -RebuildDatabase
+
+# Re-run queries only (no rebuild) against an existing .codeql-db
+powershell -NoProfile -File tools/ci/run-codeql.ps1 -AnalyzeOnly
+```
+
+What it does:
+
+1. Traces `cmake --preset ci-codeql` + `cmake --build --preset ci-codeql` (VS 2022).
+2. Applies [`.github/codeql/codeql-config.yml`](../.github/codeql/codeql-config.yml)
+   (`paths-ignore`: `build/**`, `third_party/**`).
+3. Analyzes with [`.github/codeql/hdllib-security-extended.qls`](../.github/codeql/hdllib-security-extended.qls)
+   (security-extended + alert suppression; excludes intentional
+   `cpp/uncontrolled-process-operation` for this injection toolkit).
+4. Writes `codeql-results.sarif` / `codeql-results.csv` and fails if any
+   actionable alerts remain (in-source suppressions and `third_party/**` are
+   ignored; override with `-AllowFindings`).
+
+If CodeQL is already on `PATH`, omit `-InstallBundle`. Pass `-CodeQlHome` to
+point at an unpacked bundle. Use `-AnalyzeOnly` to re-query an existing
+`.codeql-db` after query-pack updates without rebuilding.
+
 ## Interactive runner setup
 
 For occasional open-source CI, the self-hosted runner can be this development
@@ -182,9 +215,11 @@ Recommended repository settings:
 
 ## Quality-tool adoption
 
-Changed C/C++ lines are checked against `.clang-format` in primary CI, and
-actionlint validates the workflow files with the custom runner labels declared
-in `.github/actionlint.yaml`. CodeQL is blocking. clang-tidy and MSVC native
-analysis are nightly and advisory while the existing warning baseline is
-reduced; remove `continue-on-error` from those jobs once their output is clean.
-Dependabot proposes updates to pinned GitHub Actions versions each week.
+Changed C/C++ lines are checked against `.clang-format` in primary CI
+(`tools/ci/check-format.ps1`), and actionlint validates the workflow files with
+the custom runner labels declared in `.github/actionlint.yaml`. CodeQL is
+blocking; run it locally with `tools/ci/run-codeql.ps1` before push. clang-tidy
+and MSVC native analysis are nightly and advisory while the existing warning
+baseline is reduced; remove `continue-on-error` from those jobs once their
+output is clean. Dependabot proposes updates to pinned GitHub Actions versions
+each week.

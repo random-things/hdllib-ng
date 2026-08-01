@@ -273,15 +273,10 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
 }
 
 inline bool PingPipe(uint32_t pid, DWORD timeout_ms = 8000) {
-    wchar_t name[128];
-    if (HdlFormatPipeName(pid, name, 128) != 0) {
-        return false;
-    }
-
     const DWORD start = GetTickCount();
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (;;) {
-        pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        pipe = HdlOpenLocalPipe(pid);
         if (pipe != INVALID_HANDLE_VALUE) {
             break;
         }
@@ -291,7 +286,7 @@ inline bool PingPipe(uint32_t pid, DWORD timeout_ms = 8000) {
         if (GetTickCount() - start > timeout_ms) {
             return false;
         }
-        WaitNamedPipeW(name, 200);
+        HdlWaitLocalPipe(pid, 200);
         Sleep(50);
     }
 
@@ -337,14 +332,10 @@ inline bool PipeRequest(uint32_t pid, const void* req, uint32_t req_size, int32_
     if (out_status) {
         *out_status = HDL_E_FAILED;
     }
-    wchar_t name[128];
-    if (HdlFormatPipeName(pid, name, 128) != 0) {
-        return false;
-    }
     const DWORD start = GetTickCount();
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (;;) {
-        pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        pipe = HdlOpenLocalPipe(pid);
         if (pipe != INVALID_HANDLE_VALUE) {
             break;
         }
@@ -354,7 +345,7 @@ inline bool PipeRequest(uint32_t pid, const void* req, uint32_t req_size, int32_
         if (GetTickCount() - start > timeout_ms) {
             return false;
         }
-        WaitNamedPipeW(name, 200);
+        HdlWaitLocalPipe(pid, 200);
         Sleep(50);
     }
     DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
@@ -495,21 +486,17 @@ inline const char* MethodName(int method) {
 
 inline bool PipeRequest(uint32_t pid, const std::vector<uint8_t>& req, std::vector<uint8_t>& resp,
                         DWORD timeout_ms = 15000) {
-    wchar_t name[128];
-    if (HdlFormatPipeName(pid, name, 128) != 0) {
-        return false;
-    }
     const DWORD start = GetTickCount();
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (;;) {
-        pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        pipe = HdlOpenLocalPipe(pid);
         if (pipe != INVALID_HANDLE_VALUE) {
             break;
         }
         if (GetTickCount() - start > timeout_ms) {
             return false;
         }
-        WaitNamedPipeW(name, 200);
+        HdlWaitLocalPipe(pid, 200);
         Sleep(50);
     }
     DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;

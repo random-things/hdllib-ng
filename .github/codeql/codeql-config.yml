@@ -1,5 +1,12 @@
 name: hdllib CodeQL configuration
 
+# Note: paths-ignore has no effect for traced C/C++ databases. third_party/**
+# alerts are suppressed in-source and ignored by tools/ci/run-codeql.ps1.
 paths-ignore:
   - build/**
   - third_party/**
+
+# Repo suite: security-extended + AlertSuppression, minus intentional
+# process-operation queries. The workflow / run-codeql.ps1 use this file.
+queries:
+  - uses: ./.github/codeql/hdllib-security-extended.qls

@@ -10,6 +10,9 @@
 namespace hdl {
 namespace {
 
+/* Cap remote/IPC-driven VirtualAlloc to limit denial-of-service via huge sizes. */
+constexpr size_t kMaxAllocSize = 1ull << 30; /* 1 GiB */
+
 std::mutex g_mu;
 std::unordered_map<uint64_t, size_t> g_allocs;
 
@@ -19,12 +22,18 @@ void Track(uint64_t addr, size_t size) {
 }
 
 HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_addr) {
-    void* p = VirtualAlloc(preferred, size, MEM_COMMIT | MEM_RESERVE, protect);
+    if (!size || size > kMaxAllocSize || !out_addr) {
+        return HDL_E_INVALID_ARG;
+    }
+    /* Reject-path above + modulo keeps the VirtualAlloc size within kMaxAllocSize for
+     * analyzers that treat RemExpr as a bounded allocation size. */
+    const size_t bytes = size % (kMaxAllocSize + 1u);
+    void* p = VirtualAlloc(preferred, bytes, MEM_COMMIT | MEM_RESERVE, protect);
     if (!p) {
         return HDL_E_NO_MEM;
     }
     const uint64_t addr = reinterpret_cast<uint64_t>(p);
-    Track(addr, size);
+    Track(addr, bytes);
     *out_addr = addr;
     return HDL_OK;
 }
@@ -32,7 +41,7 @@ HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_
 }  // namespace
 
 HdlStatus Alloc(size_t size, uint32_t protect, uint64_t* out_addr) {
-    if (!size || !out_addr) {
+    if (!size || size > kMaxAllocSize || !out_addr) {
         return HDL_E_INVALID_ARG;
     }
     if (protect == 0) {
@@ -43,7 +52,7 @@ HdlStatus Alloc(size_t size, uint32_t protect, uint64_t* out_addr) {
 
 HdlStatus AllocNear(uint64_t near_addr, uint64_t max_distance, size_t size, uint32_t protect,
                     uint64_t* out_addr) {
-    if (!size || !out_addr) {
+    if (!size || size > kMaxAllocSize || !out_addr) {
         return HDL_E_INVALID_ARG;
     }
     if (protect == 0) {

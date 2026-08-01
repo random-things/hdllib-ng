@@ -77,12 +77,7 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
         return false;
     }
 
-    wchar_t name[128];
-    if (HdlFormatPipeName(pid, name, 128) != 0) {
-        return false;
-    }
-    HANDLE pipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
-                              nullptr);
+    HANDLE pipe = HdlOpenLocalPipe(pid);
     if (pipe == INVALID_HANDLE_VALUE) {
         return false;
     }
@@ -117,8 +112,7 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
     }
     /* Wait until the pipe is gone so ServeClient has left the DLL. */
     for (int i = 0; i < 150; ++i) {
-        HANDLE probe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
-                                   nullptr);
+        HANDLE probe = HdlOpenLocalPipe(pid);
         if (probe == INVALID_HANDLE_VALUE) {
             const DWORD err = GetLastError();
             if (err == ERROR_FILE_NOT_FOUND) {

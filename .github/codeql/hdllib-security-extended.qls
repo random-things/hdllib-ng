@@ -1,0 +1,9 @@
+# Same gate as cpp-security-extended, plus alert-suppression for // codeql[...]
+# comments, minus intentional LoadLibrary-style process operations.
+- description: hdllib C/C++ security-extended (injection toolkit profile)
+- import: codeql-suites/cpp-security-extended.qls
+  from: codeql/cpp-queries
+- exclude:
+    id: cpp/uncontrolled-process-operation
+- query: AlertSuppression.ql
+  from: codeql/cpp-queries

@@ -94,7 +94,7 @@ Implementations live under `src/inject/` (one file per technique). Full notes: [
 | Thread pool | `thread_pool` | `TpAllocWork` / `TpPostWork` |
 | ETW callback | `etw_callback` | `EtwEventRegister` enable-callback |
 
-Pipe: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` (see `include/hdllib/pipe_name.h`). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or a format with one unsigned pid conversion such as `%lu`).
+Pipe: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` (see `include/hdllib/pipe_name.h`). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or one literal pid placeholder such as `%lu` / `%08X`).
 
 Quiet / anti-fingerprint defaults after inject:
 
