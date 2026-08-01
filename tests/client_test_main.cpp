@@ -341,11 +341,15 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     ExpectOk(c, "client log", Cli(ctx, {L"log", L"1"}));
     {
         wchar_t tmp[MAX_PATH];
-        GetTempPathW(MAX_PATH, tmp);
-        wcscat_s(tmp, L"hdl_client_logfile.txt");
-        ExpectOk(c, "client log-file set", Cli(ctx, {L"log-file", tmp}));
-        ExpectOk(c, "client log-file clear", Cli(ctx, {L"log-file"}));
-        DeleteFileW(tmp);
+        const DWORD tmp_len = GetTempPathW(MAX_PATH, tmp);
+        const bool path_ok =
+            tmp_len != 0 && tmp_len <= MAX_PATH && wcscat_s(tmp, L"hdl_client_logfile.txt") == 0;
+        Report(c, path_ok, false, "client log-file path", "");
+        if (path_ok) {
+            ExpectOk(c, "client log-file set", Cli(ctx, {L"log-file", tmp}));
+            ExpectOk(c, "client log-file clear", Cli(ctx, {L"log-file"}));
+            DeleteFileW(tmp);
+        }
     }
     ExpectOk(c, "client health-veh on", Cli(ctx, {L"health-veh", L"on"}));
     {

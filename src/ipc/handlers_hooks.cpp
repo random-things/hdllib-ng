@@ -30,12 +30,8 @@ bool HandleHook(HANDLE pipe, proto::Reader& r) {
     uint64_t target_va = 0;
     uint64_t detour_va = 0;
     uint32_t flags = 0;
-    if (!r.TakePod(target_va) || !r.TakePod(detour_va) || !r.TakePod(flags)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    (void)flags;
-    if (!target_va || !detour_va) {
+    if (!r.TakePod(target_va) || !r.TakePod(detour_va) || !r.TakePod(flags) || flags != 0 ||
+        !target_va || !detour_va) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }

@@ -108,7 +108,7 @@ typedef struct HdlModuleInfo {
 
 typedef void* HdlHookHandle;
 
-/* OpShutdown / HdlShutdownEx flags (pipe + domain). */
+/* OpShutdown flags (pipe + domain). */
 #define HDL_SHUTDOWN_UNLOAD_MODULES 1u
 
 /*

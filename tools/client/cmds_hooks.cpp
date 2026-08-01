@@ -97,6 +97,9 @@ int CmdHook(CmdCtx& ctx) {
             flags = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
+    if (flags != 0) {
+        return FailUsage(ctx);
+    }
     AppendPod(req, static_cast<uint32_t>(OpHook));
     AppendPod(req, target);
     AppendPod(req, detour);
