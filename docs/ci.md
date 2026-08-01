@@ -218,10 +218,20 @@ Recommended repository settings:
 ## Quality-tool adoption
 
 Changed C/C++ lines are checked against `.clang-format` in primary CI
-(`tools/ci/check-format.ps1`), and actionlint validates the workflow files with
-the custom runner labels declared in `.github/actionlint.yaml`. CodeQL is
-blocking; run it locally with `tools/ci/run-codeql.ps1` before push. clang-tidy
-and MSVC native analysis are nightly and advisory while the existing warning
-baseline is reduced; remove `continue-on-error` from those jobs once their
-output is clean. Dependabot proposes updates to pinned GitHub Actions versions
-each week.
+(`tools/ci/check-format.ps1`). Format locally before commit:
+
+```powershell
+# One-time: point git at the repo hooks (formats staged C/C++ on commit)
+powershell -NoProfile -File tools/ci/install-git-hooks.ps1
+
+# Or format on demand
+powershell -NoProfile -File tools/ci/fix-format.ps1 -Staged
+powershell -NoProfile -File tools/ci/fix-format.ps1 -WorkingTree
+```
+
+actionlint validates workflow files with the custom runner labels in
+`.github/actionlint.yaml`. CodeQL is blocking; run
+`tools/ci/run-codeql.ps1` before push. clang-tidy and MSVC native analysis are
+nightly and advisory while the existing warning baseline is reduced; remove
+`continue-on-error` from those jobs once their output is clean. Dependabot
+proposes updates to pinned GitHub Actions versions each week.

@@ -27,7 +27,11 @@ CMakeUserPresets.json
 # IDE
 .idea/
 .vscode/
-.cursor/
+.cursor/*
+# Keep shared Cursor agent hooks (clang-format after edits).
+!.cursor/hooks.json
+!.cursor/hooks/
+!.cursor/hooks/**
 
 # Misc
 *.log

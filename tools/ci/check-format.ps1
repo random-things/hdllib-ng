@@ -5,7 +5,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$clangFormat = Get-Command clang-format -ErrorAction Stop
+. (Join-Path $PSScriptRoot '_clang-format.ps1')
+
+$clangFormatPath = Resolve-ClangFormat
 $pathSpecs = @('*.c', '*.cc', '*.cpp', '*.h', '*.hpp')
 
 if ([string]::IsNullOrWhiteSpace($BaseRevision) -or
@@ -38,7 +40,7 @@ else {
 }
 
 $files = @($files) |
-    Where-Object { $_ -and -not $_.StartsWith('third_party/') } |
+    Where-Object { Test-IsFormattableCppPath -Path $_ } |
     Sort-Object -Unique
 
 if ($files.Count -eq 0) {
@@ -77,7 +79,7 @@ foreach ($file in $files) {
         }
     }
 
-    & $clangFormat.Source @formatArguments -- $file
+    & $clangFormatPath @formatArguments -- $file
     if ($LASTEXITCODE -ne 0) {
         $failed = $true
     }

@@ -28,8 +28,8 @@ HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_
     /* Pass a RemExpr directly as the size argument so CodeQL's allocation-size
      * barrier (Bounded.qll) applies at the sink. With the reject-path above this
      * is a no-op (size == size % (kMaxAllocSize+1)). */
-    void* p = VirtualAlloc(preferred, size % (kMaxAllocSize + 1u), MEM_COMMIT | MEM_RESERVE,
-                           protect);
+    void* p =
+        VirtualAlloc(preferred, size % (kMaxAllocSize + 1u), MEM_COMMIT | MEM_RESERVE, protect);
     if (!p) {
         return HDL_E_NO_MEM;
     }
@@ -39,7 +39,7 @@ HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_
     return HDL_OK;
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus Alloc(size_t size, uint32_t protect, uint64_t* out_addr) {
     if (!size || size > kMaxAllocSize || !out_addr) {
@@ -116,4 +116,4 @@ void AllocShutdown() {
     g_allocs.clear();
 }
 
-}  // namespace hdl
+} // namespace hdl
