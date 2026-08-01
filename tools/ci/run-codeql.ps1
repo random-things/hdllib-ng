@@ -1,15 +1,15 @@
 [CmdletBinding()]
 param(
-    # Existing CodeQL CLI home (directory containing codeql.exe), or leave empty to use PATH / cache.
+    # Existing CodeQL CLI home (directory containing codeql.exe), or leave empty to use cache / PATH.
     [string]$CodeQlHome,
 
-    # Download the win64 CodeQL bundle into tools/.cache/codeql if no CLI is found.
+    # Download the exact win64 bundle pinned for the GitHub Action when needed.
     [switch]$InstallBundle,
 
-    # Bundle tag under github/codeql-action releases (e.g. codeql-bundle-v2.20.4). Empty = latest matching codeql-bundle-*.
+    # Compatibility override. If supplied, it must equal .github/codeql/toolchain.json.
     [string]$BundleTag,
 
-    # Recreate the database even if DatabaseDir already exists.
+    # Retained for command-line compatibility; normal runs now always recreate the database.
     [switch]$RebuildDatabase,
 
     # Skip database create; analyze an existing DatabaseDir.
@@ -31,6 +31,36 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location -LiteralPath $repoRoot
 
+$toolchainPath = Join-Path $repoRoot '.github\codeql\toolchain.json'
+$workflowPath = Join-Path $repoRoot '.github\workflows\codeql.yml'
+$toolchain = Get-Content -LiteralPath $toolchainPath -Raw -Encoding utf8 | ConvertFrom-Json
+$actionVersion = [string]$toolchain.actionVersion
+$pinnedBundleTag = [string]$toolchain.bundleTag
+$expectedCodeQlVersion = [string]$toolchain.cliVersion
+
+if ([string]::IsNullOrWhiteSpace($actionVersion) -or
+    [string]::IsNullOrWhiteSpace($pinnedBundleTag) -or
+    [string]::IsNullOrWhiteSpace($expectedCodeQlVersion)) {
+    throw "Invalid CodeQL toolchain manifest '$toolchainPath'."
+}
+if ($pinnedBundleTag -ne "codeql-bundle-v$expectedCodeQlVersion") {
+    throw "CodeQL bundle '$pinnedBundleTag' does not match CLI version '$expectedCodeQlVersion'."
+}
+if (-not [string]::IsNullOrWhiteSpace($BundleTag) -and $BundleTag -ne $pinnedBundleTag) {
+    throw "BundleTag '$BundleTag' differs from GitHub's pinned bundle '$pinnedBundleTag'."
+}
+$BundleTag = $pinnedBundleTag
+
+$workflow = Get-Content -LiteralPath $workflowPath -Raw -Encoding utf8
+$actionRefs = [regex]::Matches(
+    $workflow,
+    'github/codeql-action/(?:init|analyze)@(?<version>v[0-9.]+)'
+)
+if ($actionRefs.Count -ne 2 -or
+    @($actionRefs | Where-Object { $_.Groups['version'].Value -ne $actionVersion }).Count -ne 0) {
+    throw "CodeQL workflow action references do not match toolchain action '$actionVersion'."
+}
+
 function Resolve-CodeQlExe {
     param([string]$HomeDir)
 
@@ -42,14 +72,14 @@ function Resolve-CodeQlExe {
         throw "codeql.exe not found under CodeQlHome '$HomeDir'."
     }
 
-    $cmd = Get-Command codeql -ErrorAction SilentlyContinue
-    if ($cmd) {
-        return $cmd.Source
-    }
-
     $cacheExe = Join-Path $repoRoot 'tools\.cache\codeql\codeql\codeql.exe'
     if (Test-Path -LiteralPath $cacheExe -PathType Leaf) {
         return (Resolve-Path -LiteralPath $cacheExe).Path
+    }
+
+    $cmd = Get-Command codeql -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
     }
 
     return $null
@@ -62,25 +92,7 @@ function Install-CodeQlBundle {
     New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
 
     if ([string]::IsNullOrWhiteSpace($Tag)) {
-        Write-Host 'Resolving latest codeql-bundle-* release from github/codeql-action...'
-        $Tag = $null
-        $gh = Get-Command gh -ErrorAction SilentlyContinue
-        if ($gh) {
-            $releaseJson = & gh api repos/github/codeql-action/releases --jq `
-                '[.[] | select(.tag_name | startswith("codeql-bundle-"))][0].tag_name'
-            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($releaseJson)) {
-                $Tag = $releaseJson.Trim()
-            }
-        }
-        if ([string]::IsNullOrWhiteSpace($Tag)) {
-            $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/github/codeql-action/releases'
-            $match = $releases | Where-Object { $_.tag_name -like 'codeql-bundle-*' } | Select-Object -First 1
-            if (-not $match) {
-                throw 'Could not resolve a codeql-bundle release. Pass -BundleTag explicitly.'
-            }
-            $Tag = $match.tag_name
-        }
-        Write-Host "Using bundle tag: $Tag"
+        throw 'A pinned CodeQL bundle tag is required.'
     }
 
     $asset = 'codeql-bundle-win64.tar.gz'
@@ -89,7 +101,16 @@ function Install-CodeQlBundle {
     $extractDir = Join-Path $cacheRoot 'codeql'
 
     Write-Host "Downloading $url"
-    Invoke-WebRequest -Uri $url -OutFile $archive
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source --fail --location --retry 3 --continue-at - --silent --show-error `
+            --output $archive $url
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download '$url' with curl.exe."
+        }
+    } else {
+        Invoke-WebRequest -Uri $url -OutFile $archive
+    }
 
     if (Test-Path -LiteralPath $extractDir) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force
@@ -108,6 +129,16 @@ function Install-CodeQlBundle {
     return (Resolve-Path -LiteralPath $exe).Path
 }
 
+function Get-CodeQlVersion {
+    param([string]$Executable)
+
+    $versionJson = (& $Executable version --format=json | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'codeql version failed.'
+    }
+    return [string](($versionJson | ConvertFrom-Json).version)
+}
+
 $codeql = Resolve-CodeQlExe -HomeDir $CodeQlHome
 if (-not $codeql) {
     if ($InstallBundle) {
@@ -122,36 +153,53 @@ CodeQL CLI not found. Options:
     }
 }
 
+$actualCodeQlVersion = Get-CodeQlVersion -Executable $codeql
+if ($actualCodeQlVersion -ne $expectedCodeQlVersion -and $InstallBundle -and
+    [string]::IsNullOrWhiteSpace($CodeQlHome)) {
+    Write-Host "Found CodeQL $actualCodeQlVersion; installing GitHub's pinned $BundleTag."
+    $codeql = Install-CodeQlBundle -Tag $BundleTag
+    $actualCodeQlVersion = Get-CodeQlVersion -Executable $codeql
+}
+if ($actualCodeQlVersion -ne $expectedCodeQlVersion) {
+    throw @"
+CodeQL CLI $actualCodeQlVersion does not match github/codeql-action $actionVersion
+(CLI $expectedCodeQlVersion). Re-run with -InstallBundle or pass -CodeQlHome for
+the $BundleTag bundle.
+"@
+}
 Write-Host "Using CodeQL: $codeql"
-& $codeql version
-if ($LASTEXITCODE -ne 0) {
-    throw 'codeql version failed.'
-}
+Write-Host "Matched github/codeql-action ${actionVersion}: CLI $actualCodeQlVersion ($BundleTag)"
 
-Write-Host "Ensuring query pack for suite: $QuerySuite"
-& $codeql pack download codeql/cpp-queries
-if ($LASTEXITCODE -ne 0) {
-    throw 'codeql pack download codeql/cpp-queries failed.'
-}
-
-$dbPath = Join-Path $repoRoot $DatabaseDir
+$dbPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $DatabaseDir))
 $sarifPath = Join-Path $repoRoot $SarifOut
 $csvPath = Join-Path $repoRoot $CsvOut
 $configPath = Join-Path $repoRoot '.github\codeql\codeql-config.yml'
+$repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $dbPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "DatabaseDir must resolve inside the repository: '$dbPath'."
+}
 
 if (-not $AnalyzeOnly) {
     & (Join-Path $PSScriptRoot 'add-vs-cmake-to-path.ps1')
 
-    if ((Test-Path -LiteralPath $dbPath) -and $RebuildDatabase) {
-        Write-Host "Removing existing database: $dbPath"
+    if (Test-Path -LiteralPath $dbPath) {
+        Write-Host "Removing stale database: $dbPath"
         Remove-Item -LiteralPath $dbPath -Recurse -Force
     }
 
-    if (Test-Path -LiteralPath $dbPath) {
-        Write-Host "Reusing database at $dbPath (pass -RebuildDatabase to recreate)."
-    } else {
-        $fetchDir = Join-Path $env:TEMP 'hdllib-fetchcontent'
-        $buildScript = Join-Path $env:TEMP ("hdllib-codeql-build-{0}.cmd" -f [guid]::NewGuid().ToString('N'))
+    # Match the clean GitHub-hosted runner: do not let an up-to-date local build
+    # produce an empty/partial traced database or retain an old CMake cache.
+    $buildDir = Join-Path $repoRoot 'build\ci-codeql'
+    if (Test-Path -LiteralPath $buildDir) {
+        Write-Host "Removing stale CodeQL build: $buildDir"
+        Remove-Item -LiteralPath $buildDir -Recurse -Force
+    }
+
+    $tempRoot = Join-Path $env:TEMP ("hdllib-codeql-{0}" -f [guid]::NewGuid().ToString('N'))
+    $fetchDir = Join-Path $tempRoot 'fetchcontent'
+    $buildScript = Join-Path $tempRoot 'build.cmd'
+    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    try {
         @"
 @echo off
 setlocal
@@ -162,19 +210,17 @@ cmake --build --preset ci-codeql --parallel
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath $buildScript -Encoding ascii
 
-        Write-Host 'Creating CodeQL database (traced ci-codeql build)...'
-        try {
-            & $codeql database create $dbPath `
-                --language=cpp `
-                --source-root=$repoRoot `
-                --codescanning-config=$configPath `
-                --command="cmd /c `"$buildScript`""
-            if ($LASTEXITCODE -ne 0) {
-                throw "codeql database create failed with exit code $LASTEXITCODE."
-            }
-        } finally {
-            Remove-Item -LiteralPath $buildScript -Force -ErrorAction SilentlyContinue
+        Write-Host 'Creating fresh CodeQL database (clean traced ci-codeql build)...'
+        & $codeql database create $dbPath `
+            --language=cpp `
+            --source-root=$repoRoot `
+            --codescanning-config=$configPath `
+            --command="cmd /c `"$buildScript`""
+        if ($LASTEXITCODE -ne 0) {
+            throw "codeql database create failed with exit code $LASTEXITCODE."
         }
+    } finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 } elseif (-not (Test-Path -LiteralPath $dbPath)) {
     throw "AnalyzeOnly set but database '$dbPath' does not exist."

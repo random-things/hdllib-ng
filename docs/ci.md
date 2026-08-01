@@ -64,33 +64,38 @@ Before pushing, you can run the same C/C++ `security-extended` analysis as
 on Actions:
 
 ```powershell
-# First time: download the win64 CodeQL bundle into tools/.cache/codeql (~large; needs network)
-powershell -NoProfile -File tools/ci/run-codeql.ps1 -InstallBundle -RebuildDatabase
+# First time: download GitHub's exact win64 CodeQL bundle into tools/.cache/codeql
+powershell -NoProfile -File tools/ci/run-codeql.ps1 -InstallBundle
 
-# After CodeQL is cached / on PATH: recreate DB from a clean traced build, then analyze
-powershell -NoProfile -File tools/ci/run-codeql.ps1 -RebuildDatabase
+# Later runs: recreate the DB and traced build, then analyze
+powershell -NoProfile -File tools/ci/run-codeql.ps1
 
-# Re-run queries only (no rebuild) against an existing .codeql-db
+# Advanced: re-run queries against the existing DB only (source must be unchanged)
 powershell -NoProfile -File tools/ci/run-codeql.ps1 -AnalyzeOnly
 ```
 
 What it does:
 
-1. Traces `cmake --preset ci-codeql` + `cmake --build --preset ci-codeql` (VS 2022).
-2. Applies [`.github/codeql/codeql-config.yml`](../.github/codeql/codeql-config.yml)
+1. Validates the exact CodeQL Action/CLI/bundle versions pinned in
+   [`.github/codeql/toolchain.json`](../.github/codeql/toolchain.json), refusing
+   a different local CLI instead of silently using a newer query pack.
+2. Deletes the previous database and `build/ci-codeql`, then traces a clean
+   `cmake --preset ci-codeql` + `cmake --build --preset ci-codeql` (VS 2022).
+3. Applies [`.github/codeql/codeql-config.yml`](../.github/codeql/codeql-config.yml)
    (`paths-ignore`: `build/**`, `third_party/**`).
-3. Analyzes with [`.github/codeql/hdllib-security-extended.qls`](../.github/codeql/hdllib-security-extended.qls)
+4. Analyzes with [`.github/codeql/hdllib-security-extended.qls`](../.github/codeql/hdllib-security-extended.qls)
    (security-extended + alert suppression; excludes intentional
    `cpp/uncontrolled-process-operation` for this injection toolkit).
-4. Writes `codeql-results.sarif` / `codeql-results.csv` and fails if any
+5. Writes `codeql-results.sarif` / `codeql-results.csv` and fails if any
    actionable alerts remain (only in-source `// codeql[...]` / `// lgtm[...]`
    suppressions are ignored — same as GitHub Code Scanning; override with
    `-AllowFindings`). Always passes `--rerun` so incremental cache cannot
    false-green after a database recreate.
 
-If CodeQL is already on `PATH`, omit `-InstallBundle`. Pass `-CodeQlHome` to
-point at an unpacked bundle. Use `-AnalyzeOnly` to re-query an existing
-`.codeql-db` after query-pack updates without rebuilding.
+If the pinned CodeQL version is already on `PATH`, omit `-InstallBundle`. Pass
+`-CodeQlHome` to point at that exact unpacked bundle. `-AnalyzeOnly` is only for
+re-querying a database when its extracted source is known to be unchanged; a
+normal run always rebuilds so it cannot report against stale code.
 
 ## Interactive runner setup
 
