@@ -4,6 +4,7 @@
 #include "util.hpp"
 
 #include "protocol.hpp"
+#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -128,7 +129,7 @@ int PrintCallReply(CmdCtx& ctx, const wchar_t* verb, const std::vector<uint8_t>&
     Reader r(resp);
     int32_t st = 0;
     HdlCallResult result{};
-    if (!r.TakePod(st) || !r.Take(&result, sizeof(result))) {
+    if (!r.TakePod(st) || !hdl::proto::TakeHdlCallResult(r, result)) {
         return FailBadResp(ctx);
     }
 

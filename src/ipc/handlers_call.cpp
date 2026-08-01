@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "alloc.hpp"
 #include "call.hpp"
@@ -142,7 +143,7 @@ bool HandleCallExport(HANDLE pipe, proto::Reader& r) {
     }
 
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &result, sizeof(result));
+    proto::AppendHdlCallResult(resp, result);
     AppendBufArgs(resp, args, owned);
     return WriteFrame(pipe, resp);
 }
@@ -190,7 +191,7 @@ bool HandleCall(HANDLE pipe, proto::Reader& r) {
     }
 
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &result, sizeof(result));
+    proto::AppendHdlCallResult(resp, result);
     AppendBufArgs(resp, args, owned);
     return WriteFrame(pipe, resp);
 }
@@ -317,7 +318,7 @@ bool HandleCallVtable(HANDLE pipe, proto::Reader& r) {
         }
     }
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &result, sizeof(result));
+    proto::AppendHdlCallResult(resp, result);
     return WriteFrame(pipe, resp);
 }
 

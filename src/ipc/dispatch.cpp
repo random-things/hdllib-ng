@@ -20,6 +20,10 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
     switch (op) {
     case OpPing:
         return HandlePing(pipe, r);
+    case OpHello:
+        return HandleHello(pipe, r);
+    case OpCapabilities:
+        return HandleCapabilities(pipe, r);
     case OpSetLogLevel:
         return HandleSetLogLevel(pipe, r);
     case OpSetLogFile:

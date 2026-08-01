@@ -12,12 +12,34 @@ namespace ipc {
 namespace {
 
 std::mutex g_sessions_mu;
-std::unordered_map<uint64_t, HdlSearchSession*> g_sessions;
+std::unordered_map<uint64_t, std::shared_ptr<SearchSessionHolder>> g_sessions;
 std::atomic<uint64_t> g_next_session_id{1};
 
 std::mutex g_discover_mu;
-std::unordered_map<uint64_t, HdlDiscoverSession*> g_discover;
+std::unordered_map<uint64_t, std::shared_ptr<DiscoverSessionHolder>> g_discover;
 std::atomic<uint64_t> g_next_discover_id{1};
+
+void CloseSearchHolder(const std::shared_ptr<SearchSessionHolder>& holder) {
+    if (!holder) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(holder->mu);
+    if (holder->session) {
+        SearchClose(holder->session);
+        holder->session = nullptr;
+    }
+}
+
+void CloseDiscoverHolder(const std::shared_ptr<DiscoverSessionHolder>& holder) {
+    if (!holder) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(holder->mu);
+    if (holder->session) {
+        DiscoverClose(holder->session);
+        holder->session = nullptr;
+    }
+}
 
 }  // namespace
 
@@ -62,72 +84,82 @@ std::shared_ptr<Job> BindJob(uint64_t job_id, uint32_t timeout_ms) {
     return nullptr;
 }
 
-HdlSearchSession* FindSession(uint64_t id) {
+std::shared_ptr<SearchSessionHolder> FindSession(uint64_t id) {
     std::lock_guard<std::mutex> lock(g_sessions_mu);
     const auto it = g_sessions.find(id);
     return it == g_sessions.end() ? nullptr : it->second;
 }
 
-HdlDiscoverSession* FindDiscover(uint64_t id) {
+std::shared_ptr<DiscoverSessionHolder> FindDiscover(uint64_t id) {
     std::lock_guard<std::mutex> lock(g_discover_mu);
     const auto it = g_discover.find(id);
     return it == g_discover.end() ? nullptr : it->second;
 }
 
 uint64_t AllocSearchSession(HdlSearchSession* session) {
+    auto holder = std::make_shared<SearchSessionHolder>();
+    holder->session = session;
     const uint64_t id = g_next_session_id.fetch_add(1);
-    std::lock_guard<std::mutex> lock(g_sessions_mu);
-    g_sessions[id] = session;
+    {
+        std::lock_guard<std::mutex> lock(g_sessions_mu);
+        g_sessions[id] = holder;
+    }
     return id;
 }
 
-bool TakeSearchSession(uint64_t id, HdlSearchSession** out) {
+std::shared_ptr<SearchSessionHolder> TakeSearchSession(uint64_t id) {
     std::lock_guard<std::mutex> lock(g_sessions_mu);
     const auto it = g_sessions.find(id);
     if (it == g_sessions.end()) {
-        return false;
+        return nullptr;
     }
-    if (out) {
-        *out = it->second;
-    }
+    auto holder = it->second;
     g_sessions.erase(it);
-    return true;
+    return holder;
 }
 
 void CloseAllSessions() {
-    std::lock_guard<std::mutex> lock(g_sessions_mu);
-    for (auto& kv : g_sessions) {
-        SearchClose(kv.second);
+    std::unordered_map<uint64_t, std::shared_ptr<SearchSessionHolder>> local;
+    {
+        std::lock_guard<std::mutex> lock(g_sessions_mu);
+        local.swap(g_sessions);
     }
-    g_sessions.clear();
+    for (auto& kv : local) {
+        CloseSearchHolder(kv.second);
+    }
 }
 
 uint64_t AllocDiscoverSession(HdlDiscoverSession* session) {
+    auto holder = std::make_shared<DiscoverSessionHolder>();
+    holder->session = session;
     const uint64_t id = g_next_discover_id.fetch_add(1);
-    std::lock_guard<std::mutex> lock(g_discover_mu);
-    g_discover[id] = session;
+    {
+        std::lock_guard<std::mutex> lock(g_discover_mu);
+        g_discover[id] = holder;
+    }
     return id;
 }
 
-bool TakeDiscoverSession(uint64_t id, HdlDiscoverSession** out) {
+std::shared_ptr<DiscoverSessionHolder> TakeDiscoverSession(uint64_t id) {
     std::lock_guard<std::mutex> lock(g_discover_mu);
     const auto it = g_discover.find(id);
     if (it == g_discover.end()) {
-        return false;
+        return nullptr;
     }
-    if (out) {
-        *out = it->second;
-    }
+    auto holder = it->second;
     g_discover.erase(it);
-    return true;
+    return holder;
 }
 
 void CloseAllDiscoverSessions() {
-    std::lock_guard<std::mutex> lock(g_discover_mu);
-    for (auto& kv : g_discover) {
-        DiscoverClose(kv.second);
+    std::unordered_map<uint64_t, std::shared_ptr<DiscoverSessionHolder>> local;
+    {
+        std::lock_guard<std::mutex> lock(g_discover_mu);
+        local.swap(g_discover);
     }
-    g_discover.clear();
+    for (auto& kv : local) {
+        CloseDiscoverHolder(kv.second);
+    }
 }
 
 }  // namespace ipc

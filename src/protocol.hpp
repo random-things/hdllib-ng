@@ -118,7 +118,33 @@ enum Op : uint32_t {
     OpGetHealthVeh = 98,
     OpDiscoverScanValue = 99,
     OpHook = 100,
+    OpHello = 101,
+    OpCapabilities = 102,
 };
+
+/* Wire protocol version negotiated via OpHello. Major mismatch => refuse. */
+constexpr uint32_t HDL_IPC_PROTO_MAJOR = 1;
+constexpr uint32_t HDL_IPC_PROTO_MINOR = 0;
+constexpr uint32_t HDL_IPC_ENDIAN_LE = 1;
+
+/* OpCapabilities feature bits. */
+enum : uint32_t {
+    HDL_CAP_SEARCH = 1u << 0,
+    HDL_CAP_DISCOVER = 1u << 1,
+    HDL_CAP_WATCH = 1u << 2,
+    HDL_CAP_HOOKS = 1u << 3,
+    HDL_CAP_FINGERPRINT = 1u << 4,
+    HDL_CAP_INJECT = 1u << 5,
+    HDL_CAP_PLACE = 1u << 6,
+    HDL_CAP_CODE = 1u << 7,
+    HDL_CAP_CALL = 1u << 8,
+    HDL_CAP_LOCATE = 1u << 9,
+};
+
+inline uint32_t DefaultCapabilityBits() {
+    return HDL_CAP_SEARCH | HDL_CAP_DISCOVER | HDL_CAP_WATCH | HDL_CAP_HOOKS | HDL_CAP_FINGERPRINT |
+           HDL_CAP_INJECT | HDL_CAP_PLACE | HDL_CAP_CODE | HDL_CAP_CALL | HDL_CAP_LOCATE;
+}
 
 /* Optional request trailer / streaming response flags. */
 enum : uint32_t {

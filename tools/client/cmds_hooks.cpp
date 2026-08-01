@@ -4,6 +4,7 @@
 #include "util.hpp"
 
 #include "protocol.hpp"
+#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -222,7 +223,7 @@ int CmdHookhits(CmdCtx& ctx) {
     hits.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlHookHit hit{};
-        if (!r.Take(&hit, sizeof(hit))) {
+        if (!hdl::proto::TakeHdlHookHit(r, hit)) {
             return FailBadResp(ctx);
         }
         hits.push_back(hit);

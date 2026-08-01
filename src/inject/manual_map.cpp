@@ -1,32 +1,20 @@
 #include "inject/common.hpp"
+#include "inject/pe_image_view.hpp"
+#include "inject/pe_relocs.hpp"
 #include "inject/techniques.hpp"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <vector>
 
 namespace hdl {
 namespace inject {
 namespace {
 
-uint64_t RvaToOffset(const IMAGE_NT_HEADERS64* nt, uint32_t rva) {
-    const auto* sec = IMAGE_FIRST_SECTION(nt);
-    for (UINT i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
-        if (rva >= sec->VirtualAddress &&
-            rva < sec->VirtualAddress + (std::max)(sec->Misc.VirtualSize, sec->SizeOfRawData)) {
-            return sec->PointerToRawData + (rva - sec->VirtualAddress);
-        }
-    }
-    return rva;
-}
-
-const uint8_t* FileAtRva(const std::vector<uint8_t>& file, const IMAGE_NT_HEADERS64* nt, uint32_t rva) {
-    const uint64_t off = RvaToOffset(nt, rva);
-    if (off >= file.size()) {
-        return nullptr;
-    }
-    return file.data() + off;
+const uint8_t* FileAtRva(const PeImageView& pe, uint32_t rva, size_t need = 1) {
+    return pe.SliceRva(rva, need);
 }
 
 HMODULE FindRemoteModule(HANDLE process, const wchar_t* name) {
@@ -236,6 +224,9 @@ FARPROC GetRemoteProcByOrdinal(HANDLE process, HMODULE remote_mod, WORD ordinal,
         return nullptr;
     }
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(headers + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        return nullptr;
+    }
     const auto& ed = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
     if (!ed.VirtualAddress) {
         return nullptr;
@@ -257,24 +248,50 @@ FARPROC GetRemoteProcByOrdinal(HANDLE process, HMODULE remote_mod, WORD ordinal,
     return FinishExportRva(process, remote_mod, ed, func_rva, depth);
 }
 
-bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const std::vector<uint8_t>& file,
-                          const IMAGE_NT_HEADERS64* nt) {
+bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const PeImageView& pe) {
+    const auto* nt = pe.nt();
     const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if (!dir.VirtualAddress) {
         return true;
     }
-
-    const auto* import_desc =
-        reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(FileAtRva(file, nt, dir.VirtualAddress));
-    if (!import_desc) {
+    if (!pe.VaInImage(dir.VirtualAddress, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
         return false;
     }
 
-    for (; import_desc->Name; ++import_desc) {
-        const char* mod_name = reinterpret_cast<const char*>(FileAtRva(file, nt, import_desc->Name));
+    uint32_t desc_rva = dir.VirtualAddress;
+    const uint32_t dir_end = dir.VirtualAddress + dir.Size;
+    for (;;) {
+        if (desc_rva + sizeof(IMAGE_IMPORT_DESCRIPTOR) > dir_end && dir.Size) {
+            return false;
+        }
+        const auto* import_desc = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(
+            FileAtRva(pe, desc_rva, sizeof(IMAGE_IMPORT_DESCRIPTOR)));
+        if (!import_desc) {
+            return false;
+        }
+        if (!import_desc->Name) {
+            break;
+        }
+        const char* mod_name = reinterpret_cast<const char*>(FileAtRva(pe, import_desc->Name, 1));
         if (!mod_name) {
             return false;
         }
+        /* Ensure name is NUL-terminated within the file view. */
+        size_t name_off = 0;
+        if (!pe.RvaToOffset(import_desc->Name, 1, &name_off)) {
+            return false;
+        }
+        bool named = false;
+        for (size_t i = name_off; i < pe.size(); ++i) {
+            if (pe.data()[i] == 0) {
+                named = true;
+                break;
+            }
+        }
+        if (!named) {
+            return false;
+        }
+
         HMODULE remote_mod = LoadRemoteModule(process, mod_name);
         if (!remote_mod) {
             HDL_LOG_ERROR("Manual map: failed to load dependency %s", mod_name);
@@ -285,8 +302,11 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const std::vecto
             import_desc->OriginalFirstThunk ? import_desc->OriginalFirstThunk : import_desc->FirstThunk;
         uint32_t iat_rva = import_desc->FirstThunk;
         for (;; thunk_rva += sizeof(IMAGE_THUNK_DATA64), iat_rva += sizeof(IMAGE_THUNK_DATA64)) {
+            if (!pe.VaInImage(iat_rva, sizeof(uint64_t))) {
+                return false;
+            }
             IMAGE_THUNK_DATA64 thunk{};
-            const auto* src = FileAtRva(file, nt, thunk_rva);
+            const auto* src = FileAtRva(pe, thunk_rva, sizeof(thunk));
             if (!src) {
                 return false;
             }
@@ -300,8 +320,9 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const std::vecto
                 func = GetRemoteProcByOrdinal(process, remote_mod,
                                               static_cast<WORD>(IMAGE_ORDINAL64(thunk.u1.Ordinal)), 0);
             } else {
+                const uint32_t ibn_rva = static_cast<uint32_t>(thunk.u1.AddressOfData);
                 const auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
-                    FileAtRva(file, nt, static_cast<uint32_t>(thunk.u1.AddressOfData)));
+                    FileAtRva(pe, ibn_rva, sizeof(IMAGE_IMPORT_BY_NAME)));
                 if (!ibn) {
                     return false;
                 }
@@ -312,10 +333,7 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const std::vecto
                     HDL_LOG_ERROR("Manual map: failed to resolve ordinal %u from %s",
                                   static_cast<unsigned>(IMAGE_ORDINAL64(thunk.u1.Ordinal)), mod_name);
                 } else {
-                    const auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
-                        FileAtRva(file, nt, static_cast<uint32_t>(thunk.u1.AddressOfData)));
-                    HDL_LOG_ERROR("Manual map: failed to resolve %s from %s",
-                                  ibn ? reinterpret_cast<const char*>(ibn->Name) : "?", mod_name);
+                    HDL_LOG_ERROR("Manual map: failed to resolve import from %s", mod_name);
                 }
                 return false;
             }
@@ -324,52 +342,38 @@ bool ResolveRemoteImports(HANDLE process, uint8_t* remote_base, const std::vecto
                 return false;
             }
         }
+        desc_rva += sizeof(IMAGE_IMPORT_DESCRIPTOR);
     }
     return true;
 }
 
-bool ApplyRelocations(uint8_t* remote_base, HANDLE process, const std::vector<uint8_t>& file,
-                      const IMAGE_NT_HEADERS64* nt, uint64_t delta) {
+bool ApplyRelocationsRemote(uint8_t* remote_base, HANDLE process, const PeImageView& pe,
+                            uint64_t delta) {
     if (delta == 0) {
         return true;
     }
-    const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
-    if (!dir.VirtualAddress || !dir.Size) {
-        return false;
-    }
-
-    uint32_t offset = 0;
-    while (offset < dir.Size) {
-        const auto* block = reinterpret_cast<const IMAGE_BASE_RELOCATION*>(
-            FileAtRva(file, nt, dir.VirtualAddress + offset));
-        if (!block || block->SizeOfBlock < sizeof(IMAGE_BASE_RELOCATION)) {
-            break;
-        }
-        const DWORD count = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(uint16_t);
-        const auto* entries = reinterpret_cast<const uint16_t*>(block + 1);
-        for (DWORD i = 0; i < count; ++i) {
-            const uint16_t type = entries[i] >> 12;
-            const uint16_t off = entries[i] & 0x0FFF;
-            if (type == IMAGE_REL_BASED_DIR64) {
-                uint64_t value = 0;
-                void* addr = remote_base + block->VirtualAddress + off;
-                if (!ReadRemote(process, addr, &value, sizeof(value))) {
-                    return false;
-                }
-                value += delta;
-                if (!WriteProcessMemory(process, addr, &value, sizeof(value), nullptr)) {
-                    return false;
-                }
-            } else if (type == IMAGE_REL_BASED_ABSOLUTE) {
-                // pad
-            } else if (type != 0) {
-                HDL_LOG_ERROR("Manual map: unsupported reloc type %u", type);
+    return WalkBaseRelocDirectory(pe, [&](uint32_t rva, uint16_t type) {
+        if (type == IMAGE_REL_BASED_DIR64) {
+            if (!pe.VaInImage(rva, sizeof(uint64_t))) {
                 return false;
             }
+            uint64_t value = 0;
+            void* addr = remote_base + rva;
+            if (!ReadRemote(process, addr, &value, sizeof(value))) {
+                return false;
+            }
+            value += delta;
+            if (!WriteProcessMemory(process, addr, &value, sizeof(value), nullptr)) {
+                return false;
+            }
+            return true;
         }
-        offset += block->SizeOfBlock;
-    }
-    return true;
+        if (type == IMAGE_REL_BASED_ABSOLUTE || type == 0) {
+            return true;
+        }
+        HDL_LOG_ERROR("Manual map: unsupported reloc type %u", type);
+        return false;
+    });
 }
 
 }  // namespace
@@ -393,15 +397,12 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
     }
     CloseHandle(file);
 
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(buf.data());
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+    PeImageView pe;
+    if (!PeImageView::TryOpen(std::span<const uint8_t>(buf.data(), buf.size()), &pe)) {
+        HDL_LOG_ERROR("Manual map: PE validation failed");
         return HDL_E_FAILED;
     }
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(buf.data() + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) {
-        HDL_LOG_ERROR("Manual map: not a valid x64 PE");
-        return HDL_E_FAILED;
-    }
+    const auto* nt = pe.nt();
 
     HANDLE process = OpenTargetProcess(pid);
     if (!process) {
@@ -421,10 +422,16 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
         return HDL_E_FAILED;
     }
 
-    const auto* sec = IMAGE_FIRST_SECTION(nt);
-    for (UINT i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
-        if (!sec->SizeOfRawData) {
+    for (uint16_t i = 0; i < pe.number_of_sections(); ++i) {
+        const auto* sec = pe.section(i);
+        if (!sec || !sec->SizeOfRawData) {
             continue;
+        }
+        if (!pe.ContainsFileRange(sec->PointerToRawData, sec->SizeOfRawData) ||
+            !pe.VaInImage(sec->VirtualAddress, sec->SizeOfRawData)) {
+            VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+            CloseHandle(process);
+            return HDL_E_FAILED;
         }
         if (!WriteProcessMemory(process, static_cast<uint8_t*>(remote) + sec->VirtualAddress,
                                 buf.data() + sec->PointerToRawData, sec->SizeOfRawData, nullptr)) {
@@ -435,12 +442,12 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
     }
 
     const uint64_t delta = reinterpret_cast<uint64_t>(remote) - nt->OptionalHeader.ImageBase;
-    if (!ApplyRelocations(static_cast<uint8_t*>(remote), process, buf, nt, delta)) {
+    if (!ApplyRelocationsRemote(static_cast<uint8_t*>(remote), process, pe, delta)) {
         VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         CloseHandle(process);
         return HDL_E_FAILED;
     }
-    if (!ResolveRemoteImports(process, static_cast<uint8_t*>(remote), buf, nt)) {
+    if (!ResolveRemoteImports(process, static_cast<uint8_t*>(remote), pe)) {
         VirtualFreeEx(process, remote, 0, MEM_RELEASE);
         CloseHandle(process);
         return HDL_E_FAILED;

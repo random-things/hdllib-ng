@@ -3,11 +3,13 @@
 #include "framing.hpp"
 #include "jobs.hpp"
 #include "protocol.hpp"
+#include "wire.hpp"
 
 #include "hdllib/hdllib.h"
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
@@ -15,6 +17,16 @@
 
 namespace hdl {
 namespace ipc {
+
+struct SearchSessionHolder {
+    std::mutex mu;
+    HdlSearchSession* session = nullptr;
+};
+
+struct DiscoverSessionHolder {
+    std::mutex mu;
+    HdlDiscoverSession* session = nullptr;
+};
 
 bool WriteFrame(HANDLE pipe, const std::vector<uint8_t>& resp);
 
@@ -24,15 +36,15 @@ void TakeOptionalJobTimeoutFlags(proto::Reader& r, uint64_t* job_id, uint32_t* t
 
 std::shared_ptr<Job> BindJob(uint64_t job_id, uint32_t timeout_ms);
 
-HdlSearchSession* FindSession(uint64_t id);
-HdlDiscoverSession* FindDiscover(uint64_t id);
+std::shared_ptr<SearchSessionHolder> FindSession(uint64_t id);
+std::shared_ptr<DiscoverSessionHolder> FindDiscover(uint64_t id);
 
 uint64_t AllocSearchSession(HdlSearchSession* session);
-bool TakeSearchSession(uint64_t id, HdlSearchSession** out);
+std::shared_ptr<SearchSessionHolder> TakeSearchSession(uint64_t id);
 void CloseAllSessions();
 
 uint64_t AllocDiscoverSession(HdlDiscoverSession* session);
-bool TakeDiscoverSession(uint64_t id, HdlDiscoverSession** out);
+std::shared_ptr<DiscoverSessionHolder> TakeDiscoverSession(uint64_t id);
 void CloseAllDiscoverSessions();
 
 // Chunked reply: status, flags(MORE), total, offset, count, items[count].
@@ -59,7 +71,9 @@ bool WriteStreamed(HANDLE pipe, HdlStatus st, const T* items, uint32_t total, ui
         AppendPod(frame, total);
         AppendPod(frame, off);
         AppendPod(frame, n);
-        AppendBytes(frame, items + off, n * sizeof(T));
+        for (uint32_t i = 0; i < n; ++i) {
+            proto::AppendWire(frame, items[off + i]);
+        }
         if (!WriteFrame(pipe, frame)) {
             return false;
         }

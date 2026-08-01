@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "jobs.hpp"
 #include "locate.hpp"
@@ -78,7 +79,7 @@ bool HandleResolvePattern(HANDLE pipe, proto::Reader& r) {
         }
     }
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &out, sizeof(out));
+    proto::AppendHdlPatternResult(resp, out);
     return WriteFrame(pipe, resp);
 }
 
@@ -144,7 +145,7 @@ bool HandlePointerScan(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, paths.data(), count * sizeof(HdlPointerPath));
+        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlPointerPath(resp, paths[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -168,7 +169,7 @@ bool HandleProbeStruct(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st == HDL_E_BUFFER_SMALL ? HDL_OK : st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, fields.data(), count * sizeof(HdlStructField));
+        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlStructField(resp, fields[_i]);
     }
     return WriteFrame(pipe, resp);
 }

@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "hooks.hpp"
 #include "protocol.hpp"
@@ -89,7 +90,7 @@ bool HandlePollHookHits(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        AppendBytes(resp, hits.data(), count * sizeof(HdlHookHit));
+        for (uint32_t _i = 0; _i < count; ++_i) proto::AppendHdlHookHit(resp, hits[_i]);
     }
     return WriteFrame(pipe, resp);
 }

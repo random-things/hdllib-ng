@@ -1,10 +1,16 @@
 /* End-to-end hdlclient tests against hdl_test_target (parity with hdl_tests locate/discover). */
 #include "support.hpp"
 #include "store.hpp"
+#include "pipe_client.hpp"
+#include "protocol.hpp"
+#include "hdllib/hdllib.h"
+#include "hdllib/pipe_name.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
@@ -275,6 +281,98 @@ void ExpectOk(Counters& c, const char* name, const ProcResult& r) {
 
 void ExpectExit0(Counters& c, const char* name, const ProcResult& r) {
     Report(c, r.exit_code == 0, false, name, "");
+}
+
+bool PipeReadExact(HANDLE pipe, void* buf, DWORD size) {
+    auto* p = static_cast<uint8_t*>(buf);
+    DWORD remaining = size;
+    while (remaining) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, p, remaining, &got, nullptr) || got == 0) {
+            return false;
+        }
+        p += got;
+        remaining -= got;
+    }
+    return true;
+}
+
+bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
+    const auto* p = static_cast<const uint8_t*>(buf);
+    DWORD remaining = size;
+    while (remaining) {
+        DWORD wrote = 0;
+        if (!WriteFile(pipe, p, remaining, &wrote, nullptr) || wrote == 0) {
+            return false;
+        }
+        p += wrote;
+        remaining -= wrote;
+    }
+    return true;
+}
+
+/* Peer that answers OpHello with an incompatible major so PipeClient::Negotiate rejects. */
+void RunNegotiateMismatch(Counters& c) {
+    using namespace hdl::proto;
+    const uint32_t pid = 0x71C0FFEEu;
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        Report(c, false, false, "ipc/reject_major_mismatch", "pipe name format failed");
+        return;
+    }
+
+    HANDLE pipe =
+        CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX,
+                         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        Report(c, false, false, "ipc/reject_major_mismatch", "CreateNamedPipe failed");
+        return;
+    }
+
+    std::atomic<bool> served{false};
+    std::thread server([&] {
+        const BOOL connected =
+            ConnectNamedPipe(pipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        if (!connected) {
+            return;
+        }
+        uint32_t rsize = 0;
+        if (!PipeReadExact(pipe, &rsize, sizeof(rsize))) {
+            return;
+        }
+        std::vector<uint8_t> req(rsize);
+        if (rsize && !PipeReadExact(pipe, req.data(), rsize)) {
+            return;
+        }
+        Reader r(req);
+        uint32_t op = 0;
+        if (!r.TakePod(op) || op != OpHello) {
+            return;
+        }
+        std::vector<uint8_t> resp;
+        AppendPod(resp, static_cast<int32_t>(HDL_OK));
+        AppendPod(resp, static_cast<uint32_t>(99)); /* incompatible major */
+        AppendPod(resp, static_cast<uint32_t>(0));
+        AppendPod(resp, HDL_IPC_ENDIAN_LE);
+        AppendString(resp, "mismatch-peer");
+        const uint32_t wsize = static_cast<uint32_t>(resp.size());
+        if (!PipeWriteExact(pipe, &wsize, sizeof(wsize)) ||
+            !PipeWriteExact(pipe, resp.data(), wsize)) {
+            return;
+        }
+        served.store(true);
+    });
+
+    PipeClient client(pid);
+    const bool connected = client.Connect(3000);
+    const std::string& err = client.NegotiateError();
+    const bool rejected =
+        !connected && err.find("mismatch") != std::string::npos && served.load();
+    Report(c, rejected, false, "ipc/reject_major_mismatch",
+           rejected ? "PipeClient::Negotiate refuses incompatible major" : err.c_str());
+
+    server.join();
+    CloseHandle(pipe);
 }
 
 void RunStoreUnit(Counters& c) {
@@ -1076,6 +1174,8 @@ int wmain(int argc, wchar_t** argv) {
     std::wprintf(L"client=%ls\ndll=%ls\ntarget=%ls\n", client_full, dll_full, target_full);
 
     Counters c;
+    Report(c, hdl::proto::HDL_IPC_PROTO_MAJOR == 1, false, "ipc/proto_major_v1", "");
+    RunNegotiateMismatch(c);
     RunStoreUnit(c);
     RunClientLiveTests(c, client_full, target_full, dll_full);
 

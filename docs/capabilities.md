@@ -36,6 +36,17 @@ Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_nam
 
 ## Framing and encoding
 
+### Handshake
+
+On connect, `PipeClient` sends `OpHello` then `OpCapabilities` before other work.
+
+| Op | Reply fields |
+|----|----------------|
+| `OpHello` (101) | `status`, `major` (`HDL_IPC_PROTO_MAJOR`), `minor`, `endian` (`HDL_IPC_ENDIAN_LE=1`), build id string |
+| `OpCapabilities` (102) | `status`, `uint32_t` feature bits (`HDL_CAP_SEARCH`, `HDL_CAP_DISCOVER`, …) |
+
+Incompatible major ⇒ connect fails with a clear negotiate error. `OpPing` remains liveness-only.
+
 ### Frame layout
 
 Every request and response is a length-prefixed byte frame:
@@ -55,6 +66,7 @@ Implementation: `PipeReadFrame` / `PipeWriteFrame` in `src/ipc/` (facade in `ipc
 | `AppendString` / `TakeString` | `uint32_t byte_len` + NUL-terminated narrow bytes (len includes NUL; empty ⇒ `0`) |
 | `AppendWString` / `TakeWString` | `uint32_t byte_len` + UTF-16LE including trailing `L'\0'` (len includes NUL; empty ⇒ `0`) |
 | `AppendBytes` | Raw bytes |
+| `AppendHdl*` / `TakeHdl*` (`wire.hpp`) | Field-wise LE codecs for public `Hdl*` reply structs (no struct padding on the wire) |
 
 ### Optional request trailer
 

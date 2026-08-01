@@ -5,6 +5,7 @@
 #include "util.hpp"
 
 #include "protocol.hpp"
+#include "ipc/wire.hpp"
 #include "hdllib/hdllib.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -221,7 +222,7 @@ int CmdResolvePattern(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     HdlPatternResult out{};
-    if (!r.TakePod(st) || !r.Take(&out, sizeof(out))) {
+    if (!r.TakePod(st) || !hdl::proto::TakeHdlPatternResult(r, out)) {
         return FailBadResp(ctx);
     }
     if (ctx.json) {
@@ -387,7 +388,7 @@ int CmdPtrscan(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlPointerPath path{};
-            if (!r.Take(&path, sizeof(path))) {
+            if (!hdl::proto::TakeHdlPointerPath(r, path)) {
                 return FailBadResp(ctx);
             }
             if (i == 0) {
@@ -414,7 +415,7 @@ int CmdPtrscan(CmdCtx& ctx) {
     wprintf(L"status=%ls count=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
-        if (!r.Take(&path, sizeof(path))) {
+        if (!hdl::proto::TakeHdlPointerPath(r, path)) {
             return FailBadResp(ctx);
         }
         if (i == 0) {
@@ -468,7 +469,7 @@ int CmdProbe(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlStructField f{};
-            if (!r.Take(&f, sizeof(f))) {
+            if (!hdl::proto::TakeHdlStructField(r, f)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -488,7 +489,7 @@ int CmdProbe(CmdCtx& ctx) {
     wprintf(L"status=%ls fields=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlStructField f{};
-        if (!r.Take(&f, sizeof(f))) {
+        if (!hdl::proto::TakeHdlStructField(r, f)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  +0x%x kind=%u value=%016llx\n", f.offset, f.kind,

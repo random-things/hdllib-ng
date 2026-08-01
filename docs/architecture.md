@@ -130,9 +130,10 @@ on explicit unload.
 
 ## IPC request path
 
-The server uses one accept thread and a detached worker per connected client.
+The server uses one accept thread and a joinable worker per connected client.
 Each worker reads and handles requests serially for that connection; different
-clients run concurrently.
+clients run concurrently. On stop, the accept thread cancels I/O, joins workers,
+then closes session/job maps.
 
 ```mermaid
 sequenceDiagram
@@ -357,16 +358,17 @@ reapply a patch.
 
 ## Concurrency and shutdown cautions
 
-- Client workers are detached. Server shutdown cancels active pipe I/O,
-  disconnects clients, waits briefly for workers, then closes sessions/jobs.
+- Client workers are joinable. Server shutdown cancels active pipe I/O, joins
+  workers, then closes session/job maps. `CoreShutdownPrepare` restores
+  instrumentation only; domain session/job sweep runs after workers join.
 - Domain registries use their own locks. Do not hold a registry lock while
   calling arbitrary target code.
 - Cancellation and deadlines are checked by long loops; they do not terminate a
   running call or Windows primitive.
 - Hook, watch, health, and discover all exchange events. Changing queue or
   shutdown order can affect several subsystems.
-- Core teardown order is intentional: stop incoming IPC first, close
-  discover/jobs, then remove watch/patch/hook resources and allocations.
+- Core teardown order is intentional: restore instrumentation, stop/join IPC,
+  close discover/jobs/sessions, then free allocs/disasm registry.
 - `HdlCall` worker timeout abandons the wait; the callee may still be executing.
 - `RunOnWindowThread` temporarily subclasses a window and uses
   `SendMessageTimeout`; it needs a viable top-level non-console HWND.

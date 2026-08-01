@@ -10,6 +10,8 @@ namespace hdl {
 namespace ipc {
 
 bool HandlePing(HANDLE pipe, proto::Reader& r);
+bool HandleHello(HANDLE pipe, proto::Reader& r);
+bool HandleCapabilities(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogFile(HANDLE pipe, proto::Reader& r);
 bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r);
