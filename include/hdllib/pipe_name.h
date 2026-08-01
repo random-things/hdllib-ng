@@ -233,6 +233,7 @@ static inline int HdlFormatPipeName(uint32_t pid, wchar_t* out, size_t out_cch) 
 static inline HANDLE HdlOpenLocalPipe(uint32_t pid) {
     wchar_t name[128];
     if (HdlFormatPipeName(pid, name, 128) != 0) {
+        SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
     // codeql[cpp/path-injection]
