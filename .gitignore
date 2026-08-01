@@ -27,13 +27,23 @@ CMakeUserPresets.json
 # IDE
 .idea/
 .vscode/
-.cursor/
+.cursor/*
+# Keep shared Cursor agent hooks (clang-format after edits).
+!.cursor/hooks.json
+!.cursor/hooks/
+!.cursor/hooks/**
 
 # Misc
 *.log
 .DS_Store
 .gitnexus
 .claude
+
+# Local CodeQL (tools/ci/run-codeql.ps1)
+.codeql-db/
+codeql-results.sarif
+codeql-results.csv
+tools/.cache/
 
 # Python
 __pycache__/

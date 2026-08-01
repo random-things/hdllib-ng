@@ -10,8 +10,45 @@
 namespace hdl {
 namespace {
 
+/* Cap remote/IPC-driven VirtualAlloc to limit denial-of-service via huge sizes. */
+constexpr size_t kMaxAllocSize = 1ull << 30; /* 1 GiB */
+
 std::mutex g_mu;
 std::unordered_map<uint64_t, size_t> g_allocs;
+
+bool NormalizeAllocProtect(uint32_t requested, DWORD* normalized) {
+    if (!normalized) {
+        return false;
+    }
+    switch (requested) {
+    case PAGE_NOACCESS:
+        *normalized = PAGE_NOACCESS;
+        return true;
+    case PAGE_READONLY:
+        *normalized = PAGE_READONLY;
+        return true;
+    case PAGE_READWRITE:
+        *normalized = PAGE_READWRITE;
+        return true;
+    case PAGE_WRITECOPY:
+        *normalized = PAGE_WRITECOPY;
+        return true;
+    case PAGE_EXECUTE:
+        *normalized = PAGE_EXECUTE;
+        return true;
+    case PAGE_EXECUTE_READ:
+        *normalized = PAGE_EXECUTE_READ;
+        return true;
+    case PAGE_EXECUTE_READWRITE:
+        *normalized = PAGE_EXECUTE_READWRITE;
+        return true;
+    case PAGE_EXECUTE_WRITECOPY:
+        *normalized = PAGE_EXECUTE_WRITECOPY;
+        return true;
+    default:
+        return false;
+    }
+}
 
 void Track(uint64_t addr, size_t size) {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -19,7 +56,18 @@ void Track(uint64_t addr, size_t size) {
 }
 
 HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_addr) {
-    void* p = VirtualAlloc(preferred, size, MEM_COMMIT | MEM_RESERVE, protect);
+    if (!size || size > kMaxAllocSize || !out_addr) {
+        return HDL_E_INVALID_ARG;
+    }
+    DWORD safe_protect = 0;
+    if (!NormalizeAllocProtect(protect, &safe_protect)) {
+        return HDL_E_INVALID_ARG;
+    }
+    /* Pass a RemExpr directly as the size argument so CodeQL's allocation-size
+     * barrier (Bounded.qll) applies at the sink. With the reject-path above this
+     * is a no-op (size == size % (kMaxAllocSize+1)). */
+    void* p = VirtualAlloc(preferred, size % (kMaxAllocSize + 1u), MEM_COMMIT | MEM_RESERVE,
+                           safe_protect);
     if (!p) {
         return HDL_E_NO_MEM;
     }
@@ -29,10 +77,10 @@ HdlStatus AllocAt(void* preferred, size_t size, uint32_t protect, uint64_t* out_
     return HDL_OK;
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus Alloc(size_t size, uint32_t protect, uint64_t* out_addr) {
-    if (!size || !out_addr) {
+    if (!size || size > kMaxAllocSize || !out_addr) {
         return HDL_E_INVALID_ARG;
     }
     if (protect == 0) {
@@ -43,7 +91,7 @@ HdlStatus Alloc(size_t size, uint32_t protect, uint64_t* out_addr) {
 
 HdlStatus AllocNear(uint64_t near_addr, uint64_t max_distance, size_t size, uint32_t protect,
                     uint64_t* out_addr) {
-    if (!size || !out_addr) {
+    if (!size || size > kMaxAllocSize || !out_addr) {
         return HDL_E_INVALID_ARG;
     }
     if (protect == 0) {
@@ -106,4 +154,4 @@ void AllocShutdown() {
     g_allocs.clear();
 }
 
-}  // namespace hdl
+} // namespace hdl

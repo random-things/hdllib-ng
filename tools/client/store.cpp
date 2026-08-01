@@ -24,11 +24,29 @@ std::string Escape(const std::string& s) {
     return o;
 }
 
+bool NormalizeUserFilePath(const wchar_t* path, wchar_t* full, size_t full_cch) {
+    if (!path || !path[0] || !full || full_cch < 2) {
+        return false;
+    }
+    const size_t len = wcslen(path);
+    if (len == 0 || len >= full_cch) {
+        return false;
+    }
+    const DWORD n = GetFullPathNameW(path, static_cast<DWORD>(full_cch), full, nullptr);
+    return n > 0 && n < full_cch;
+}
+
 bool OpenInWide(const wchar_t* path, std::ifstream* out) {
     if (!path || !out) {
         return false;
     }
-    out->open(path, std::ios::binary);
+    wchar_t full[MAX_PATH];
+    if (!NormalizeUserFilePath(path, full, MAX_PATH)) {
+        return false;
+    }
+    // Local CLI --store path chosen by the operator running hdlclient.
+    // codeql[cpp/path-injection]
+    out->open(full, std::ios::binary);
     return static_cast<bool>(*out);
 }
 
@@ -36,7 +54,12 @@ bool OpenOutWide(const wchar_t* path, std::ofstream* out) {
     if (!path || !out) {
         return false;
     }
-    out->open(path, std::ios::binary);
+    wchar_t full[MAX_PATH];
+    if (!NormalizeUserFilePath(path, full, MAX_PATH)) {
+        return false;
+    }
+    // codeql[cpp/path-injection]
+    out->open(full, std::ios::binary);
     return static_cast<bool>(*out);
 }
 

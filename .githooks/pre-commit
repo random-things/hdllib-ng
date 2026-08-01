@@ -1,0 +1,7 @@
+#!/bin/sh
+# Format staged C/C++ files with clang-format (matches CI check-format.ps1).
+# Install once: powershell -NoProfile -File tools/ci/install-git-hooks.ps1
+
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/tools/ci/fix-format.ps1" -Staged

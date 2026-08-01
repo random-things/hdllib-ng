@@ -143,8 +143,10 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
             as_utf16 = samples > 0 && nul_odd * 2 >= samples;
         }
         if (as_utf16) {
-            const wchar_t* w = reinterpret_cast<const wchar_t*>(raw.data() + start);
-            collected.append(w, nbytes / sizeof(wchar_t));
+            /* Copy UTF-16LE bytes into wchar_t storage (Windows wchar_t is 2 bytes). */
+            std::wstring w(nbytes / sizeof(wchar_t), L'\0');
+            memcpy(w.data(), raw.data() + start, nbytes);
+            collected.append(w);
         } else {
             wchar_t wbuf[8192];
             int remaining = static_cast<int>(raw.size());

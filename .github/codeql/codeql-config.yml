@@ -1,5 +1,14 @@
 name: hdllib CodeQL configuration
 
+# Note: paths-ignore has no effect for traced C/C++ databases.
 paths-ignore:
   - build/**
   - third_party/**
+
+queries:
+  - uses: ./.github/codeql/hdllib-security-extended.qls
+
+# Applied by github/codeql-action even if the .qls exclude is ignored.
+query-filters:
+  - exclude:
+      id: cpp/uncontrolled-process-operation

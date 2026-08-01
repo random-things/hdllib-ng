@@ -61,15 +61,9 @@ PipeClient::~PipeClient() {
 bool PipeClient::Connect(DWORD timeout_ms) {
     Close();
     negotiate_error_.clear();
-    wchar_t name[128];
-    if (HdlFormatPipeName(pid_, name, 128) != 0) {
-        return false;
-    }
-
     const DWORD start = GetTickCount();
     for (;;) {
-        HANDLE h =
-            CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        HANDLE h = HdlOpenLocalPipe(pid_);
         if (h != INVALID_HANDLE_VALUE) {
             DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
             SetNamedPipeHandleState(h, &mode, nullptr, nullptr);
@@ -93,7 +87,7 @@ bool PipeClient::Connect(DWORD timeout_ms) {
         if (GetTickCount() - start > timeout_ms) {
             return false;
         }
-        WaitNamedPipeW(name, 200);
+        HdlWaitLocalPipe(pid_, 200);
         Sleep(50);
     }
 }

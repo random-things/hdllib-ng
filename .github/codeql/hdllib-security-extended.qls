@@ -1,0 +1,9 @@
+# Single suite for local + GitHub Actions (do not also pull in security-extended
+# separately — an additive exclude would not remove queries from the other suite).
+- description: hdllib C/C++ security-extended (injection toolkit profile)
+- import: codeql-suites/cpp-security-extended.qls
+  from: codeql/cpp-queries
+- exclude:
+    id: cpp/uncontrolled-process-operation
+- query: AlertSuppression.ql
+  from: codeql/cpp-queries

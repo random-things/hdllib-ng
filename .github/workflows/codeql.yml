@@ -29,7 +29,11 @@ jobs:
         with:
           languages: c-cpp
           config-file: ./.github/codeql/codeql-config.yml
-          queries: security-extended
+          # v4.37.3 embeds codeql-bundle-v2.26.1. The local runner validates
+          # this against .github/codeql/toolchain.json before every analysis.
+          # Force the same suite as tools/ci/run-codeql.ps1. Without `+`, this
+          # overrides config `queries` — keep it identical to codeql-config.yml.
+          queries: ./.github/codeql/hdllib-security-extended.qls
 
       - name: Configure
         run: >-
@@ -43,3 +47,4 @@ jobs:
         uses: github/codeql-action/analyze@v4.37.3
         with:
           category: /language:c-cpp
+          wait-for-processing: true

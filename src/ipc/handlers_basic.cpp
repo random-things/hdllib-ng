@@ -70,9 +70,11 @@ bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
     }
     /* The pipe path is untrusted, but the pipe DACL admits only SYSTEM/Admins/owner (see
      * BuildPipeSa), all of whom can already run arbitrary code via OpWriteMemory/OpCall. Opening an
-     * append-only log at a caller-chosen path is strictly weaker, so no path sanitization here. */
+     * append-only log at a caller-chosen path is strictly weaker; SetLogFile still normalizes via
+     * GetFullPathNameW and rejects oversized paths. */
     const wchar_t* log_path = path.empty() ? nullptr : path.c_str();
-    const bool log_ok = SetLogFile(log_path); // codeql[cpp/path-injection]: trusted control pipe
+    // codeql[cpp/path-injection]
+    const bool log_ok = SetLogFile(log_path);
     AppendPod(resp, static_cast<int32_t>(log_ok ? HDL_OK : HDL_E_FAILED));
     return WriteFrame(pipe, resp);
 }

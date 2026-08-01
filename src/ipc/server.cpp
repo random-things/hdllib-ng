@@ -4,6 +4,7 @@
 #include "core.hpp"
 #include "dispatch.hpp"
 #include "framing.hpp"
+#include "hdllib/pipe_name.h"
 #include "log.hpp"
 
 #include <atomic>
@@ -42,8 +43,7 @@ void SignalStop() {
     if (g_stop_event) {
         SetEvent(g_stop_event);
     }
-    HANDLE client = CreateFileW(PipeName().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                OPEN_EXISTING, 0, nullptr);
+    HANDLE client = HdlOpenLocalPipe(GetCurrentProcessId());
     if (client != INVALID_HANDLE_VALUE) {
         CloseHandle(client);
     }
