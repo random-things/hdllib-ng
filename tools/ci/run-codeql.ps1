@@ -168,7 +168,7 @@ exit /b %ERRORLEVEL%
                 --language=cpp `
                 --source-root=$repoRoot `
                 --codescanning-config=$configPath `
-                --command=$buildScript
+                --command="cmd /c `"$buildScript`""
             if ($LASTEXITCODE -ne 0) {
                 throw "codeql database create failed with exit code $LASTEXITCODE."
             }
