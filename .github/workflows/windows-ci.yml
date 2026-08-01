@@ -53,7 +53,7 @@ jobs:
         run: ctest --preset ci-headless
 
       - name: Upload release binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hdllib-windows-x64-release
           if-no-files-found: error
@@ -100,7 +100,7 @@ jobs:
 
       - name: Upload GUI test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hdllib-gui-test-log-${{ github.run_attempt }}
           if-no-files-found: ignore
