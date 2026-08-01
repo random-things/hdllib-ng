@@ -1,6 +1,6 @@
 #include "domain_api.hpp"
-#include "support.hpp"
 #include "protocol.hpp"
+#include "support.hpp"
 
 #include <cstddef>
 #include <cstring>
@@ -114,13 +114,14 @@ void RunLocalDiscoverTests(Counters& c) {
     }
 
     uint64_t cand_id = 0;
-    st = hdl::DiscoverAddCandidate(session, HDL_CAND_FUNCTION,
-                                 reinterpret_cast<uint64_t>(&LocalDiscoverLeaf), "leaf", &cand_id);
+    st =
+        hdl::DiscoverAddCandidate(session, HDL_CAND_FUNCTION,
+                                  reinterpret_cast<uint64_t>(&LocalDiscoverLeaf), "leaf", &cand_id);
     Report(c, st == HDL_OK && cand_id != 0, false, "HdlDiscoverAddCandidate", "");
 
     HdlSynthesizedPattern pat{};
     st = hdl::DiscoverSynthesizePattern(session, cand_id, 0, 24, HDL_SEARCH_IMAGE, nullptr, &pat,
-                                      nullptr);
+                                        nullptr);
     Report(c, st == HDL_OK && pat.pattern[0] && pat.unique_hits >= 1 &&
                    pat.resolved_addr == reinterpret_cast<uint64_t>(&LocalDiscoverLeaf),
            false, "HdlDiscoverSynthesizePattern", "");
@@ -137,8 +138,8 @@ void RunLocalDiscoverTests(Counters& c) {
         preds[2].offset = 8;
         preds[2].kind = HDL_PRED_LE_I32;
         preds[2].a = 4;
-        st = hdl::DiscoverConstraintScan(session, sizeof(LocalDiscoverObj), preds, 3, 0, nullptr, 32,
-                                       "player", nullptr);
+        st = hdl::DiscoverConstraintScan(session, sizeof(LocalDiscoverObj), preds, 3, 0, nullptr,
+                                         32, "player", nullptr);
         HdlCandidate cands[64]{};
         uint32_t n = 64;
         hdl::DiscoverGetCandidates(session, cands, &n);
@@ -159,7 +160,7 @@ void RunLocalDiscoverTests(Counters& c) {
         HdlDiscoverSession* cluster_sess = nullptr;
         hdl::DiscoverCreate(&cluster_sess);
         st = hdl::DiscoverClusterType(cluster_sess, reinterpret_cast<uint64_t>(&g_local_obj_a),
-                                    sizeof(LocalDiscoverObj), 0, nullptr, 32, nullptr);
+                                      sizeof(LocalDiscoverObj), 0, nullptr, 32, nullptr);
         HdlCandidate cands[32]{};
         uint32_t n = 32;
         hdl::DiscoverGetCandidates(cluster_sess, cands, &n);
@@ -178,7 +179,7 @@ void RunLocalDiscoverTests(Counters& c) {
         Report(c, st == HDL_OK, false, "HdlDiscoverWatch", "");
 
         st = hdl::DiscoverWatchRegion(session, reinterpret_cast<uint64_t>(&g_local_obj_a),
-                                    sizeof(g_local_obj_a));
+                                      sizeof(g_local_obj_a));
         Report(c, st == HDL_OK, false, "HdlDiscoverWatchRegion", "");
 
         st = hdl::DiscoverActionBegin(session, "attack");
@@ -321,8 +322,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     const uint8_t pattern_bytes[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x11, 0x22};
     memcpy(blob + 8, pattern_bytes, sizeof(pattern_bytes));
     size_t wrote = 0;
-    st = hdl::WriteMemory(reinterpret_cast<uint64_t>(blob + 8), pattern_bytes, sizeof(pattern_bytes),
-                        &wrote);
+    st = hdl::WriteMemory(reinterpret_cast<uint64_t>(blob + 8), pattern_bytes,
+                          sizeof(pattern_bytes), &wrote);
     Report(c, st == HDL_OK && wrote == sizeof(pattern_bytes), false, "HdlWriteMemory", "");
 
     // Enum
@@ -343,8 +344,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     // Search
     uint64_t hits[8]{};
     uint32_t hit_count = 8;
-    st = hdl::SearchMemory(reinterpret_cast<uint64_t>(blob), sizeof(blob), "DE AD BE EF ?? 22", hits,
-                         &hit_count, nullptr);
+    st = hdl::SearchMemory(reinterpret_cast<uint64_t>(blob), sizeof(blob), "DE AD BE EF ?? 22",
+                           hits, &hit_count, nullptr);
     Report(c, st == HDL_OK && hit_count >= 1, false, "HdlSearchMemory", "");
 
     volatile int cancel = 1;
@@ -505,7 +506,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     g_orig_add = nullptr;
     HdlHookHandle hook = nullptr;
     st = hdl::Hook(reinterpret_cast<void*>(&AddNums), reinterpret_cast<void*>(&DetourAdd),
-                 reinterpret_cast<void**>(&g_orig_add), &hook);
+                   reinterpret_cast<void**>(&g_orig_add), &hook);
     const bool hooked = st == HDL_OK && hook && g_orig_add;
     Report(c, hooked, false, "HdlHook", "");
     if (hooked) {
@@ -569,11 +570,11 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             strncpy_s(imps[1].name, "DispatchMessageW", _TRUNCATE);
             uint32_t cn = 0;
             st = hdl::ClassifyFingerprintApi(mods, 4, imps, 2, IMAGE_SUBSYSTEM_WINDOWS_GUI,
-                                        HDL_FP_SCAN_DEFAULT, nullptr, &cn);
+                                             HDL_FP_SCAN_DEFAULT, nullptr, &cn);
             Report(c, st == HDL_E_BUFFER_SMALL && cn > 0, false, "HdlClassifyFingerprint size", "");
             std::vector<HdlFingerprintTag> tags(cn);
             st = hdl::ClassifyFingerprintApi(mods, 4, imps, 2, IMAGE_SUBSYSTEM_WINDOWS_GUI,
-                                        HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
+                                             HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
             bool d3d11_primary = false;
             bool win32_ok = false;
             bool gui_app = false;
@@ -601,10 +602,10 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                                     L"user32.dll", L"dxgi.dll"};
             uint32_t cn = 0;
             st = hdl::ClassifyFingerprintApi(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
-                                        HDL_FP_SCAN_DEFAULT, nullptr, &cn);
+                                             HDL_FP_SCAN_DEFAULT, nullptr, &cn);
             std::vector<HdlFingerprintTag> tags(cn);
             st = hdl::ClassifyFingerprintApi(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
-                                        HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
+                                             HDL_FP_SCAN_DEFAULT, tags.data(), &cn);
             bool coreclr = false;
             bool wpf_primary = false;
             bool win32_suppressed = true;
@@ -627,11 +628,13 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         {
             const wchar_t* mods[] = {L"dxgi.dll", L"user32.dll"};
             uint32_t n_bare = 0;
-            hdl::ClassifyFingerprintApi(mods, 2, nullptr, 0, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
-                                   nullptr, &n_bare);
+            hdl::ClassifyFingerprintApi(mods, 2, nullptr, 0, 0,
+                                        HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS, nullptr,
+                                        &n_bare);
             std::vector<HdlFingerprintTag> bare(n_bare);
-            hdl::ClassifyFingerprintApi(mods, 2, nullptr, 0, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
-                                   bare.data(), &n_bare);
+            hdl::ClassifyFingerprintApi(mods, 2, nullptr, 0, 0,
+                                        HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS, bare.data(),
+                                        &n_bare);
             uint32_t bare_conf = 0;
             for (uint32_t i = 0; i < n_bare; ++i) {
                 if (strcmp(bare[i].id, "d3d11") == 0) {
@@ -643,11 +646,13 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             strncpy_s(create.name, "D3D11CreateDevice", _TRUNCATE);
             const wchar_t* mods2[] = {L"d3d11.dll", L"dxgi.dll"};
             uint32_t n_full = 0;
-            hdl::ClassifyFingerprintApi(mods2, 2, &create, 1, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
-                                   nullptr, &n_full);
+            hdl::ClassifyFingerprintApi(mods2, 2, &create, 1, 0,
+                                        HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS, nullptr,
+                                        &n_full);
             std::vector<HdlFingerprintTag> full(n_full);
-            hdl::ClassifyFingerprintApi(mods2, 2, &create, 1, 0, HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS,
-                                   full.data(), &n_full);
+            hdl::ClassifyFingerprintApi(mods2, 2, &create, 1, 0,
+                                        HDL_FP_SCAN_MODULES | HDL_FP_SCAN_IMPORTS, full.data(),
+                                        &n_full);
             uint32_t full_conf = 0;
             for (uint32_t i = 0; i < n_full; ++i) {
                 if (strcmp(full[i].id, "d3d11") == 0) {
@@ -670,7 +675,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         Report(c, st == HDL_OK && addr != 0, false, "HdlResolveExport", "");
 
         HdlCallResult cres{};
-        st = hdl::CallExport(L"kernel32.dll", "GetCurrentProcessId", nullptr, 0, &cres, 2000, nullptr);
+        st = hdl::CallExport(L"kernel32.dll", "GetCurrentProcessId", nullptr, 0, &cres, 2000,
+                             nullptr);
         Report(c, st == HDL_OK && cres.return_value == GetCurrentProcessId(), false, "HdlCallExport",
                "");
 
@@ -728,7 +734,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         {
             uint64_t near_a = 0;
             st = hdl::AllocNear(reinterpret_cast<uint64_t>(&AddNums), 0x7FFFFFFFull, 0x1000,
-                              PAGE_EXECUTE_READWRITE, &near_a);
+                                PAGE_EXECUTE_READWRITE, &near_a);
             Report(c, st == HDL_OK && near_a != 0, false, "HdlAllocNear", "");
             if (near_a) {
                 hdl::Free(near_a);
@@ -795,7 +801,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         {
             uint32_t insn_n = 8;
             std::vector<HdlInsn> insns(insn_n);
-            st = hdl::testapi::Disasm(reinterpret_cast<uint64_t>(&AddNums), 8, insns.data(), &insn_n);
+            st = hdl::testapi::Disasm(reinterpret_cast<uint64_t>(&AddNums), 8, insns.data(),
+                                      &insn_n);
             Report(c, st == HDL_OK && insn_n >= 1 && insns[0].length > 0, false, "HdlDisasm", "");
         }
 
@@ -879,7 +886,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             Report(c, (st == HDL_E_BUFFER_SMALL || st == HDL_OK), false, "HdlEnumFunctions", "");
             uint32_t xn = 0;
             st = hdl::XrefsFrom(reinterpret_cast<uint64_t>(&LocalDiscoverAction), 1, 32,
-                              HDL_XREF_CALL | HDL_XREF_JMP, nullptr, &xn, nullptr);
+                                HDL_XREF_CALL | HDL_XREF_JMP, nullptr, &xn, nullptr);
             Report(c, (st == HDL_E_BUFFER_SMALL || st == HDL_OK), false, "HdlXrefsFrom", "");
         }
 
@@ -894,7 +901,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             Report(c, st == HDL_E_BUFFER_SMALL && vn >= 1, false, "HdlWalkVtable", "");
             RttiProbe probe;
             char rtti_name[128] = {};
-            st = hdl::QueryRttiName(reinterpret_cast<uint64_t>(&probe), 1, rtti_name, sizeof(rtti_name));
+            st = hdl::QueryRttiName(reinterpret_cast<uint64_t>(&probe), 1, rtti_name,
+                                    sizeof(rtti_name));
             Report(c, st == HDL_OK && strstr(rtti_name, "RttiProbe") != nullptr, false,
                    "HdlQueryRttiName", rtti_name);
         }
@@ -904,9 +912,11 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             void* page = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
             Report(c, page != nullptr, false, "VirtualAlloc for protect test", "");
             if (page) {
-                st = hdl::ProtectMemory(reinterpret_cast<uint64_t>(page), 0x1000, PAGE_READONLY, &old);
+                st = hdl::ProtectMemory(reinterpret_cast<uint64_t>(page), 0x1000, PAGE_READONLY,
+                                        &old);
                 Report(c, st == HDL_OK, false, "HdlProtectMemory", "");
-                hdl::ProtectMemory(reinterpret_cast<uint64_t>(page), 0x1000, PAGE_READWRITE, nullptr);
+                hdl::ProtectMemory(reinterpret_cast<uint64_t>(page), 0x1000, PAGE_READWRITE,
+                                   nullptr);
                 VirtualFree(page, 0, MEM_RELEASE);
             }
             st = hdl::FlushICache(reinterpret_cast<uint64_t>(&AddNums), 16);
@@ -921,7 +931,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             void* page = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
             HdlWatchHandle pw = 0;
             if (page) {
-                st = hdl::WatchPage(reinterpret_cast<uint64_t>(page), 0x1000, HDL_WATCH_PAGE_GUARD, &pw);
+                st = hdl::WatchPage(reinterpret_cast<uint64_t>(page), 0x1000, HDL_WATCH_PAGE_GUARD,
+                                    &pw);
                 Report(c, st == HDL_OK && pw != 0, false, "HdlWatchPage", "");
             } else {
                 Report(c, false, false, "HdlWatchPage", "alloc failed");
@@ -955,7 +966,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             HdlXrefEdge edges[16]{};
             uint32_t ec = 16;
             st = hdl::XrefsTo(callee, 16, HDL_XREF_CALL | HDL_XREF_JMP | HDL_XREF_FUNC, 0, nullptr,
-                            edges, &ec, nullptr);
+                              edges, &ec, nullptr);
             bool found_caller = false;
             if (st == HDL_OK) {
                 const uint64_t caller = reinterpret_cast<uint64_t>(&LocalDiscoverAction);
@@ -1072,7 +1083,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             extra.kind = HDL_CALL_ARG_U64;
             extra.u64 = 10;
             st = hdl::CallVtable(reinterpret_cast<uint64_t>(&obj), 0, &extra, 1, 1,
-                               HDL_CALL_THREAD_WORKER, &r, 2000, nullptr);
+                                 HDL_CALL_THREAD_WORKER, &r, 2000, nullptr);
             Report(c, st == HDL_OK && r.return_value == 17, false, "HdlCallVtable", "");
         }
 
@@ -1137,7 +1148,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             uint64_t xrefs[8]{};
             uint32_t xc = 8;
             st = hdl::FindStringXrefs(local_str, 0, 0, HDL_XREF_ABSOLUTE | HDL_XREF_RIP_REL,
-                                    HDL_SEARCH_IMAGE, nullptr, xrefs, &xc, nullptr);
+                                      HDL_SEARCH_IMAGE, nullptr, xrefs, &xc, nullptr);
             Report(c, st == HDL_OK || st == HDL_E_NOT_FOUND, false, "HdlFindStringXrefs local", "");
 
             uint8_t probe_blob[32]{};
@@ -1174,14 +1185,15 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     Report(c, st == HDL_OK && base != 0, false, "HdlInjectDll local (pid 0)", "");
 
     st = hdl::InjectDllEx(0, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr, nullptr,
-                        &base);
+                          &base);
     Report(c, st == HDL_OK, false, "HdlInjectDllEx local ignores method", "");
 
-    st = hdl::InjectDllEx(1, L"", HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr, nullptr, &base);
+    st =
+        hdl::InjectDllEx(1, L"", HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr, nullptr, &base);
     Report(c, st == HDL_E_INVALID_ARG, false, "HdlInjectDllEx empty path", "");
 
-    st = hdl::InjectDllEx(1, L"C:\\nonexistent_hdllib_test_zzz.dll", HDL_INJECT_CREATE_REMOTE_THREAD,
-                        nullptr, nullptr, nullptr, &base);
+    st = hdl::InjectDllEx(1, L"C:\\nonexistent_hdllib_test_zzz.dll",
+                          HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr, nullptr, &base);
     Report(c, st == HDL_E_NOT_FOUND, false, "HdlInjectDllEx missing file", "");
 
     st = hdl::testapi::UnloadDllCompat(0, L"", 0, &base);
@@ -1233,9 +1245,8 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     }
 
     uint64_t base = 0;
-    const HdlStatus ist =
-        hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
-                       nullptr, &base);
+    const HdlStatus ist = hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                           nullptr, nullptr, nullptr, &base);
     const bool verified =
         ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
     Report(c, verified, false, "locate inject", "");
@@ -1487,9 +1498,8 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     }
 
     uint64_t base = 0;
-    const HdlStatus ist =
-        hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
-                       nullptr, &base);
+    const HdlStatus ist = hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                           nullptr, nullptr, nullptr, &base);
     const bool verified =
         ist == HDL_OK &&
         hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
@@ -2010,8 +2020,7 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
     GetSystemDirectoryW(sys, MAX_PATH);
     wcscat_s(sys, L"\\wintrust.dll");
     uint64_t secondary = 0;
-    const HdlStatus sst =
-        hdl::InjectDll(target.pid, sys, &secondary);
+    const HdlStatus sst = hdl::InjectDll(target.pid, sys, &secondary);
     Report(c, sst == HDL_OK && secondary != 0, true, "clean_unload/inject secondary", "");
     if (sst == HDL_OK && secondary != 0) {
         /* OpTrackLoadedDll: opcode 95, base u64, wstring path */

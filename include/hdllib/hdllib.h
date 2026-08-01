@@ -8,9 +8,9 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <Windows.h>
-#  ifdef HDL_DOMAIN_TESTS
-#    define HDL_API
-#  elif defined(HDL_EXPORTS)
+#ifdef HDL_DOMAIN_TESTS
+#define HDL_API
+#elif defined(HDL_EXPORTS)
 #    define HDL_API __declspec(dllexport)
 #  else
 #    define HDL_API __declspec(dllimport)
@@ -176,9 +176,6 @@ enum {
  * HdlSearchNext to narrow candidates. Snapshots of prior values are kept for
  * changed/increased/decreased comparisons.
  */
-
-
-
 
 /* ---- Locate: pattern resolve, xrefs, pointer scan, struct probe ---- */
 
@@ -348,11 +345,6 @@ typedef struct HdlDiscoverSession HdlDiscoverSession;
  */
 enum { HDL_RANK_CALLER_ONLY = 1u };
 
-
-
-
-
-
 /* UTF-8 JSON export (max 4 MiB): candidates, evidence, heat, action names. */
 
 /* Best-effort import: AddCandidate for each candidate in JSON. */
@@ -362,14 +354,13 @@ enum { HDL_RANK_CALLER_ONLY = 1u };
  * seed must look like an object with a vtable. Adds HDL_CAND_OBJECT candidates.
  */
 
-
 /* ---- Process / thread health ---- */
 
 /* HdlHealthInfo.flags */
 enum {
-    HDL_HEALTH_OK               = 0,
-    HDL_HEALTH_GUI_HUNG         = 1u,
-    HDL_HEALTH_HIGH_CPU         = 2u,
+    HDL_HEALTH_OK = 0,
+    HDL_HEALTH_GUI_HUNG = 1u,
+    HDL_HEALTH_HIGH_CPU = 2u,
     HDL_HEALTH_RECENT_EXCEPTION = 4u,
 };
 
@@ -766,8 +757,6 @@ typedef struct HdlXrefEdge {
     uint32_t kind; /* HDL_XREF_* */
     uint32_t reserved;
 } HdlXrefEdge;
-
-
 
 /*
  * Map any interior byte address into an instruction-aligned function range for

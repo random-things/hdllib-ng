@@ -124,8 +124,8 @@ bool HandleDiscoverScanValue(HANDLE pipe, proto::Reader& r) {
     uint32_t before = 0;
     DiscoverGetCandidates(session, nullptr, &before);
 
-    const HdlStatus st =
-        DiscoverScanValue(session, &desc, tag.empty() ? nullptr : tag.c_str(), MakeToken(nullptr, job));
+    const HdlStatus st = DiscoverScanValue(session, &desc, tag.empty() ? nullptr : tag.c_str(),
+                                           MakeToken(nullptr, job));
     if (job && !job_id) {
         JobClose(job->id);
     }

@@ -680,7 +680,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             wchar_t tgt_s[32], leaf_s[32];
             swprintf_s(tgt_s, L"0x%llx", static_cast<unsigned long long>(fn));
             swprintf_s(leaf_s, L"0x%llx", static_cast<unsigned long long>(leaf));
-            auto stub = Cli(ctx, {L"stub", L"--kind", L"mov_rax_jmp", L"--target", leaf_s, L"--alloc"});
+            auto stub =
+                Cli(ctx, {L"stub", L"--kind", L"mov_rax_jmp", L"--target", leaf_s, L"--alloc"});
             ExpectOk(c, "client hook-by-va stub", stub);
             uint64_t detour = 0;
             ParseHexAfter(stub.out, L"stub_va=", &detour);

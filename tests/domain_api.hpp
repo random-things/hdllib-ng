@@ -93,4 +93,4 @@ inline HdlStatus UnloadDllCompat(uint32_t pid, const wchar_t* dll_path, int relo
     return UnloadDll(pid, dll_path, reload, 0, out_base);
 }
 
-}  // namespace hdl::testapi
+} // namespace hdl::testapi

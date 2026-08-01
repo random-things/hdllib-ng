@@ -22,4 +22,4 @@ void CALLBACK HdlWinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG i
     (void)event_time;
 }
 
-}  /* extern "C" */
+} /* extern "C" */

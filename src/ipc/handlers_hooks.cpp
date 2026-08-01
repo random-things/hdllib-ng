@@ -41,8 +41,8 @@ bool HandleHook(HANDLE pipe, proto::Reader& r) {
     }
     void* trampoline = nullptr;
     HdlHookHandle handle = nullptr;
-    const HdlStatus st = Hook(reinterpret_cast<void*>(target_va), reinterpret_cast<void*>(detour_va),
-                              &trampoline, &handle);
+    const HdlStatus st = Hook(reinterpret_cast<void*>(target_va),
+                              reinterpret_cast<void*>(detour_va), &trampoline, &handle);
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, reinterpret_cast<uint64_t>(handle));
     AppendPod(resp, reinterpret_cast<uint64_t>(trampoline));
