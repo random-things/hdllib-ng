@@ -183,7 +183,9 @@ int CmdHealthVeh(CmdCtx& ctx) {
     }
     Reader r(resp);
     int32_t st = 0;
-    r.TakePod(st);
+    if (!r.TakePod(st)) {
+        return FailBadResp(ctx);
+    }
     if (ctx.json) {
         JsonWriter w;
         w.BeginObject();

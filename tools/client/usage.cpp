@@ -121,7 +121,6 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> shutdown [--modules]
   hdlclient <pid> reload <dll-path> [--target-pid N]
   hdlclient <pid> log <0-3>
-  hdlclient <pid> log-file [path]
 
 Types: bytes, i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, string, wstring
 Cmp:   exact, unknown, changed, unchanged, increased, decreased,
