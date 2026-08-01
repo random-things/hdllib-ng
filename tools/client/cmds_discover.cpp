@@ -4,8 +4,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -55,7 +56,7 @@ static bool JsonWriteCandidates(JsonWriter& w, hdl::proto::Reader& r, uint32_t c
     w.BeginArray();
     for (uint32_t i = 0; i < count; ++i) {
         HdlCandidate cand{};
-        if (!r.Take(&cand, sizeof(cand))) {
+        if (!hdl::proto::TakeHdlCandidate(r, cand)) {
             w.EndArray();
             return false;
         }
@@ -81,7 +82,7 @@ static bool JsonWriteHeatFields(JsonWriter& w, hdl::proto::Reader& r, uint32_t c
     w.BeginArray();
     for (uint32_t i = 0; i < count; ++i) {
         HdlHeatField hf{};
-        if (!r.Take(&hf, sizeof(hf))) {
+        if (!hdl::proto::TakeHdlHeatField(r, hf)) {
             w.EndArray();
             return false;
         }
@@ -316,7 +317,7 @@ int CmdDiscoverConstraint(CmdCtx& ctx) {
     AppendWString(req, module.c_str());
     AppendString(req, tag.c_str());
     for (const auto& p : preds) {
-        AppendPod(req, p);
+        hdl::proto::AppendHdlFieldPred(req, p);
     }
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -374,7 +375,7 @@ int CmdDiscoverSynth(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     HdlSynthesizedPattern out{};
-    if (!r.TakePod(st) || !r.Take(&out, sizeof(out))) {
+    if (!r.TakePod(st) || !hdl::proto::TakeHdlSynthesizedPattern(r, out)) {
         if (ctx.json) {
             EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
         }
@@ -454,7 +455,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlPointerPath path{};
-            if (!r.Take(&path, sizeof(path))) {
+            if (!hdl::proto::TakeHdlPointerPath(r, path)) {
                 return FailBadResp(ctx);
             }
             if (i == 0) {
@@ -476,7 +477,7 @@ int CmdDiscoverPathscan(CmdCtx& ctx) {
     wprintf(L"status=%ls paths=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
-        if (!r.Take(&path, sizeof(path))) {
+        if (!hdl::proto::TakeHdlPointerPath(r, path)) {
             return FailBadResp(ctx);
         }
         if (i == 0) {
@@ -530,7 +531,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
     AppendPod(req, static_cast<uint32_t>(OpDiscoverPathValidate));
     AppendPod(req, expected);
     AppendPod(req, static_cast<uint32_t>(1));
-    AppendBytes(req, &path, sizeof(path));
+    hdl::proto::AppendHdlPointerPath(req, path);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
@@ -552,7 +553,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < kept; ++i) {
             HdlPointerPath p{};
-            if (!r.Take(&p, sizeof(p))) {
+            if (!hdl::proto::TakeHdlPointerPath(r, p)) {
                 return FailBadResp(ctx);
             }
             if (i == 0) {
@@ -573,7 +574,7 @@ int CmdDiscoverPathValidate(CmdCtx& ctx) {
     wprintf(L"status=%ls kept=%u\n", StatusName(st), kept);
     for (uint32_t i = 0; i < kept; ++i) {
         HdlPointerPath p{};
-        if (!r.Take(&p, sizeof(p))) {
+        if (!hdl::proto::TakeHdlPointerPath(r, p)) {
             return FailBadResp(ctx);
         }
         if (i == 0) {
@@ -684,7 +685,7 @@ static bool OpenOutWide(const wchar_t* path, std::ofstream* out) {
 static bool PrintHeatFields(hdl::proto::Reader& r, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         HdlHeatField hf{};
-        if (!r.Take(&hf, sizeof(hf))) {
+        if (!hdl::proto::TakeHdlHeatField(r, hf)) {
             return false;
         }
         wprintf(L"  +0x%x changes=%u kind=%u size=%u value=%016llx\n", hf.offset, hf.changes,
@@ -904,7 +905,7 @@ int CmdDiscoverMisc(CmdCtx& ctx) {
         wprintf(L"status=%ls count=%u\n", StatusName(st), count);
         for (uint32_t i = 0; i < count; ++i) {
             HdlCandidate cand{};
-            if (!r.Take(&cand, sizeof(cand))) {
+            if (!hdl::proto::TakeHdlCandidate(r, cand)) {
                 return FailBadResp(ctx);
             }
             wprintf(L"  id=%llu kind=%u conf=%u addr=%016llx tag=%hs\n",

@@ -1,6 +1,7 @@
 #include "pipe_client.hpp"
-#include "protocol.hpp"
+#include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -49,7 +50,7 @@ bool ReadFrame(HANDLE pipe, std::vector<uint8_t>& resp) {
     return true;
 }
 
-}  // namespace
+} // namespace
 
 PipeClient::PipeClient(uint32_t pid) : pid_(pid) {}
 
@@ -59,6 +60,7 @@ PipeClient::~PipeClient() {
 
 bool PipeClient::Connect(DWORD timeout_ms) {
     Close();
+    negotiate_error_.clear();
     wchar_t name[128];
     if (HdlFormatPipeName(pid_, name, 128) != 0) {
         return false;
@@ -66,11 +68,23 @@ bool PipeClient::Connect(DWORD timeout_ms) {
 
     const DWORD start = GetTickCount();
     for (;;) {
-        HANDLE h = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        HANDLE h =
+            CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
             DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
             SetNamedPipeHandleState(h, &mode, nullptr, nullptr);
             handle_ = h;
+            if (!Negotiate()) {
+                /* Preserve negotiate_error_ set by Negotiate(); do not call Close(). */
+                if (handle_) {
+                    CloseHandle(static_cast<HANDLE>(handle_));
+                    handle_ = nullptr;
+                }
+                proto_major_ = 0;
+                proto_minor_ = 0;
+                capabilities_ = 0;
+                return false;
+            }
             return true;
         }
         if (GetLastError() != ERROR_PIPE_BUSY && GetLastError() != ERROR_FILE_NOT_FOUND) {
@@ -89,6 +103,59 @@ void PipeClient::Close() {
         CloseHandle(static_cast<HANDLE>(handle_));
         handle_ = nullptr;
     }
+    proto_major_ = 0;
+    proto_minor_ = 0;
+    capabilities_ = 0;
+}
+
+bool PipeClient::Negotiate() {
+    using namespace hdl::proto;
+    negotiate_error_.clear();
+    std::vector<uint8_t> req;
+    AppendPod(req, static_cast<uint32_t>(OpHello));
+    std::vector<uint8_t> resp;
+    if (!Request(req, resp)) {
+        negotiate_error_ = "OpHello failed (transport)";
+        return false;
+    }
+    Reader r(resp);
+    int32_t st = 0;
+    uint32_t major = 0;
+    uint32_t minor = 0;
+    uint32_t endian = 0;
+    std::string build;
+    if (!r.TakePod(st) || st != HDL_OK || !r.TakePod(major) || !r.TakePod(minor) ||
+        !r.TakePod(endian) || !r.TakeString(build)) {
+        negotiate_error_ = "OpHello response malformed";
+        return false;
+    }
+    if (endian != HDL_IPC_ENDIAN_LE) {
+        negotiate_error_ = "unsupported wire endianness";
+        return false;
+    }
+    if (major != HDL_IPC_PROTO_MAJOR) {
+        negotiate_error_ = "IPC protocol major mismatch (DLL=" + std::to_string(major) +
+                           " client=" + std::to_string(HDL_IPC_PROTO_MAJOR) + ")";
+        return false;
+    }
+    proto_major_ = major;
+    proto_minor_ = minor;
+
+    req.clear();
+    resp.clear();
+    AppendPod(req, static_cast<uint32_t>(OpCapabilities));
+    if (!Request(req, resp)) {
+        negotiate_error_ = "OpCapabilities failed (transport)";
+        return false;
+    }
+    Reader cr(resp);
+    uint32_t caps = 0;
+    if (!cr.TakePod(st) || st != HDL_OK || !cr.TakePod(caps)) {
+        negotiate_error_ = "OpCapabilities response malformed";
+        return false;
+    }
+    capabilities_ = caps;
+    return true;
 }
 
 bool PipeClient::Request(const std::vector<uint8_t>& req, std::vector<uint8_t>& resp) {

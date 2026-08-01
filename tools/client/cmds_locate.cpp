@@ -4,8 +4,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -221,7 +222,7 @@ int CmdResolvePattern(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     HdlPatternResult out{};
-    if (!r.TakePod(st) || !r.Take(&out, sizeof(out))) {
+    if (!r.TakePod(st) || !hdl::proto::TakeHdlPatternResult(r, out)) {
         return FailBadResp(ctx);
     }
     if (ctx.json) {
@@ -387,11 +388,12 @@ int CmdPtrscan(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlPointerPath path{};
-            if (!r.Take(&path, sizeof(path))) {
+            if (!hdl::proto::TakeHdlPointerPath(r, path)) {
                 return FailBadResp(ctx);
             }
             if (i == 0) {
-                hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
+                hdlcli::RememberPath(ctx.controller, path,
+                                     module.empty() ? nullptr : module.c_str());
             }
             w.BeginObject();
             w.Key("base");
@@ -414,14 +416,14 @@ int CmdPtrscan(CmdCtx& ctx) {
     wprintf(L"status=%ls count=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
-        if (!r.Take(&path, sizeof(path))) {
+        if (!hdl::proto::TakeHdlPointerPath(r, path)) {
             return FailBadResp(ctx);
         }
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
         }
-        wprintf(L"  base=%016llx depth=%u offs=",
-                static_cast<unsigned long long>(path.static_base), path.depth);
+        wprintf(L"  base=%016llx depth=%u offs=", static_cast<unsigned long long>(path.static_base),
+                path.depth);
         for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
             wprintf(L"%s0x%x", d ? L"," : L"", path.offsets[d]);
         }
@@ -468,7 +470,7 @@ int CmdProbe(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlStructField f{};
-            if (!r.Take(&f, sizeof(f))) {
+            if (!hdl::proto::TakeHdlStructField(r, f)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -488,7 +490,7 @@ int CmdProbe(CmdCtx& ctx) {
     wprintf(L"status=%ls fields=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlStructField f{};
-        if (!r.Take(&f, sizeof(f))) {
+        if (!hdl::proto::TakeHdlStructField(r, f)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  +0x%x kind=%u value=%016llx\n", f.offset, f.kind,

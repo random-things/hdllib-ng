@@ -30,6 +30,8 @@ enum : int {
 std::atomic<int> g_state{kUninit};
 std::mutex g_boot_mu;
 std::condition_variable g_boot_cv;
+/* Set by CoreShutdownFinish; cleared/handled in CoreOnIpcServerExited after workers join. */
+std::atomic<bool> g_finish_after_ipc{false};
 
 void WaitNotBootstrapping() {
     std::unique_lock<std::mutex> lock(g_boot_mu);
@@ -44,7 +46,18 @@ void PublishState(int state) {
     g_boot_cv.notify_all();
 }
 
-/* Tear down instrumentation / sessions. Does not touch IPC or allocs. */
+/* Close jobs/sessions. Prefer calling after IPC workers have joined (ThreadMain does
+ * the IPC maps); this covers HDL_NO_IPC and any leftovers. Close IPC holders first so
+ * DiscoverCloseAll only sweeps domain sessions not still referenced by the maps. */
+void CloseDomainSessionsAndJobs() {
+    ipc::CloseAllSessions();
+    ipc::CloseAllDiscoverSessions();
+    JobCloseAll();
+    DiscoverCloseAll();
+}
+
+/* Tear down instrumentation only. Does not touch IPC maps, jobs, or allocs —
+ * workers may still be on ServeClient stacks until the accept thread joins them. */
 bool BeginShutdown(uint32_t flags) {
     WaitNotBootstrapping();
     int expected = kReady;
@@ -52,11 +65,6 @@ bool BeginShutdown(uint32_t flags) {
         return false;
     }
     HDL_LOG_INFO("helper shutting down (flags=0x%X)", flags);
-
-    JobCloseAll();
-    DiscoverCloseAll();
-    ipc::CloseAllSessions();
-    ipc::CloseAllDiscoverSessions();
 
     WatchShutdown();
     PatchShutdown();
@@ -77,7 +85,7 @@ void FinishShutdownResources() {
     disasm::RegistryShutdown();
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus CoreInit() {
     int expected = kUninit;
@@ -124,7 +132,8 @@ HdlStatus CoreInit() {
 
 void CoreShutdown() {
     if (BeginShutdown(0)) {
-        StopIpcServer();
+        StopIpcServer(); /* ThreadMain joins workers then closes IPC session/job maps. */
+        CloseDomainSessionsAndJobs();
         FinishShutdownResources();
     }
 }
@@ -132,29 +141,35 @@ void CoreShutdown() {
 void CoreShutdownEx(uint32_t flags) {
     if (BeginShutdown(flags)) {
         StopIpcServer();
+        CloseDomainSessionsAndJobs();
         FinishShutdownResources();
     }
 }
 
 void CoreShutdownPrepare(uint32_t flags) {
-    /* Instrumentation only — caller replies, then finishes IPC/allocs. */
+    /* Instrumentation only — session/job maps close after workers join in ThreadMain. */
     BeginShutdown(flags);
 }
 
 void CoreShutdownFinish(void* keep_alive_pipe) {
+    /* Do not free allocs here — this may run on a ServeClient worker that ThreadMain
+     * must join first. ThreadMain calls CoreOnIpcServerExited after joining workers. */
+    g_finish_after_ipc.store(true);
     StopIpcServerNoJoin(keep_alive_pipe);
-    FinishShutdownResources();
+}
+
+void CoreOnIpcServerExited() {
+    if (g_finish_after_ipc.exchange(false)) {
+        /* ThreadMain already joined workers and cleared IPC maps; this sweeps any
+         * domain sessions/jobs not registered in those maps, then frees allocs. */
+        CloseDomainSessionsAndJobs();
+        FinishShutdownResources();
+    }
 }
 
 void CoreShutdownDetach() {
-    if (BeginShutdown(0)) {
-        StopIpcServerNoJoin();
-        FinishShutdownResources();
-    } else {
-        /* Prepare already ran: ensure IPC stop signal + leftover allocs. */
-        StopIpcServerNoJoin();
-        FinishShutdownResources();
-    }
+    /* Loader lock: no locks, joins, MinHook, VirtualProtect, or heap teardown.
+     * Explicit OpShutdown (or CoreShutdown) must have run before FreeLibrary. */
 }
 
 bool CoreIsInitialized() {
@@ -173,4 +188,4 @@ bool IsIpcRunning() {
     return IsIpcServerRunning();
 }
 
-}  // namespace hdl
+} // namespace hdl

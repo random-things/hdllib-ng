@@ -3,8 +3,9 @@
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
+#include "ipc/wire.hpp"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -220,27 +221,27 @@ int CmdModules(CmdCtx& ctx) {
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
         bool bad_resp = false;
-        if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
-                                              size_t n) {
-                Reader r(p, n);
-                uint32_t tot = 0, off = 0, count = 0;
-                if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
-                    bad_resp = true;
-                    return false;
-                }
-                total = tot;
-                final_st = st;
-                for (uint32_t i = 0; i < count; ++i) {
-                    HdlModuleInfo info{};
-                    if (!r.Take(&info, sizeof(info))) {
+        if (!ctx.client.RequestStream(
+                req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+                    Reader r(p, n);
+                    uint32_t tot = 0, off = 0, count = 0;
+                    if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
                         bad_resp = true;
                         return false;
                     }
-                    all.push_back(info);
-                }
-                (void)flags;
-                return true;
-            })) {
+                    total = tot;
+                    final_st = st;
+                    for (uint32_t i = 0; i < count; ++i) {
+                        HdlModuleInfo info{};
+                        if (!hdl::proto::TakeHdlModuleInfo(r, info)) {
+                            bad_resp = true;
+                            return false;
+                        }
+                        all.push_back(info);
+                    }
+                    (void)flags;
+                    return true;
+                })) {
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
@@ -291,7 +292,7 @@ int CmdModules(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlModuleInfo info{};
-            if (!r.Take(&info, sizeof(info))) {
+            if (!hdl::proto::TakeHdlModuleInfo(r, info)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -311,7 +312,7 @@ int CmdModules(CmdCtx& ctx) {
     wprintf(L"status=%ls count=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlModuleInfo info{};
-        if (!r.Take(&info, sizeof(info))) {
+        if (!hdl::proto::TakeHdlModuleInfo(r, info)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  %016llx  %8llx  %ls\n", static_cast<unsigned long long>(info.base),
@@ -352,7 +353,7 @@ int CmdRegions(CmdCtx& ctx) {
                 final_st = st;
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlRegionInfo info{};
-                    if (!r.Take(&info, sizeof(info))) {
+                    if (!hdl::proto::TakeHdlRegionInfo(r, info)) {
                         bad_resp = true;
                         return false;
                     }
@@ -410,7 +411,7 @@ int CmdRegions(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlRegionInfo info{};
-            if (!r.Take(&info, sizeof(info))) {
+            if (!hdl::proto::TakeHdlRegionInfo(r, info)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -431,7 +432,7 @@ int CmdRegions(CmdCtx& ctx) {
     const uint32_t show = count < 50 ? count : 50;
     for (uint32_t i = 0; i < show; ++i) {
         HdlRegionInfo info{};
-        if (!r.Take(&info, sizeof(info))) {
+        if (!hdl::proto::TakeHdlRegionInfo(r, info)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  %016llx  %8llx  prot=%08x\n", static_cast<unsigned long long>(info.base),
@@ -475,7 +476,7 @@ int CmdThreads(CmdCtx& ctx) {
                 final_st = st;
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlThreadInfo info{};
-                    if (!r.Take(&info, sizeof(info))) {
+                    if (!hdl::proto::TakeHdlThreadInfo(r, info)) {
                         bad_resp = true;
                         return false;
                     }
@@ -531,7 +532,7 @@ int CmdThreads(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlThreadInfo info{};
-            if (!r.Take(&info, sizeof(info))) {
+            if (!hdl::proto::TakeHdlThreadInfo(r, info)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -553,7 +554,7 @@ int CmdThreads(CmdCtx& ctx) {
     wprintf(L"status=%ls count=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlThreadInfo info{};
-        if (!r.Take(&info, sizeof(info))) {
+        if (!hdl::proto::TakeHdlThreadInfo(r, info)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  tid=%u start=%016llx user=%llu kernel=%llu\n", info.tid,
@@ -577,7 +578,7 @@ int CmdHealth(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     HdlHealthInfo info{};
-    if (!r.TakePod(st) || !r.Take(&info, sizeof(info))) {
+    if (!r.TakePod(st) || !hdl::proto::TakeHdlHealthInfo(r, info)) {
         return FailBadResp(ctx);
     }
     if (ctx.json) {
@@ -703,27 +704,27 @@ int CmdFingerprint(CmdCtx& ctx) {
         int32_t final_st = HDL_OK;
         uint32_t total = 0;
         bool bad_resp = false;
-        if (!ctx.client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p,
-                                              size_t n) {
-                Reader r(p, n);
-                uint32_t tot = 0, off = 0, count = 0;
-                if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
-                    bad_resp = true;
-                    return false;
-                }
-                total = tot;
-                final_st = st;
-                for (uint32_t i = 0; i < count; ++i) {
-                    HdlFingerprintTag tag{};
-                    if (!r.Take(&tag, sizeof(tag))) {
+        if (!ctx.client.RequestStream(
+                req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+                    Reader r(p, n);
+                    uint32_t tot = 0, off = 0, count = 0;
+                    if (!r.TakePod(tot) || !r.TakePod(off) || !r.TakePod(count)) {
                         bad_resp = true;
                         return false;
                     }
-                    all.push_back(tag);
-                }
-                (void)flags;
-                return true;
-            })) {
+                    total = tot;
+                    final_st = st;
+                    for (uint32_t i = 0; i < count; ++i) {
+                        HdlFingerprintTag tag{};
+                        if (!hdl::proto::TakeHdlFingerprintTag(r, tag)) {
+                            bad_resp = true;
+                            return false;
+                        }
+                        all.push_back(tag);
+                    }
+                    (void)flags;
+                    return true;
+                })) {
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
         if (ctx.json) {
@@ -782,7 +783,7 @@ int CmdFingerprint(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlFingerprintTag tag{};
-            if (!r.Take(&tag, sizeof(tag))) {
+            if (!hdl::proto::TakeHdlFingerprintTag(r, tag)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -808,7 +809,7 @@ int CmdFingerprint(CmdCtx& ctx) {
     wprintf(L"status=%ls count=%u  (* = primary)\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlFingerprintTag tag{};
-        if (!r.Take(&tag, sizeof(tag))) {
+        if (!hdl::proto::TakeHdlFingerprintTag(r, tag)) {
             return FailBadResp(ctx);
         }
         const wchar_t* prim = (tag.flags & HDL_FP_PRIMARY) ? L"*" : L" ";
@@ -854,7 +855,7 @@ int CmdEvents(CmdCtx& ctx) {
         w.BeginArray();
         for (uint32_t i = 0; i < count; ++i) {
             HdlEvent ev{};
-            if (!r.Take(&ev, sizeof(ev))) {
+            if (!hdl::proto::TakeHdlEvent(r, ev)) {
                 return FailBadResp(ctx);
             }
             w.BeginObject();
@@ -876,7 +877,7 @@ int CmdEvents(CmdCtx& ctx) {
     wprintf(L"status=%ls events=%u\n", StatusName(st), count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlEvent ev{};
-        if (!r.Take(&ev, sizeof(ev))) {
+        if (!hdl::proto::TakeHdlEvent(r, ev)) {
             return FailBadResp(ctx);
         }
         wprintf(L"  type=%u code=0x%x ts=%llu addr=%016llx\n", ev.type, ev.code,
@@ -930,8 +931,8 @@ int CmdJob(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     const uint64_t id = _wcstoui64(ctx.argv[4], nullptr, 0);
-    AppendPod(req, static_cast<uint32_t>(wcscmp(ctx.argv[3], L"cancel") == 0 ? OpJobCancel
-                                                                            : OpJobClose));
+    AppendPod(
+        req, static_cast<uint32_t>(wcscmp(ctx.argv[3], L"cancel") == 0 ? OpJobCancel : OpJobClose));
     AppendPod(req, id);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);

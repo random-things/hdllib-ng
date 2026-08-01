@@ -1,8 +1,10 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "discover.hpp"
 #include "protocol.hpp"
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,12 +34,18 @@ bool HandleDiscoverClose(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = nullptr;
-    if (!TakeDiscoverSession(id, &session)) {
+    auto holder = TakeDiscoverSession(id);
+    if (!holder) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
         return WriteFrame(pipe, resp);
     }
-    DiscoverClose(session);
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (holder->session) {
+            DiscoverClose(holder->session);
+            holder->session = nullptr;
+        }
+    }
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     return WriteFrame(pipe, resp);
 }
@@ -53,12 +61,18 @@ bool HandleDiscoverAddCandidate(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     uint64_t cand_id = 0;
-    const HdlStatus st =
-        session ? DiscoverAddCandidate(session, kind, address, tag.empty() ? nullptr : tag.c_str(),
-                                       &cand_id)
-                : HDL_E_NOT_FOUND;
+    const HdlStatus st = session
+                             ? DiscoverAddCandidate(session, kind, address,
+                                                    tag.empty() ? nullptr : tag.c_str(), &cand_id)
+                             : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, cand_id);
     return WriteFrame(pipe, resp);
@@ -100,7 +114,13 @@ bool HandleDiscoverScanValue(HANDLE pipe, proto::Reader& r) {
     (void)flags;
     auto job = BindJob(job_id, timeout_ms);
 
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     if (!session) {
         if (job && !job_id) {
             JobClose(job->id);
@@ -148,25 +168,30 @@ bool HandleDiscoverConstraintScan(HANDLE pipe, proto::Reader& r) {
     uint32_t max_results = 0;
     std::wstring module;
     std::string tag;
-    if (!r.TakePod(id) || !r.TakePod(object_size) || !r.TakePod(pred_count) ||
-        pred_count > 32 || !r.TakePod(search_flags) || !r.TakePod(max_results) ||
-        !r.TakeWString(module) || !r.TakeString(tag)) {
+    if (!r.TakePod(id) || !r.TakePod(object_size) || !r.TakePod(pred_count) || pred_count > 32 ||
+        !r.TakePod(search_flags) || !r.TakePod(max_results) || !r.TakeWString(module) ||
+        !r.TakeString(tag)) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
     std::vector<HdlFieldPred> preds(pred_count);
     for (uint32_t i = 0; i < pred_count; ++i) {
-        if (!r.TakePod(preds[i])) {
+        if (!proto::TakeHdlFieldPred(r, preds[i])) {
             AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
             return WriteFrame(pipe, resp);
         }
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st =
         session ? DiscoverConstraintScan(session, object_size, preds.data(), pred_count,
                                          search_flags, module.empty() ? nullptr : module.c_str(),
-                                         max_results, tag.empty() ? nullptr : tag.c_str(),
-                                         nullptr)
+                                         max_results, tag.empty() ? nullptr : tag.c_str(), nullptr)
                 : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -186,15 +211,21 @@ bool HandleDiscoverSynthesizePattern(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     HdlSynthesizedPattern out{};
     const HdlStatus st =
-        session ? DiscoverSynthesizePattern(session, cand_id, before, after, search_flags,
-                                            module.empty() ? nullptr : module.c_str(), &out,
-                                            nullptr)
-                : HDL_E_NOT_FOUND;
+        session
+            ? DiscoverSynthesizePattern(session, cand_id, before, after, search_flags,
+                                        module.empty() ? nullptr : module.c_str(), &out, nullptr)
+            : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &out, sizeof(out));
+    proto::AppendHdlSynthesizedPattern(resp, out);
     return WriteFrame(pipe, resp);
 }
 
@@ -217,14 +248,14 @@ bool HandleDiscoverPathConsensus(HANDLE pipe, proto::Reader& r) {
     }
     std::vector<HdlPointerPath> paths(max_results);
     uint32_t count = max_results;
-    const HdlStatus st =
-        DiscoverPathConsensus(target, max_depth, max_offset, max_results, search_flags,
-                              module.empty() ? nullptr : module.c_str(), paths.data(), &count,
-                              nullptr);
+    const HdlStatus st = DiscoverPathConsensus(
+        target, max_depth, max_offset, max_results, search_flags,
+        module.empty() ? nullptr : module.c_str(), paths.data(), &count, nullptr);
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, paths.data(), count * sizeof(HdlPointerPath));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlPointerPath(resp, paths[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -240,7 +271,7 @@ bool HandleDiscoverPathValidate(HANDLE pipe, proto::Reader& r) {
     }
     std::vector<HdlPointerPath> paths(count);
     for (uint32_t i = 0; i < count; ++i) {
-        if (!r.Take(&paths[i], sizeof(HdlPointerPath))) {
+        if (!proto::TakeHdlPointerPath(r, paths[i])) {
             AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
             return WriteFrame(pipe, resp);
         }
@@ -250,7 +281,8 @@ bool HandleDiscoverPathValidate(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, kept);
     if (st == HDL_OK && kept) {
-        AppendBytes(resp, paths.data(), kept * sizeof(HdlPointerPath));
+        for (uint32_t _i = 0; _i < kept; ++_i)
+            proto::AppendHdlPointerPath(resp, paths[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -265,7 +297,13 @@ bool HandleDiscoverWatch(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st = session ? DiscoverWatch(session, fn, arg_count) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -279,7 +317,13 @@ bool HandleDiscoverUnwatchAll(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st = session ? DiscoverUnwatchAll(session) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -294,9 +338,14 @@ bool HandleDiscoverActionBegin(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
-    const HdlStatus st =
-        session ? DiscoverActionBegin(session, name.c_str()) : HDL_E_NOT_FOUND;
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
+    const HdlStatus st = session ? DiscoverActionBegin(session, name.c_str()) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
 }
@@ -309,7 +358,13 @@ bool HandleDiscoverActionEnd(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st = session ? DiscoverActionEnd(session) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -325,7 +380,13 @@ bool HandleDiscoverWatchRegion(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st = session ? DiscoverWatchRegion(session, base, size) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -344,7 +405,13 @@ bool HandleDiscoverGetHeat(HANDLE pipe, proto::Reader& r) {
     if (max_fields == 0 || max_fields > 512) {
         max_fields = 64;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::vector<HdlHeatField> fields(max_fields);
     uint32_t count = max_fields;
     HdlStatus st =
@@ -357,7 +424,8 @@ bool HandleDiscoverGetHeat(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, fields.data(), count * sizeof(HdlHeatField));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlHeatField(resp, fields[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -376,11 +444,18 @@ bool HandleDiscoverRankFunctions(HANDLE pipe, proto::Reader& r) {
     if (max_out == 0 || max_out > 256) {
         max_out = 64;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::vector<HdlCandidate> cands(max_out);
     uint32_t count = max_out;
-    HdlStatus st = session ? DiscoverRankFunctions(session, name.c_str(), flags, cands.data(), &count)
-                           : HDL_E_NOT_FOUND;
+    HdlStatus st = session
+                       ? DiscoverRankFunctions(session, name.c_str(), flags, cands.data(), &count)
+                       : HDL_E_NOT_FOUND;
     if (st == HDL_E_BUFFER_SMALL) {
         cands.resize(count);
         count = static_cast<uint32_t>(cands.size());
@@ -389,7 +464,8 @@ bool HandleDiscoverRankFunctions(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, cands.data(), count * sizeof(HdlCandidate));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlCandidate(resp, cands[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -403,17 +479,22 @@ bool HandleDiscoverClusterType(HANDLE pipe, proto::Reader& r) {
     uint32_t search_flags = 0;
     uint32_t max_results = 0;
     std::wstring module;
-    if (!r.TakePod(id) || !r.TakePod(seed) || !r.TakePod(object_size) ||
-        !r.TakePod(search_flags) || !r.TakePod(max_results) || !r.TakeWString(module)) {
+    if (!r.TakePod(id) || !r.TakePod(seed) || !r.TakePod(object_size) || !r.TakePod(search_flags) ||
+        !r.TakePod(max_results) || !r.TakeWString(module)) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
-    const HdlStatus st =
-        session ? DiscoverClusterType(session, seed, object_size, search_flags,
-                                      module.empty() ? nullptr : module.c_str(), max_results,
-                                      nullptr)
-                : HDL_E_NOT_FOUND;
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
+    const HdlStatus st = session ? DiscoverClusterType(session, seed, object_size, search_flags,
+                                                       module.empty() ? nullptr : module.c_str(),
+                                                       max_results, nullptr)
+                                 : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
 }
@@ -430,11 +511,16 @@ bool HandleDiscoverGetCandidates(HANDLE pipe, proto::Reader& r) {
     if (max_out == 0 || max_out > 1024) {
         max_out = 256;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::vector<HdlCandidate> cands(max_out);
     uint32_t count = max_out;
-    HdlStatus st =
-        session ? DiscoverGetCandidates(session, cands.data(), &count) : HDL_E_NOT_FOUND;
+    HdlStatus st = session ? DiscoverGetCandidates(session, cands.data(), &count) : HDL_E_NOT_FOUND;
     if (st == HDL_E_BUFFER_SMALL) {
         cands.resize(count);
         count = static_cast<uint32_t>(cands.size());
@@ -443,7 +529,8 @@ bool HandleDiscoverGetCandidates(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (st == HDL_OK && count) {
-        AppendBytes(resp, cands.data(), count * sizeof(HdlCandidate));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlCandidate(resp, cands[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -461,7 +548,13 @@ bool HandleDiscoverWatchImport(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st =
         session ? DiscoverWatchImport(session, module.empty() ? nullptr : module.c_str(),
                                       dll.c_str(), import_name.c_str(), arg_count)
@@ -479,7 +572,13 @@ bool HandleDiscoverResetHeat(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st = session ? DiscoverResetHeat(session, base) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
@@ -497,7 +596,13 @@ bool HandleDiscoverExport(HANDLE pipe, proto::Reader& r) {
     if (cap == 0) {
         cap = 65536;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::vector<char> buf(cap);
     uint32_t size = cap;
     HdlStatus st = session ? DiscoverExport(session, buf.data(), &size) : HDL_E_NOT_FOUND;
@@ -523,7 +628,13 @@ bool HandleDiscoverImport(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st =
         session ? DiscoverImport(session, json.c_str(), static_cast<uint32_t>(json.size()))
                 : HDL_E_NOT_FOUND;
@@ -553,7 +664,13 @@ bool HandleDiscoverDiffObjects(HANDLE pipe, proto::Reader& r) {
     if (max_fields == 0 || max_fields > 512) {
         max_fields = 64;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::vector<HdlHeatField> fields(max_fields);
     uint32_t out_count = max_fields;
     HdlStatus st = session ? DiscoverDiffObjects(session, addrs.data(), count, max_size,
@@ -567,7 +684,8 @@ bool HandleDiscoverDiffObjects(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, out_count);
     if (st == HDL_OK && out_count) {
-        AppendBytes(resp, fields.data(), out_count * sizeof(HdlHeatField));
+        for (uint32_t _i = 0; _i < out_count; ++_i)
+            proto::AppendHdlHeatField(resp, fields[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -582,7 +700,13 @@ bool HandleDiscoverApplyWatchHits(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     const HdlStatus st =
         session ? DiscoverApplyWatchHits(session, object_base, size) : HDL_E_NOT_FOUND;
     AppendPod(resp, static_cast<int32_t>(st));
@@ -602,7 +726,13 @@ bool HandleDiscoverGetEvidence(HANDLE pipe, proto::Reader& r) {
     if (cap == 0 || cap > 160) {
         cap = 160;
     }
-    HdlDiscoverSession* session = FindDiscover(id);
+    auto holder = FindDiscover(id);
+    std::unique_lock<std::mutex> sess_lock;
+    HdlDiscoverSession* session = nullptr;
+    if (holder) {
+        sess_lock = std::unique_lock<std::mutex>(holder->mu);
+        session = holder->session;
+    }
     std::string ev;
     ev.resize(cap);
     const HdlStatus st =
@@ -612,5 +742,5 @@ bool HandleDiscoverGetEvidence(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "code.hpp"
 #include "disasm/backend.hpp"
@@ -32,7 +33,8 @@ bool HandleDisasmEnumBackends(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlDisasmBackendInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlDisasmBackendInfo(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -96,7 +98,8 @@ bool HandleDisasm(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlInsn));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlInsn(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -107,8 +110,8 @@ bool HandleBuildStub(HANDLE pipe, proto::Reader& r) {
     HdlStubDesc desc{};
     uint32_t raw_len = 0;
     if (!r.TakePod(desc.kind) || !r.TakePod(desc.flags) || !r.TakePod(desc.target) ||
-        !r.TakePod(desc.steal_from) || !r.TakePod(desc.steal_min_bytes) || !r.TakePod(desc.reserved) ||
-        !r.TakePod(desc.alloc_rx) || !r.TakePod(raw_len)) {
+        !r.TakePod(desc.steal_from) || !r.TakePod(desc.steal_min_bytes) ||
+        !r.TakePod(desc.reserved) || !r.TakePod(desc.alloc_rx) || !r.TakePod(raw_len)) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
@@ -127,7 +130,7 @@ bool HandleBuildStub(HANDLE pipe, proto::Reader& r) {
     HdlStubResult result{};
     const HdlStatus st = BuildStub(&desc, &result);
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &result, sizeof(result));
+    proto::AppendHdlStubResult(resp, result);
     return WriteFrame(pipe, resp);
 }
 
@@ -197,7 +200,8 @@ bool HandlePatchEnum(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlPatchInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlPatchInfo(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -231,7 +235,8 @@ static bool HandlePeEnum(HANDLE pipe, proto::Reader& r, int which) {
         AppendPod(resp, static_cast<int32_t>(st));
         AppendPod(resp, count);
         if (count && st == HDL_OK) {
-            AppendBytes(resp, list.data(), count * sizeof(HdlSectionInfo));
+            for (uint32_t _i = 0; _i < count; ++_i)
+                proto::AppendHdlSectionInfo(resp, list[_i]);
         }
         return WriteFrame(pipe, resp);
     }
@@ -251,7 +256,8 @@ static bool HandlePeEnum(HANDLE pipe, proto::Reader& r, int which) {
         AppendPod(resp, static_cast<int32_t>(st));
         AppendPod(resp, count);
         if (count && st == HDL_OK) {
-            AppendBytes(resp, list.data(), count * sizeof(HdlExportInfo));
+            for (uint32_t _i = 0; _i < count; ++_i)
+                proto::AppendHdlExportInfo(resp, list[_i]);
         }
         return WriteFrame(pipe, resp);
     }
@@ -270,14 +276,21 @@ static bool HandlePeEnum(HANDLE pipe, proto::Reader& r, int which) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlImportInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlImportInfo(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
 
-bool HandleEnumSections(HANDLE pipe, proto::Reader& r) { return HandlePeEnum(pipe, r, 0); }
-bool HandleEnumExports(HANDLE pipe, proto::Reader& r) { return HandlePeEnum(pipe, r, 1); }
-bool HandleEnumImports(HANDLE pipe, proto::Reader& r) { return HandlePeEnum(pipe, r, 2); }
+bool HandleEnumSections(HANDLE pipe, proto::Reader& r) {
+    return HandlePeEnum(pipe, r, 0);
+}
+bool HandleEnumExports(HANDLE pipe, proto::Reader& r) {
+    return HandlePeEnum(pipe, r, 1);
+}
+bool HandleEnumImports(HANDLE pipe, proto::Reader& r) {
+    return HandlePeEnum(pipe, r, 2);
+}
 
 bool HandleEnumFunctions(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
@@ -290,16 +303,17 @@ bool HandleEnumFunctions(HANDLE pipe, proto::Reader& r) {
     uint64_t job_id = 0;
     uint32_t timeout_ms = 0;
     uint32_t flags = 0;
-    if (!r.TakePod(start) || !r.TakePod(size) || !r.TakePod(search_flags) || !r.TakePod(max_results) ||
-        !r.TakeWString(module)) {
+    if (!r.TakePod(start) || !r.TakePod(size) || !r.TakePod(search_flags) ||
+        !r.TakePod(max_results) || !r.TakeWString(module)) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
     TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
     volatile int cancel = 0;
     uint32_t count = 0;
-    HdlStatus st = EnumFunctions(start, size, search_flags, module.empty() ? nullptr : module.c_str(),
-                                 max_results, nullptr, &count, &cancel);
+    HdlStatus st =
+        EnumFunctions(start, size, search_flags, module.empty() ? nullptr : module.c_str(),
+                      max_results, nullptr, &count, &cancel);
     std::vector<HdlFunctionInfo> list;
     if (st == HDL_E_BUFFER_SMALL && count) {
         list.resize(count);
@@ -314,7 +328,8 @@ bool HandleEnumFunctions(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlFunctionInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlFunctionInfo(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -343,7 +358,8 @@ bool HandleXrefsFrom(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlXrefEdge));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlXrefEdge(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -360,11 +376,11 @@ bool HandleResolveFunction(HANDLE pipe, proto::Reader& r) {
     }
     volatile int cancel = 0;
     HdlFunctionInfo fi{};
-    const HdlStatus st =
-        ResolveFunction(addr, search_flags, module.empty() ? nullptr : module.c_str(), &fi, &cancel);
+    const HdlStatus st = ResolveFunction(addr, search_flags,
+                                         module.empty() ? nullptr : module.c_str(), &fi, &cancel);
     AppendPod(resp, static_cast<int32_t>(st));
     if (st == HDL_OK) {
-        AppendBytes(resp, &fi, sizeof(fi));
+        proto::AppendHdlFunctionInfo(resp, fi);
     }
     return WriteFrame(pipe, resp);
 }
@@ -377,8 +393,8 @@ bool HandleXrefsTo(HANDLE pipe, proto::Reader& r) {
     uint32_t kinds = 0;
     uint32_t search_flags = 0;
     std::wstring module;
-    if (!r.TakePod(target) || !r.TakePod(max_nodes) || !r.TakePod(kinds) || !r.TakePod(search_flags) ||
-        !r.TakeWString(module)) {
+    if (!r.TakePod(target) || !r.TakePod(max_nodes) || !r.TakePod(kinds) ||
+        !r.TakePod(search_flags) || !r.TakeWString(module)) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
@@ -389,15 +405,16 @@ bool HandleXrefsTo(HANDLE pipe, proto::Reader& r) {
     std::vector<HdlXrefEdge> list;
     if (st == HDL_E_BUFFER_SMALL && count) {
         list.resize(count);
-        st = XrefsTo(target, max_nodes, kinds, search_flags, module.empty() ? nullptr : module.c_str(),
-                     list.data(), &count, &cancel);
+        st = XrefsTo(target, max_nodes, kinds, search_flags,
+                     module.empty() ? nullptr : module.c_str(), list.data(), &count, &cancel);
     } else if (st == HDL_OK) {
         count = 0;
     }
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlXrefEdge));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlXrefEdge(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -520,7 +537,8 @@ bool HandleEnumWatches(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, list.data(), count * sizeof(HdlWatchInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlWatchInfo(resp, list[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -551,10 +569,11 @@ bool HandlePollWatchHits(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, hits.data(), count * sizeof(HdlWatchHit));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlWatchHit(resp, hits[_i]);
     }
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

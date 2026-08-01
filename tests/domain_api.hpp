@@ -31,6 +31,9 @@ namespace hdl::testapi {
 inline HdlStatus Init() {
     return CoreInit();
 }
+inline void Shutdown() {
+    CoreShutdown();
+}
 inline bool IsInitialized() {
     return CoreIsInitialized();
 }

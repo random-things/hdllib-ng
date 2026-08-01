@@ -1,10 +1,14 @@
 #include "domain_api.hpp"
+#include "ipc/common.hpp"
+#include "ipc/wire.hpp"
 #include "protocol.hpp"
 #include "support.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -25,7 +29,7 @@ int DetourAdd(int a, int b) {
 }
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 __declspec(noinline) int AddNums(int a, int b) {
     // Pad so MinHook has room for a trampoline (small leafs often fail to hook).
@@ -84,7 +88,7 @@ struct RttiProbe {
     virtual int Tag() { return 42; }
 };
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 struct LocalDiscoverObj {
@@ -122,8 +126,9 @@ void RunLocalDiscoverTests(Counters& c) {
     HdlSynthesizedPattern pat{};
     st = hdl::DiscoverSynthesizePattern(session, cand_id, 0, 24, HDL_SEARCH_IMAGE, nullptr, &pat,
                                         nullptr);
-    Report(c, st == HDL_OK && pat.pattern[0] && pat.unique_hits >= 1 &&
-                   pat.resolved_addr == reinterpret_cast<uint64_t>(&LocalDiscoverLeaf),
+    Report(c,
+           st == HDL_OK && pat.pattern[0] && pat.unique_hits >= 1 &&
+               pat.resolved_addr == reinterpret_cast<uint64_t>(&LocalDiscoverLeaf),
            false, "HdlDiscoverSynthesizePattern", "");
 
     {
@@ -385,8 +390,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             hdl::SearchGetCount(session, &scount);
             Report(c, st == HDL_OK && scount == 2, false, "HdlSearchFirst i32 exact", "");
 
-            *v0 = 90;   // decreased
-            *v1 = 100;  // unchanged
+            *v0 = 90;  // decreased
+            *v1 = 100; // unchanged
             st = hdl::SearchNext(session, HDL_CMP_DECREASED, nullptr, 0, nullptr);
             hdl::SearchGetCount(session, &scount);
             Report(c, st == HDL_OK && scount == 1, false, "HdlSearchNext decreased", "");
@@ -394,8 +399,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             uint64_t typed_hits[4]{};
             uint32_t typed_n = 4;
             st = hdl::SearchGetHits(session, typed_hits, &typed_n);
-            Report(c, st == HDL_OK && typed_n == 1 &&
-                          typed_hits[0] == reinterpret_cast<uint64_t>(v0),
+            Report(c,
+                   st == HDL_OK && typed_n == 1 && typed_hits[0] == reinterpret_cast<uint64_t>(v0),
                    false, "HdlSearchGetHits after next", "");
 
             const int32_t next_val = 90;
@@ -447,7 +452,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             desc.size = sizeof(mis);
             desc.value_type = HDL_VALUE_I32;
             desc.cmp = HDL_CMP_EXACT;
-            desc.alignment = 0; /* natural = 4 */
+            desc.alignment = 0;   /* natural = 4 */
             desc.max_results = 0; /* unlimited */
             desc.value = &needle;
             desc.value_size = sizeof(needle);
@@ -516,7 +521,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         st = hdl::EnableHook(hook, 0);
         g_hook_hits = 0;
         const int sum2 = AddNums(2, 3);
-        Report(c, st == HDL_OK && g_hook_hits == 0 && sum2 == 5, false, "HdlEnableHook disable", "");
+        Report(c, st == HDL_OK && g_hook_hits == 0 && sum2 == 5, false, "HdlEnableHook disable",
+               "");
 
         st = hdl::EnableHook(hook, 1);
         const int sum3 = AddNums(2, 3);
@@ -590,16 +596,17 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                     tags[i].confidence >= 35) {
                     win32_ok = true;
                 }
-                if (tags[i].category == HDL_FP_CAT_APP && strcmp(tags[i].id, "subsystem_gui") == 0) {
+                if (tags[i].category == HDL_FP_CAT_APP &&
+                    strcmp(tags[i].id, "subsystem_gui") == 0) {
                     gui_app = true;
                 }
             }
-            Report(c, st == HDL_OK && d3d11_primary && d3d11_conf >= 75 && win32_ok && gui_app, false,
-                   "HdlClassifyFingerprint d3d11+win32", "");
+            Report(c, st == HDL_OK && d3d11_primary && d3d11_conf >= 75 && win32_ok && gui_app,
+                   false, "HdlClassifyFingerprint d3d11+win32", "");
         }
         {
             const wchar_t* mods[] = {L"coreclr.dll", L"hostfxr.dll", L"PresentationFramework.dll",
-                                    L"user32.dll", L"dxgi.dll"};
+                                     L"user32.dll", L"dxgi.dll"};
             uint32_t cn = 0;
             st = hdl::ClassifyFingerprintApi(mods, 5, nullptr, 0, IMAGE_SUBSYSTEM_WINDOWS_GUI,
                                              HDL_FP_SCAN_DEFAULT, nullptr, &cn);
@@ -677,8 +684,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         HdlCallResult cres{};
         st = hdl::CallExport(L"kernel32.dll", "GetCurrentProcessId", nullptr, 0, &cres, 2000,
                              nullptr);
-        Report(c, st == HDL_OK && cres.return_value == GetCurrentProcessId(), false, "HdlCallExport",
-               "");
+        Report(c, st == HDL_OK && cres.return_value == GetCurrentProcessId(), false,
+               "HdlCallExport", "");
 
         {
             HdlCallArg args[2]{};
@@ -1067,10 +1074,10 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             uint64_t root = reinterpret_cast<uint64_t>(&mid);
             int64_t offs[2] = {0, 0};
             uint64_t out = 0;
-            /* Follow: *root (+0) -> mid, *mid (+0) -> leaf address value? 
+            /* Follow: *root (+0) -> mid, *mid (+0) -> leaf address value?
                Our impl: cur=base; for each: cur=*cur; cur+=off
-               start root: *root=mid, +0 -> mid; *mid=leaf_addr? mid holds &leaf so *mid = leaf value address... 
-               mid = &leaf, *mid = leaf value 0xABCD, +0 = 0xABCD */
+               start root: *root=mid, +0 -> mid; *mid=leaf_addr? mid holds &leaf so *mid = leaf
+               value address... mid = &leaf, *mid = leaf value 0xABCD, +0 = 0xABCD */
             st = hdl::FollowPointers(root, offs, 2, &out);
             Report(c, st == HDL_OK && out == 0xABCD, false, "HdlFollowPointers", "");
         }
@@ -1121,7 +1128,8 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                 HdlCallResult r{};
                 st = hdl::Call(&desc, &r, nullptr);
                 DWORD ui_tid = GetWindowThreadProcessId(ui.hwnd, nullptr);
-                Report(c, st == HDL_OK && r.return_value == 0xC0FFEEull && g_main_call_tid == ui_tid,
+                Report(c,
+                       st == HDL_OK && r.return_value == 0xC0FFEEull && g_main_call_tid == ui_tid,
                        false, "HdlCall THREAD_MAIN", "");
                 PostMessageW(ui.hwnd, WM_QUIT, 0, 0);
                 WaitForSingleObject(ui.done, 5000);
@@ -1248,7 +1256,8 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     const HdlStatus ist = hdl::InjectDllEx(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
                                            nullptr, nullptr, nullptr, &base);
     const bool verified =
-        ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
+        ist == HDL_OK &&
+        hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
     Report(c, verified, false, "locate inject", "");
     if (!verified) {
         return;
@@ -1280,10 +1289,12 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     uint64_t truth_obj = 0;
     uint64_t truth_str_ptr = 0;
     Report(c, resolve_export("HdlTestLocateFn", &truth_fn), false, "locate truth Fn export", "");
-    Report(c, resolve_export("HdlTestLocateString", &truth_str), false, "locate truth String export",
+    Report(c, resolve_export("HdlTestLocateString", &truth_str), false,
+           "locate truth String export", "");
+    Report(c, resolve_export("HdlTestLocateLeaf", &truth_leaf), false, "locate truth Leaf export",
            "");
-    Report(c, resolve_export("HdlTestLocateLeaf", &truth_leaf), false, "locate truth Leaf export", "");
-    Report(c, resolve_export("HdlTestLocateRoot", &truth_root), false, "locate truth Root export", "");
+    Report(c, resolve_export("HdlTestLocateRoot", &truth_root), false, "locate truth Root export",
+           "");
     Report(c, resolve_export("HdlTestLocateObj", &truth_obj), false, "locate truth Obj export", "");
     Report(c, resolve_export("HdlTestLocateStringPtr", &truth_str_ptr), false,
            "locate truth StringPtr export", "");
@@ -1308,7 +1319,8 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             Reader r(resp);
             int32_t st = 0;
             HdlPatternResult out{};
-            const bool ok = r.TakePod(st) && r.Take(&out, sizeof(out)) && st == HDL_OK;
+            const bool ok =
+                r.TakePod(st) && hdl::proto::TakeHdlPatternResult(r, out) && st == HDL_OK;
             const bool match_near_fn =
                 ok && truth_fn && out.match_addr >= truth_fn && out.match_addr < truth_fn + 0x80;
             Report(c, match_near_fn, false, "locate ResolvePattern near Fn", "");
@@ -1392,10 +1404,13 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             int32_t st = 0;
             uint32_t count = 0;
             bool found_root = false;
-            if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
+            bool decoded = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
+            if (decoded) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlPointerPath path{};
-                    if (!r.Take(&path, sizeof(path))) {
+                    if (!hdl::proto::TakeHdlPointerPath(r, path)) {
+                        decoded = false;
+                        found_root = false;
                         break;
                     }
                     /* depth-1 path with offset 0 at g_locate_mid location, or root */
@@ -1404,7 +1419,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
                     }
                 }
             }
-            Report(c, found_root && count >= 1, false, "locate ptrscan finds path", "");
+            Report(c, decoded && found_root, false, "locate ptrscan finds path", "");
         }
     }
 
@@ -1426,11 +1441,10 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlStructField f{};
-                    if (!r.Take(&f, sizeof(f))) {
+                    if (!hdl::proto::TakeHdlStructField(r, f)) {
                         break;
                     }
-                    if (f.offset == 0 &&
-                        (f.kind == HDL_FIELD_VTABLE || f.kind == HDL_FIELD_PTR)) {
+                    if (f.offset == 0 && (f.kind == HDL_FIELD_VTABLE || f.kind == HDL_FIELD_PTR)) {
                         has_vt = true;
                     }
                 }
@@ -1453,8 +1467,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             Reader r(resp);
             int32_t st = 0;
             uint64_t out = 0;
-            const bool ok =
-                r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_str;
+            const bool ok = r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_str;
             Report(c, ok, false, "locate FollowPointers StringPtr", "");
         }
     }
@@ -1474,8 +1487,7 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
             Reader r(resp);
             int32_t st = 0;
             uint64_t out = 0;
-            const bool ok =
-                r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_leaf;
+            const bool ok = r.TakePod(st) && r.TakePod(out) && st == HDL_OK && out == truth_leaf;
             Report(c, ok, false, "locate FollowPointers Root to leaf", "");
         }
     }
@@ -1556,10 +1568,12 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     uint64_t truth_obj_b = 0;
     uint64_t truth_dyn_root = 0;
     Report(c, resolve_export("HdlTestDiscoverLeaf", &truth_leaf), false, "discover truth Leaf", "");
-    Report(c, resolve_export("HdlTestDiscoverAction", &truth_action), false, "discover truth Action",
+    Report(c, resolve_export("HdlTestDiscoverAction", &truth_action), false,
+           "discover truth Action", "");
+    Report(c, resolve_export("HdlTestDiscoverObjA", &truth_obj_a), false, "discover truth ObjA",
            "");
-    Report(c, resolve_export("HdlTestDiscoverObjA", &truth_obj_a), false, "discover truth ObjA", "");
-    Report(c, resolve_export("HdlTestDiscoverObjB", &truth_obj_b), false, "discover truth ObjB", "");
+    Report(c, resolve_export("HdlTestDiscoverObjB", &truth_obj_b), false, "discover truth ObjB",
+           "");
     Report(c, resolve_export("HdlTestDiscoverDynRoot", &truth_dyn_root), false,
            "discover truth DynRoot", "");
 
@@ -1580,11 +1594,11 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlFunctionInfo fi{};
-                    if (!r.Take(&fi, sizeof(fi))) {
+                    if (!hdl::proto::TakeHdlFunctionInfo(r, fi)) {
                         break;
                     }
-                    if (truth_leaf && fi.start == truth_leaf &&
-                        (fi.flags & HDL_FN_EXPORT) && fi.confidence >= 50) {
+                    if (truth_leaf && fi.start == truth_leaf && (fi.flags & HDL_FN_EXPORT) &&
+                        fi.confidence >= 50) {
                         saw_export = true;
                     }
                 }
@@ -1660,7 +1674,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlCandidate cand{};
-                    if (!r.Take(&cand, sizeof(cand))) {
+                    if (!hdl::proto::TakeHdlCandidate(r, cand)) {
                         break;
                     }
                     if (cand.address == truth_obj_a) {
@@ -1709,8 +1723,8 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             Reader r(resp);
             int32_t st = 0;
             HdlSynthesizedPattern out{};
-            const bool ok = r.TakePod(st) && r.Take(&out, sizeof(out)) && st == HDL_OK &&
-                            out.pattern[0] && out.resolved_addr == truth_leaf;
+            const bool ok = r.TakePod(st) && hdl::proto::TakeHdlSynthesizedPattern(r, out) &&
+                            st == HDL_OK && out.pattern[0] && out.resolved_addr == truth_leaf;
             Report(c, ok, false, "discover synthesize leaf", "");
         }
     }
@@ -1793,7 +1807,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlCandidate cand{};
-                    if (!r.Take(&cand, sizeof(cand))) {
+                    if (!hdl::proto::TakeHdlCandidate(r, cand)) {
                         break;
                     }
                     if (truth_action && cand.address >= truth_action &&
@@ -1821,7 +1835,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             if (r.TakePod(st) && r.TakePod(count) && st == HDL_OK) {
                 for (uint32_t i = 0; i < count; ++i) {
                     HdlHeatField hf{};
-                    if (!r.Take(&hf, sizeof(hf))) {
+                    if (!hdl::proto::TakeHdlHeatField(r, hf)) {
                         break;
                     }
                     if (hf.offset == 8) {
@@ -1869,11 +1883,15 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             Reader r(resp);
             int32_t st = 0;
             uint32_t count = 0;
-            const bool ok = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
+            bool ok = r.TakePod(st) && r.TakePod(count) && st == HDL_OK && count >= 1;
             if (ok) {
                 paths.resize(count);
                 for (uint32_t i = 0; i < count; ++i) {
-                    r.Take(&paths[i], sizeof(paths[i]));
+                    if (!hdl::proto::TakeHdlPointerPath(r, paths[i])) {
+                        ok = false;
+                        paths.clear();
+                        break;
+                    }
                 }
             }
             Report(c, ok, false, "discover pathconsensus", "");
@@ -1901,7 +1919,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
         AppendPod(req, dyn2);
         AppendPod(req, static_cast<uint32_t>(paths.size()));
         for (const auto& p : paths) {
-            AppendBytes(req, &p, sizeof(p));
+            hdl::proto::AppendHdlPointerPath(req, p);
         }
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
             Report(c, false, false, "discover pathvalidate ipc", "");
@@ -1910,10 +1928,13 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
             int32_t st = 0;
             uint32_t kept = 0;
             bool has_root = false;
-            if (r.TakePod(st) && r.TakePod(kept) && st == HDL_OK) {
+            bool decoded = r.TakePod(st) && r.TakePod(kept) && st == HDL_OK;
+            if (decoded) {
                 for (uint32_t i = 0; i < kept; ++i) {
                     HdlPointerPath p{};
-                    if (!r.Take(&p, sizeof(p))) {
+                    if (!hdl::proto::TakeHdlPointerPath(r, p)) {
+                        decoded = false;
+                        has_root = false;
                         break;
                     }
                     if (p.static_base == truth_dyn_root && p.depth == 1 && p.offsets[0] == 0) {
@@ -1921,7 +1942,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
                     }
                 }
             }
-            Report(c, has_root && dyn1 != 0 && dyn2 != 0, false,
+            Report(c, decoded && has_root && dyn1 != 0 && dyn2 != 0, false,
                    "discover pathvalidate keeps DynRoot", "");
         }
     }
@@ -1941,7 +1962,8 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     }
 }
 
-void EvaluateInject(Counters& c, const char* case_name, Expect expect, HdlStatus st, bool verified) {
+void EvaluateInject(Counters& c, const char* case_name, Expect expect, HdlStatus st,
+                    bool verified) {
     char detail[128];
     snprintf(detail, sizeof(detail), "status=%s verified=%d", hdltest::StatusNameA(st),
              verified ? 1 : 0);
@@ -1986,6 +2008,312 @@ HdlStatus InjectSealed(uint32_t pid, const wchar_t* dll_path, int method, const 
     return st;
 }
 
+/* Race close / CloseAll against in-flight Find+lock users of IPC session holders.
+ * Passes if no AV and workers only observe OK / NOT_FOUND (never use-after-free). */
+void RunSessionLifetimeRaceTests(Counters& c) {
+    using namespace hdl::proto;
+    std::printf("\n== Session lifetime race ==\n");
+    fflush(stdout);
+
+    if (!hdl::testapi::IsInitialized()) {
+        Report(c, hdl::testapi::Init() == HDL_OK, false, "lifecycle/session_race_init", "");
+        if (!hdl::testapi::IsInitialized()) {
+            return;
+        }
+    }
+
+    constexpr int kRounds = 40;
+    constexpr int kReaders = 4;
+    std::atomic<int> faults{0};
+
+    /* --- search: FindSession readers vs TakeSearchSession close --- */
+    for (int round = 0; round < kRounds; ++round) {
+        HdlSearchSession* session = nullptr;
+        if (hdl::SearchCreate(&session) != HDL_OK || !session) {
+            faults.fetch_add(1);
+            break;
+        }
+        const uint64_t id = hdl::ipc::AllocSearchSession(session);
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> readers;
+        readers.reserve(kReaders);
+        for (int t = 0; t < kReaders; ++t) {
+            readers.emplace_back([&, id] {
+                while (!stop.load(std::memory_order_relaxed)) {
+                    auto holder = hdl::ipc::FindSession(id);
+                    if (!holder) {
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> lock(holder->mu);
+                    if (holder->session) {
+                        uint32_t n = 0;
+                        hdl::SearchGetCount(holder->session, &n);
+                    }
+                }
+            });
+        }
+        Sleep(1);
+        auto taken = hdl::ipc::TakeSearchSession(id);
+        if (taken) {
+            std::lock_guard<std::mutex> lock(taken->mu);
+            if (taken->session) {
+                hdl::SearchClose(taken->session);
+                taken->session = nullptr;
+            }
+        } else {
+            faults.fetch_add(1);
+        }
+        stop.store(true);
+        for (auto& th : readers) {
+            th.join();
+        }
+    }
+    Report(c, faults.load() == 0, false, "lifecycle/search_close_vs_inflight", "");
+
+    /* --- discover: FindDiscover readers vs TakeDiscoverSession close --- */
+    faults.store(0);
+    for (int round = 0; round < kRounds; ++round) {
+        HdlDiscoverSession* session = nullptr;
+        if (hdl::DiscoverCreate(&session) != HDL_OK || !session) {
+            faults.fetch_add(1);
+            break;
+        }
+        const uint64_t id = hdl::ipc::AllocDiscoverSession(session);
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> readers;
+        readers.reserve(kReaders);
+        for (int t = 0; t < kReaders; ++t) {
+            readers.emplace_back([&, id] {
+                while (!stop.load(std::memory_order_relaxed)) {
+                    auto holder = hdl::ipc::FindDiscover(id);
+                    if (!holder) {
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> lock(holder->mu);
+                    if (holder->session) {
+                        HdlCandidate tmp{};
+                        uint32_t n = 1;
+                        hdl::DiscoverGetCandidates(holder->session, &tmp, &n);
+                    }
+                }
+            });
+        }
+        Sleep(1);
+        auto taken = hdl::ipc::TakeDiscoverSession(id);
+        if (taken) {
+            std::lock_guard<std::mutex> lock(taken->mu);
+            if (taken->session) {
+                hdl::DiscoverClose(taken->session);
+                taken->session = nullptr;
+            }
+        } else {
+            faults.fetch_add(1);
+        }
+        stop.store(true);
+        for (auto& th : readers) {
+            th.join();
+        }
+    }
+    Report(c, faults.load() == 0, false, "lifecycle/discover_close_vs_inflight", "");
+
+    /* --- CloseAll* while Find* readers still hold shared_ptrs --- */
+    faults.store(0);
+    {
+        HdlSearchSession* ss = nullptr;
+        HdlDiscoverSession* ds = nullptr;
+        if (hdl::SearchCreate(&ss) != HDL_OK || !ss || hdl::DiscoverCreate(&ds) != HDL_OK || !ds) {
+            Report(c, false, false, "lifecycle/close_all_vs_inflight", "create failed");
+        } else {
+            const uint64_t sid = hdl::ipc::AllocSearchSession(ss);
+            const uint64_t did = hdl::ipc::AllocDiscoverSession(ds);
+            std::atomic<bool> stop{false};
+            std::vector<std::thread> readers;
+            for (int t = 0; t < kReaders; ++t) {
+                readers.emplace_back([&, sid, did] {
+                    while (!stop.load(std::memory_order_relaxed)) {
+                        if (auto h = hdl::ipc::FindSession(sid)) {
+                            std::lock_guard<std::mutex> lock(h->mu);
+                            if (h->session) {
+                                uint32_t n = 0;
+                                hdl::SearchGetCount(h->session, &n);
+                            }
+                        }
+                        if (auto h = hdl::ipc::FindDiscover(did)) {
+                            std::lock_guard<std::mutex> lock(h->mu);
+                            if (h->session) {
+                                HdlCandidate tmp{};
+                                uint32_t n = 1;
+                                hdl::DiscoverGetCandidates(h->session, &tmp, &n);
+                            }
+                        }
+                    }
+                });
+            }
+            Sleep(2);
+            hdl::ipc::CloseAllSessions();
+            hdl::ipc::CloseAllDiscoverSessions();
+            stop.store(true);
+            for (auto& th : readers) {
+                th.join();
+            }
+            Report(c, true, false, "lifecycle/close_all_vs_inflight", "");
+        }
+    }
+
+    /* --- IPC pipe race: GetCandidates / Reset vs Close on the live server --- */
+    faults.store(0);
+    const uint32_t self_pid = GetCurrentProcessId();
+    for (int round = 0; round < 16; ++round) {
+        uint64_t search_id = 0;
+        uint64_t disc_id = 0;
+        {
+            std::vector<uint8_t> req, resp;
+            AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
+            if (!hdltest::PipeRequest(self_pid, req, resp)) {
+                faults.fetch_add(1);
+                break;
+            }
+            Reader r(resp);
+            int32_t st = 0;
+            if (!r.TakePod(st) || !r.TakePod(search_id) || st != HDL_OK || !search_id) {
+                faults.fetch_add(1);
+                break;
+            }
+        }
+        {
+            std::vector<uint8_t> req, resp;
+            AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
+            if (!hdltest::PipeRequest(self_pid, req, resp)) {
+                faults.fetch_add(1);
+                break;
+            }
+            Reader r(resp);
+            int32_t st = 0;
+            if (!r.TakePod(st) || !r.TakePod(disc_id) || st != HDL_OK || !disc_id) {
+                faults.fetch_add(1);
+                break;
+            }
+        }
+
+        std::atomic<bool> stop{false};
+        std::atomic<int> bad_status{0};
+        std::vector<std::thread> workers;
+        for (int t = 0; t < kReaders; ++t) {
+            workers.emplace_back([&, search_id, disc_id] {
+                while (!stop.load(std::memory_order_relaxed)) {
+                    {
+                        std::vector<uint8_t> req, resp;
+                        AppendPod(req, static_cast<uint32_t>(OpSearchReset));
+                        AppendPod(req, search_id);
+                        if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
+                            Reader r(resp);
+                            int32_t st = 0;
+                            if (r.TakePod(st) && st != HDL_OK && st != HDL_E_NOT_FOUND) {
+                                bad_status.fetch_add(1);
+                            }
+                        }
+                    }
+                    {
+                        std::vector<uint8_t> req, resp;
+                        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetCandidates));
+                        AppendPod(req, disc_id);
+                        AppendPod(req, static_cast<uint32_t>(8));
+                        if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
+                            Reader r(resp);
+                            int32_t st = 0;
+                            if (r.TakePod(st) && st != HDL_OK && st != HDL_E_NOT_FOUND &&
+                                st != HDL_E_BUFFER_SMALL) {
+                                bad_status.fetch_add(1);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        Sleep(5);
+        {
+            std::vector<uint8_t> req, resp;
+            AppendPod(req, static_cast<uint32_t>(OpSearchClose));
+            AppendPod(req, search_id);
+            hdltest::PipeRequest(self_pid, req, resp, 2000);
+        }
+        {
+            std::vector<uint8_t> req, resp;
+            AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
+            AppendPod(req, disc_id);
+            hdltest::PipeRequest(self_pid, req, resp, 2000);
+        }
+        stop.store(true);
+        for (auto& th : workers) {
+            th.join();
+        }
+        faults.fetch_add(bad_status.load());
+    }
+    Report(c, faults.load() == 0, false, "lifecycle/ipc_close_vs_inflight", "");
+}
+
+void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {
+    std::printf("\n== Lifecycle stress ==\n");
+    fflush(stdout);
+
+    if (hdl::testapi::IsInitialized()) {
+        hdl::testapi::Shutdown();
+    }
+
+    constexpr int kInitShutdownRounds = 20;
+    int ok_rounds = 0;
+    for (int i = 0; i < kInitShutdownRounds; ++i) {
+        const HdlStatus st = hdl::testapi::Init();
+        const bool ready = st == HDL_OK && hdl::testapi::IsInitialized();
+        hdl::testapi::Shutdown();
+        const bool cleared = !hdl::testapi::IsInitialized();
+        if (ready && cleared) {
+            ++ok_rounds;
+        }
+    }
+    Report(c, ok_rounds == kInitShutdownRounds, false, "lifecycle/init_shutdown_x20", "");
+
+    /* Leave helper initialized like RunLocalApiTests expects when chained. */
+    Report(c, hdl::testapi::Init() == HDL_OK, false, "lifecycle/reinit after stress", "");
+
+    /* Concurrent close vs in-flight search/discover (shared_ptr + per-session mutex). */
+    RunSessionLifetimeRaceTests(c);
+
+    constexpr int kInjectUnloadRounds = 5;
+    int inject_ok = 0;
+    for (int i = 0; i < kInjectUnloadRounds; ++i) {
+        TargetProfile profile{};
+        profile.name = "lifecycle_reload";
+        profile.window = false;
+        profile.alertable = true;
+        profile.integrity = IlLevel::Medium;
+
+        TargetProc target;
+        if (!hdltest::SpawnTarget(target_exe, profile, target)) {
+            continue;
+        }
+        uint64_t base = 0;
+        const HdlStatus ist = InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                           nullptr, nullptr, nullptr, &base);
+        const bool injected =
+            ist == HDL_OK &&
+            hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
+        int32_t shut_st = HDL_E_FAILED;
+        const bool shut_ok =
+            injected && hdltest::PipeShutdown(target.pid, 0, &shut_st) && shut_st == HDL_OK;
+        uint64_t ubase = 0;
+        const HdlStatus ust =
+            shut_ok ? hdl::UnloadDll(target.pid, dll_path, 0, 0, &ubase) : HDL_E_FAILED;
+        const bool unloaded = ust == HDL_OK || ust == HDL_E_NOT_FOUND;
+        const bool alive = WaitForSingleObject(target.process, 0) == WAIT_TIMEOUT;
+        if (injected && shut_ok && unloaded && alive) {
+            ++inject_ok;
+        }
+        target.Close();
+    }
+    Report(c, inject_ok == kInjectUnloadRounds, false, "lifecycle/inject_shutdown_unload_x5", "");
+}
+
 void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {
     std::printf("\n== Clean unload / shutdown ==\n");
     fflush(stdout);
@@ -2003,12 +2331,11 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
     }
 
     uint64_t base = 0;
-    const HdlStatus ist =
-        InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, nullptr, nullptr,
-                     nullptr, &base);
-    const bool injected = ist == HDL_OK && hdltest::VerifyInjected(target.pid, dll_path,
-                                                                   HDL_INJECT_CREATE_REMOTE_THREAD,
-                                                                   base);
+    const HdlStatus ist = InjectSealed(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD,
+                                       nullptr, nullptr, nullptr, &base);
+    const bool injected =
+        ist == HDL_OK &&
+        hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
     Report(c, injected, false, "clean_unload/inject", "");
     if (!injected) {
         target.Close();
@@ -2030,23 +2357,22 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
                     reinterpret_cast<const uint8_t*>(&op) + 4);
         treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&secondary),
                     reinterpret_cast<const uint8_t*>(&secondary) + 8);
-        const uint32_t nbytes =
-            static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
+        const uint32_t nbytes = static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
         treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&nbytes),
                     reinterpret_cast<const uint8_t*>(&nbytes) + 4);
         const uint8_t* p = reinterpret_cast<const uint8_t*>(sys);
         treq.insert(treq.end(), p, p + nbytes);
         int32_t track_st = HDL_E_FAILED;
-        Report(c, hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
-                                       &track_st) &&
-                       track_st == HDL_OK,
+        Report(c,
+               hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
+                                    &track_st) &&
+                   track_st == HDL_OK,
                false, "clean_unload/track secondary", "");
     }
 
     int32_t shut_st = HDL_E_FAILED;
-    const bool shut_ok =
-        hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
-        shut_st == HDL_OK;
+    const bool shut_ok = hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
+                         shut_st == HDL_OK;
     Report(c, shut_ok, false, "clean_unload/OpShutdown modules", "");
 
     Sleep(300);
@@ -2085,15 +2411,24 @@ void RunInjectMatrix(Counters& c, const wchar_t* target_exe, const wchar_t* dll_
     };
 
     static const int kMethods[] = {
-        HDL_INJECT_CREATE_REMOTE_THREAD,      HDL_INJECT_NT_CREATE_THREAD_EX,
-        HDL_INJECT_RTL_CREATE_USER_THREAD,    HDL_INJECT_QUEUE_USER_APC,
-        HDL_INJECT_SET_WINDOWS_HOOK_EX,       HDL_INJECT_THREAD_HIJACK,
-        HDL_INJECT_MANUAL_MAP,                HDL_INJECT_ATOM_BOMBING,
-        HDL_INJECT_MODULE_STOMP,              HDL_INJECT_SECTION_MAP,
-        HDL_INJECT_WINDOW_SUBCLASS,           HDL_INJECT_INSTRUMENTATION_CALLBACK,
-        HDL_INJECT_KERNEL_CALLBACK_TABLE,     HDL_INJECT_VEH,
-        HDL_INJECT_SET_WIN_EVENT_HOOK,        HDL_INJECT_RTL_REMOTE_CALL,
-        HDL_INJECT_SPECIAL_USER_APC,          HDL_INJECT_THREAD_POOL,
+        HDL_INJECT_CREATE_REMOTE_THREAD,
+        HDL_INJECT_NT_CREATE_THREAD_EX,
+        HDL_INJECT_RTL_CREATE_USER_THREAD,
+        HDL_INJECT_QUEUE_USER_APC,
+        HDL_INJECT_SET_WINDOWS_HOOK_EX,
+        HDL_INJECT_THREAD_HIJACK,
+        HDL_INJECT_MANUAL_MAP,
+        HDL_INJECT_ATOM_BOMBING,
+        HDL_INJECT_MODULE_STOMP,
+        HDL_INJECT_SECTION_MAP,
+        HDL_INJECT_WINDOW_SUBCLASS,
+        HDL_INJECT_INSTRUMENTATION_CALLBACK,
+        HDL_INJECT_KERNEL_CALLBACK_TABLE,
+        HDL_INJECT_VEH,
+        HDL_INJECT_SET_WIN_EVENT_HOOK,
+        HDL_INJECT_RTL_REMOTE_CALL,
+        HDL_INJECT_SPECIAL_USER_APC,
+        HDL_INJECT_THREAD_POOL,
         HDL_INJECT_ETW_CALLBACK,
     };
 
@@ -2142,8 +2477,8 @@ void RunInjectMatrix(Counters& c, const wchar_t* target_exe, const wchar_t* dll_
         fflush(stdout);
         uint64_t base = 0;
         uint32_t out_pid = 0;
-        const HdlStatus st =
-            InjectSealed(0, dll_path, HDL_INJECT_EARLY_BIRD_APC, target_exe, nullptr, &out_pid, &base);
+        const HdlStatus st = InjectSealed(0, dll_path, HDL_INJECT_EARLY_BIRD_APC, target_exe,
+                                          nullptr, &out_pid, &base);
         bool verified = false;
         if (st == HDL_OK && out_pid) {
             Sleep(500);
@@ -2164,10 +2499,10 @@ void PrintUsage() {
     std::wprintf(L"hdl_tests — hdllib functional / injection matrix suite\n\n"
                  L"Usage:\n"
                  L"  hdl_tests [--dll <hdllib.dll>] [--target <hdl_test_target.exe>]\n"
-                 L"            [--api-only] [--inject-only] [--locate-only]\n");
+                 L"            [--api-only] [--inject-only] [--locate-only] [--lifecycle-only]\n");
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     std::wstring dll_path;
@@ -2175,6 +2510,7 @@ int wmain(int argc, wchar_t** argv) {
     bool api_only = false;
     bool inject_only = false;
     bool locate_only = false;
+    bool lifecycle_only = false;
 
     for (int i = 1; i < argc; ++i) {
         if (_wcsicmp(argv[i], L"--dll") == 0 && i + 1 < argc) {
@@ -2187,6 +2523,8 @@ int wmain(int argc, wchar_t** argv) {
             inject_only = true;
         } else if (_wcsicmp(argv[i], L"--locate-only") == 0) {
             locate_only = true;
+        } else if (_wcsicmp(argv[i], L"--lifecycle-only") == 0) {
+            lifecycle_only = true;
         } else if (_wcsicmp(argv[i], L"--help") == 0 || _wcsicmp(argv[i], L"-h") == 0) {
             PrintUsage();
             return 0;
@@ -2229,24 +2567,35 @@ int wmain(int argc, wchar_t** argv) {
     std::wprintf(L"Test target: %ls\n", target_full);
 
     Counters c;
-    if (!inject_only && !locate_only) {
-        RunLocalApiTests(c, payload.c_str());
-    }
-    if (locate_only || (!api_only && !inject_only)) {
-        RunLocateTargetTests(c, target_full, payload.c_str());
-        RunDiscoverTargetTests(c, target_full, payload.c_str());
-    }
-    if (!api_only && !locate_only) {
-        RunCleanUnloadTests(c, target_full, payload.c_str());
-        RunInjectMatrix(c, target_full, payload.c_str());
+    if (lifecycle_only) {
+        RunLifecycleStressTests(c, target_full, payload.c_str());
+    } else {
+        if (!inject_only && !locate_only) {
+            RunLocalApiTests(c, payload.c_str());
+            if (!api_only) {
+                RunLifecycleStressTests(c, target_full, payload.c_str());
+            }
+        }
+        if (locate_only || (!api_only && !inject_only)) {
+            RunLocateTargetTests(c, target_full, payload.c_str());
+            RunDiscoverTargetTests(c, target_full, payload.c_str());
+        }
+        if (!api_only && !locate_only) {
+            RunCleanUnloadTests(c, target_full, payload.c_str());
+            RunInjectMatrix(c, target_full, payload.c_str());
+        }
     }
 
     std::printf("\n== Summary ==\n");
     std::printf("passed=%d failed=%d soft=%d skipped=%d\n", c.passed, c.failed, c.soft_failed,
                 c.skipped);
     fflush(stdout);
-    // TerminateProcess skips DLL_PROCESS_DETACH / MinHook teardown which currently
-    // STATUS_STACK_BUFFER_OVERRUN after the inject matrix on this toolchain.
+    /* Prefer CoreShutdown (joins IPC workers). Injected helpers use OpShutdown + no-op
+     * DllMain detach. The test host may still STATUS_STACK_BUFFER_OVERRUN in MinHook/CRT
+     * teardown after heavy in-process hook tests — exit via TerminateProcess. */
+    if (hdl::testapi::IsInitialized()) {
+        hdl::testapi::Shutdown();
+    }
     TerminateProcess(GetCurrentProcess(), c.failed == 0 ? 0 : 1);
     return c.failed == 0 ? 0 : 1;
 }

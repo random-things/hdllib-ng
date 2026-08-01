@@ -4,6 +4,7 @@
 #include "memory.hpp"
 #include "protocol.hpp"
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,7 @@ bool HandleSearchMemory(HANDLE pipe, proto::Reader& r) {
         desc.size = size;
         desc.value_type = HDL_VALUE_BYTES;
         desc.cmp = HDL_CMP_EXACT;
-        desc.alignment = 1; /* AOB is always byte-unaligned */
+        desc.alignment = 1;          /* AOB is always byte-unaligned */
         desc.max_results = max_hits; /* 0 = unlimited */
         desc.value = pattern.c_str();
         desc.value_size = 0;
@@ -74,12 +75,18 @@ bool HandleSearchClose(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlSearchSession* session = nullptr;
-    if (!TakeSearchSession(id, &session)) {
+    auto holder = TakeSearchSession(id);
+    if (!holder) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
         return WriteFrame(pipe, resp);
     }
-    SearchClose(session);
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (holder->session) {
+            SearchClose(holder->session);
+            holder->session = nullptr;
+        }
+    }
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     return WriteFrame(pipe, resp);
 }
@@ -92,12 +99,19 @@ bool HandleSearchReset(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
-    HdlSearchSession* session = FindSession(id);
-    if (!session) {
+    auto holder = FindSession(id);
+    if (!holder) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
         return WriteFrame(pipe, resp);
     }
-    SearchReset(session);
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (!holder->session) {
+            AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
+            return WriteFrame(pipe, resp);
+        }
+        SearchReset(holder->session);
+    }
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     return WriteFrame(pipe, resp);
 }
@@ -137,32 +151,41 @@ bool HandleSearchFirst(HANDLE pipe, proto::Reader& r) {
     (void)flags;
     auto job = BindJob(job_id, timeout_ms);
 
-    HdlSearchSession* session = FindSession(id);
-    if (!session) {
+    auto holder = FindSession(id);
+    if (!holder) {
         if (job && !job_id) {
             JobClose(job->id);
         }
         return WriteSearchStreamError(pipe, HDL_E_NOT_FOUND);
     }
 
-    /* Stream hits as found (bounded buffer + WriteFile backpressure); retain for --next. */
     SearchHitStreamer stream(pipe);
-    SearchSetRetainHits(session, true);
-    SearchSetHitHandler(session, &SearchHitStreamer::OnHitThunk, &stream);
+    HdlStatus st = HDL_E_NOT_FOUND;
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (!holder->session) {
+            if (job && !job_id) {
+                JobClose(job->id);
+            }
+            return WriteSearchStreamError(pipe, HDL_E_NOT_FOUND);
+        }
+        SearchSetRetainHits(holder->session, true);
+        SearchSetHitHandler(holder->session, &SearchHitStreamer::OnHitThunk, &stream);
 
-    HdlSearchDesc desc{};
-    desc.start = start;
-    desc.size = size;
-    desc.value_type = value_type;
-    desc.cmp = cmp;
-    desc.alignment = alignment;
-    desc.max_results = max_results;
-    desc.value = value_ptr;
-    desc.value_size = value_len;
-    desc.flags = search_flags;
-    desc.module_or_null = module.empty() ? nullptr : module.c_str();
-    const HdlStatus st = SearchFirst(session, &desc, MakeToken(nullptr, job));
-    SearchSetHitHandler(session, nullptr, nullptr);
+        HdlSearchDesc desc{};
+        desc.start = start;
+        desc.size = size;
+        desc.value_type = value_type;
+        desc.cmp = cmp;
+        desc.alignment = alignment;
+        desc.max_results = max_results;
+        desc.value = value_ptr;
+        desc.value_size = value_len;
+        desc.flags = search_flags;
+        desc.module_or_null = module.empty() ? nullptr : module.c_str();
+        st = SearchFirst(holder->session, &desc, MakeToken(nullptr, job));
+        SearchSetHitHandler(holder->session, nullptr, nullptr);
+    }
     if (job && !job_id) {
         JobClose(job->id);
     }
@@ -190,18 +213,31 @@ bool HandleSearchNext(HANDLE pipe, proto::Reader& r) {
     (void)flags;
     auto job = BindJob(job_id, timeout_ms);
 
-    HdlSearchSession* session = FindSession(id);
-    if (!session) {
+    auto holder = FindSession(id);
+    if (!holder) {
+        if (job && !job_id) {
+            JobClose(job->id);
+        }
         AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
         return WriteFrame(pipe, resp);
     }
-    const HdlStatus st =
-        SearchNext(session, cmp, value_ptr, value_len, MakeToken(nullptr, job));
+    HdlStatus st = HDL_E_NOT_FOUND;
+    uint32_t count = 0;
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (!holder->session) {
+            if (job && !job_id) {
+                JobClose(job->id);
+            }
+            AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
+            return WriteFrame(pipe, resp);
+        }
+        st = SearchNext(holder->session, cmp, value_ptr, value_len, MakeToken(nullptr, job));
+        SearchGetCount(holder->session, &count);
+    }
     if (job && !job_id) {
         JobClose(job->id);
     }
-    uint32_t count = 0;
-    SearchGetCount(session, &count);
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     return WriteFrame(pipe, resp);
@@ -222,18 +258,26 @@ bool HandleSearchGetHits(HANDLE pipe, proto::Reader& r) {
     (void)timeout_ms;
     (void)flags;
 
-    HdlSearchSession* session = FindSession(id);
-    if (!session) {
+    auto holder = FindSession(id);
+    if (!holder) {
         return WriteSearchStreamError(pipe, HDL_E_NOT_FOUND);
     }
     uint32_t total = 0;
-    SearchGetCount(session, &total);
+    std::vector<uint64_t> all_hits;
+    HdlStatus st = HDL_OK;
+    {
+        std::lock_guard<std::mutex> lock(holder->mu);
+        if (!holder->session) {
+            return WriteSearchStreamError(pipe, HDL_E_NOT_FOUND);
+        }
+        SearchGetCount(holder->session, &total);
+        all_hits.resize(total ? total : 1);
+        uint32_t all = total;
+        st = total ? SearchGetHits(holder->session, all_hits.data(), &all) : HDL_OK;
+    }
     const uint32_t got = (max_hits && max_hits < total) ? max_hits : total;
-    std::vector<uint64_t> all_hits(total ? total : 1);
-    uint32_t all = total;
-    const HdlStatus st = total ? SearchGetHits(session, all_hits.data(), &all) : HDL_OK;
     return WriteSearchHitsStreamed(pipe, st, all_hits.data(), total, got, kSearchStreamCap);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

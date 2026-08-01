@@ -30,11 +30,22 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 | `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
 | `protocol.hpp` | Opcode enum + POD/string encode helpers used by server and client |
 
-Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact path, or a `swprintf` format with `%lu` for the pid). ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
+Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or the same with one literal pid placeholder such as `%lu` / `%08X`, expanded by replacement — never used as a `swprintf` format). Non-pipe paths and unknown `%` sequences are rejected; the path passed to `CreateFileW` is always rebuilt as `\\.\pipe\` + sanitized name. ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
 
 ---
 
 ## Framing and encoding
+
+### Handshake
+
+On connect, `PipeClient` sends `OpHello` then `OpCapabilities` before other work.
+
+| Op | Reply fields |
+|----|----------------|
+| `OpHello` (101) | `status`, `major` (`HDL_IPC_PROTO_MAJOR`), `minor`, `endian` (`HDL_IPC_ENDIAN_LE=1`), build id string |
+| `OpCapabilities` (102) | `status`, `uint32_t` feature bits (`HDL_CAP_SEARCH`, `HDL_CAP_DISCOVER`, …) |
+
+Incompatible major ⇒ connect fails with a clear negotiate error. `OpPing` remains liveness-only.
 
 ### Frame layout
 
@@ -55,6 +66,7 @@ Implementation: `PipeReadFrame` / `PipeWriteFrame` in `src/ipc/` (facade in `ipc
 | `AppendString` / `TakeString` | `uint32_t byte_len` + NUL-terminated narrow bytes (len includes NUL; empty ⇒ `0`) |
 | `AppendWString` / `TakeWString` | `uint32_t byte_len` + UTF-16LE including trailing `L'\0'` (len includes NUL; empty ⇒ `0`) |
 | `AppendBytes` | Raw bytes |
+| `AppendHdl*` / `TakeHdl*` (`wire.hpp`) | Field-wise LE codecs for public `Hdl*` reply structs (no struct padding on the wire) |
 
 ### Optional request trailer
 

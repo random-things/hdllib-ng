@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "alloc.hpp"
 #include "jobs.hpp"
@@ -83,7 +84,8 @@ bool HandleFindCaves(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count && st == HDL_OK) {
-        AppendBytes(resp, caves.data(), count * sizeof(HdlCaveInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlCaveInfo(resp, caves[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -138,5 +140,5 @@ bool HandleFlushICache(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

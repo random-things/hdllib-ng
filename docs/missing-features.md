@@ -11,38 +11,17 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 
 ---
 
-## 1. IPC protocol versioning / capability handshake
+## 1. IPC protocol versioning / capability handshake — **done**
 
-**Why it matters:** The named pipe is the remote ABI. Opcodes already span
-`1…91` plus `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
-`OpTrackLoadedDll = 95`, and are deliberately
-non-contiguous. Docs state the protocol is not self-describing or
-version-negotiated. A newer `hdlclient` against an older DLL (or the reverse)
-can mis-parse frames or treat unknown opcodes as `HDL_E_INVALID_ARG` with no
-structured way to degrade.
+Implemented: `HDL_IPC_PROTO_MAJOR/MINOR`, `OpHello` (101), `OpCapabilities` (102),
+`PipeClient::Negotiate()` on connect (refuse major mismatch), feature bitfield
+(`HDL_CAP_*`), field-wise codecs in `src/ipc/wire.hpp`. Contract checks:
+`hdl_client_tests` spins a mismatched-major peer and asserts `Connect`/`Negotiate`
+rejects it; `hdl_pe_tests` covers wire codecs and malformed base-reloc apply.
+See [capabilities.md](capabilities.md).
 
-**Current state:** Length-prefixed frames (`size` + payload starting with
-`opcode` / `status`). No hello, no version field, no feature bitmap.
-[`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/framing.cpp`](../src/ipc/framing.cpp),
-[`tools/client/pipe_client.cpp`](../tools/client/pipe_client.cpp).
-
-**What needs to be done:**
-
-1. Define a wire version (e.g. `HDL_IPC_VERSION = 1`) and a fixed
-   `OpHello` / `OpCapabilities` request answered before other work (or as the
-   first optional frame after connect).
-2. Reply with: protocol version, DLL build identity (optional), and a
-   capability set — either a bitfield of feature groups or a list of supported
-   opcode ranges / named features (`search`, `discover`, `watch`, `fingerprint`, …).
-3. Teach `PipeClient` to negotiate on connect: refuse incompatible major
-   versions; warn or disable verbs when a capability is missing.
-4. Keep `OpPing` as a cheap liveness check; do not overload it for negotiation.
-5. Document the handshake in [capabilities.md](capabilities.md) and add a
-   client/DLL mismatch test in `hdl_client_tests`.
-
-**Acceptance:** A client can detect “DLL too old for `OpFingerprint`” and print
-a clear error instead of a generic invalid-arg failure. Rolling upgrades of
-client or DLL alone are diagnosable.
+Follow-ups: warn/disable individual client verbs when a capability bit is
+missing; fuzz `Reader` / wire codecs.
 
 ---
 

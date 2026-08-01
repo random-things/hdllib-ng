@@ -1,10 +1,16 @@
 /* End-to-end hdlclient tests against hdl_test_target (parity with hdl_tests locate/discover). */
-#include "support.hpp"
+#include "hdllib/hdllib.h"
+#include "hdllib/pipe_name.h"
+#include "pipe_client.hpp"
+#include "protocol.hpp"
 #include "store.hpp"
+#include "support.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
@@ -76,9 +82,8 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> cmdline(cmd.begin(), cmd.end());
     cmdline.push_back(0);
-    const BOOL ok =
-        CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                       nullptr, &si, &pi);
+    const BOOL ok = CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(out_w);
     if (stdin_text) {
         CloseHandle(in_r);
@@ -277,6 +282,97 @@ void ExpectExit0(Counters& c, const char* name, const ProcResult& r) {
     Report(c, r.exit_code == 0, false, name, "");
 }
 
+bool PipeReadExact(HANDLE pipe, void* buf, DWORD size) {
+    auto* p = static_cast<uint8_t*>(buf);
+    DWORD remaining = size;
+    while (remaining) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, p, remaining, &got, nullptr) || got == 0) {
+            return false;
+        }
+        p += got;
+        remaining -= got;
+    }
+    return true;
+}
+
+bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
+    const auto* p = static_cast<const uint8_t*>(buf);
+    DWORD remaining = size;
+    while (remaining) {
+        DWORD wrote = 0;
+        if (!WriteFile(pipe, p, remaining, &wrote, nullptr) || wrote == 0) {
+            return false;
+        }
+        p += wrote;
+        remaining -= wrote;
+    }
+    return true;
+}
+
+/* Peer that answers OpHello with an incompatible major so PipeClient::Negotiate rejects. */
+void RunNegotiateMismatch(Counters& c) {
+    using namespace hdl::proto;
+    const uint32_t pid = 0x71C0FFEEu;
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        Report(c, false, false, "ipc/reject_major_mismatch", "pipe name format failed");
+        return;
+    }
+
+    HANDLE pipe =
+        CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                         1, 4096, 4096, 0, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        Report(c, false, false, "ipc/reject_major_mismatch", "CreateNamedPipe failed");
+        return;
+    }
+
+    std::atomic<bool> served{false};
+    std::thread server([&] {
+        const BOOL connected =
+            ConnectNamedPipe(pipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        if (!connected) {
+            return;
+        }
+        uint32_t rsize = 0;
+        if (!PipeReadExact(pipe, &rsize, sizeof(rsize))) {
+            return;
+        }
+        std::vector<uint8_t> req(rsize);
+        if (rsize && !PipeReadExact(pipe, req.data(), rsize)) {
+            return;
+        }
+        Reader r(req);
+        uint32_t op = 0;
+        if (!r.TakePod(op) || op != OpHello) {
+            return;
+        }
+        std::vector<uint8_t> resp;
+        AppendPod(resp, static_cast<int32_t>(HDL_OK));
+        AppendPod(resp, static_cast<uint32_t>(99)); /* incompatible major */
+        AppendPod(resp, static_cast<uint32_t>(0));
+        AppendPod(resp, HDL_IPC_ENDIAN_LE);
+        AppendString(resp, "mismatch-peer");
+        const uint32_t wsize = static_cast<uint32_t>(resp.size());
+        if (!PipeWriteExact(pipe, &wsize, sizeof(wsize)) ||
+            !PipeWriteExact(pipe, resp.data(), wsize)) {
+            return;
+        }
+        served.store(true);
+    });
+
+    PipeClient client(pid);
+    const bool connected = client.Connect(3000);
+    const std::string& err = client.NegotiateError();
+    const bool rejected = !connected && err.find("mismatch") != std::string::npos && served.load();
+    Report(c, rejected, false, "ipc/reject_major_mismatch",
+           rejected ? "PipeClient::Negotiate refuses incompatible major" : err.c_str());
+
+    server.join();
+    CloseHandle(pipe);
+}
+
 void RunStoreUnit(Counters& c) {
     std::printf("\n== Client store (unit) ==\n");
     wchar_t tmp[MAX_PATH];
@@ -299,9 +395,10 @@ void RunStoreUnit(Counters& c) {
     Report(c, a.Save(tmp), false, "store save", "");
     hdlcli::InterestStore b;
     Report(c, b.Load(tmp), false, "store load", "");
-    Report(c, b.interests.size() == 1 && b.interests[0].name == "leaf" &&
-                   b.interests[0].locators.size() == 1 &&
-                   b.interests[0].locators[0].pattern.pattern.find("BE BA") != std::string::npos,
+    Report(c,
+           b.interests.size() == 1 && b.interests[0].name == "leaf" &&
+               b.interests[0].locators.size() == 1 &&
+               b.interests[0].locators[0].pattern.pattern.find("BE BA") != std::string::npos,
            false, "store roundtrip fields", "");
     DeleteFileW(tmp);
 }
@@ -426,8 +523,7 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     if (fn) {
         wchar_t a[32];
         swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(fn));
-        ExpectOk(c, "client call LocateFn",
-                 Cli(ctx, {L"call", L"--addr", a, L"i64:3", L"i64:4"}));
+        ExpectOk(c, "client call LocateFn", Cli(ctx, {L"call", L"--addr", a, L"i64:3", L"i64:4"}));
     }
     ExpectOk(c, "client call export LocateFn",
              Cli(ctx, {L"call", L"HdlTestLocateFn", L"i64:1", L"i64:2"}));
@@ -453,8 +549,7 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
 
     /* Place / code smoke */
     ExpectOk(c, "client disasm-backend list", Cli(ctx, {L"disasm-backend", L"list"}));
-    ExpectOk(c, "client disasm-backend set zydis",
-             Cli(ctx, {L"disasm-backend", L"set", L"1"}));
+    ExpectOk(c, "client disasm-backend set zydis", Cli(ctx, {L"disasm-backend", L"set", L"1"}));
     if (fn) {
         wchar_t a[32];
         swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(fn));
@@ -511,8 +606,9 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         ExpectOk(c, "client vtable", Cli(ctx, {L"vtable", a}));
         auto rtti = Cli(ctx, {L"rtti", a});
         /* Fake C vtable fixture has no MSVC RTTI — accept OK or NOT_FOUND. */
-        Report(c, rtti.exit_code == 0 || Contains(rtti.out, L"status=NOT_FOUND") ||
-                      Contains(rtti.out, L"status=FAILED"),
+        Report(c,
+               rtti.exit_code == 0 || Contains(rtti.out, L"status=NOT_FOUND") ||
+                   Contains(rtti.out, L"status=FAILED"),
                false, "client rtti", "");
     }
     {
@@ -635,8 +731,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
 
     /* Scan */
     {
-        auto r = Cli(ctx, {L"scan", L"--pattern", L"31 4C 44 48", L"--module", L"hdl_test_target.exe",
-                           L"--image", L"--max", L"8"});
+        auto r = Cli(ctx, {L"scan", L"--pattern", L"31 4C 44 48", L"--module",
+                           L"hdl_test_target.exe", L"--image", L"--max", L"8"});
         ExpectOk(c, "client scan pattern", r);
     }
     uint64_t scan_sess = 0;
@@ -649,7 +745,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     if (scan_sess) {
         wchar_t s[32];
         swprintf_s(s, L"%llu", static_cast<unsigned long long>(scan_sess));
-        ExpectOk(c, "client scan hits", Cli(ctx, {L"scan", L"--hits", L"--session", s, L"--max", L"16"}));
+        ExpectOk(c, "client scan hits",
+                 Cli(ctx, {L"scan", L"--hits", L"--session", s, L"--max", L"16"}));
         ExpectOk(c, "client scan close", Cli(ctx, {L"scan", L"--close", L"--session", s}));
     }
 
@@ -780,16 +877,16 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         swprintf_s(sid, L"%llu", static_cast<unsigned long long>(session));
 
         ExpectOk(c, "client discover-constraint",
-                 Cli(ctx, {L"discover-constraint", L"--session", sid, L"--size", L"24",
-                           L"--pred", L"eq_i32:8:80", L"--pred", L"eq_i32:12:100", L"--module",
+                 Cli(ctx, {L"discover-constraint", L"--session", sid, L"--size", L"24", L"--pred",
+                           L"eq_i32:8:80", L"--pred", L"eq_i32:12:100", L"--module",
                            L"hdl_test_target.exe", L"--image"}));
         ExpectOk(c, "client discover-cands", Cli(ctx, {L"discover-cands", L"--session", sid}));
 
         if (dleaf) {
             wchar_t a[32];
             swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(dleaf));
-            auto r = Cli(ctx, {L"discover-add", L"--session", sid, L"--kind", L"function", L"--addr",
-                               a, L"--tag", L"leaf"});
+            auto r = Cli(ctx, {L"discover-add", L"--session", sid, L"--kind", L"function",
+                               L"--addr", a, L"--tag", L"leaf"});
             ExpectOk(c, "client discover-add", r);
             uint64_t cand = 0;
             ParseU64After(r.out, L"cand=", &cand);
@@ -797,18 +894,18 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                 wchar_t cid[32];
                 swprintf_s(cid, L"%llu", static_cast<unsigned long long>(cand));
                 ExpectOk(c, "client discover-synth",
-                         Cli(ctx, {L"discover-synth", L"--session", sid, L"--cand", cid, L"--module",
-                                   L"hdl_test_target.exe"}));
+                         Cli(ctx, {L"discover-synth", L"--session", sid, L"--cand", cid,
+                                   L"--module", L"hdl_test_target.exe"}));
             }
         }
 
         if (obj_a) {
             wchar_t a[32];
             swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(obj_a));
-            ExpectOk(c, "client discover-scan",
-                     Cli(ctx, {L"discover-scan", L"--session", sid, L"--type", L"i32", L"--value",
-                               L"80", L"--module", L"hdl_test_target.exe", L"--image", L"--tag",
-                               L"health"}));
+            ExpectOk(
+                c, "client discover-scan",
+                Cli(ctx, {L"discover-scan", L"--session", sid, L"--type", L"i32", L"--value", L"80",
+                          L"--module", L"hdl_test_target.exe", L"--image", L"--tag", L"health"}));
         }
 
         if (leaf) {
@@ -841,8 +938,9 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         if (action) {
             wchar_t a[32];
             swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(action));
-            ExpectOk(c, "client discover-watch",
-                     Cli(ctx, {L"discover-watch", L"--session", sid, L"--addr", a, L"--args", L"0"}));
+            ExpectOk(
+                c, "client discover-watch",
+                Cli(ctx, {L"discover-watch", L"--session", sid, L"--addr", a, L"--args", L"0"}));
             if (obj_a) {
                 wchar_t oa[32];
                 swprintf_s(oa, L"0x%llx", static_cast<unsigned long long>(obj_a));
@@ -852,7 +950,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             }
             ExpectOk(c, "client discover-action-begin",
                      Cli(ctx, {L"discover-action-begin", L"--session", sid, L"--name", L"act"}));
-            ExpectOk(c, "client call DiscoverAction", Cli(ctx, {L"call", L"HdlTestDiscoverAction"}));
+            ExpectOk(c, "client call DiscoverAction",
+                     Cli(ctx, {L"call", L"HdlTestDiscoverAction"}));
             ExpectOk(c, "client call DiscoverDamage",
                      Cli(ctx, {L"call", L"HdlTestDiscoverDamage", L"i64:1"}));
             ExpectOk(c, "client discover-action-end",
@@ -881,8 +980,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             wchar_t a[32];
             swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(obj_a));
             ExpectOk(c, "client discover-cluster",
-                     Cli(ctx, {L"discover-cluster", L"--session", sid, L"--seed", a, L"--size", L"24",
-                               L"--module", L"hdl_test_target.exe"}));
+                     Cli(ctx, {L"discover-cluster", L"--session", sid, L"--seed", a, L"--size",
+                               L"24", L"--module", L"hdl_test_target.exe"}));
         }
 
         ExpectOk(c, "client discover-close", Cli(ctx, {L"discover-close", L"--session", sid}));
@@ -938,7 +1037,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         script += L"quit\n";
 
         ProcResult r;
-        std::vector<std::wstring> args = {L"--store", store_path, std::to_wstring(ctx.pid), L"repl"};
+        std::vector<std::wstring> args = {L"--store", store_path, std::to_wstring(ctx.pid),
+                                          L"repl"};
         RunProcess(ctx.client, args, &script, 90000, &r);
         ExpectExit0(c, "client REPL script exit", r);
         Report(c, Contains(r.out, L"status=OK") || Contains(r.out, L"remote_pid="), false,
@@ -947,11 +1047,13 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                "client REPL dcreate", "");
         Report(c, Contains(r.out, L"store saved") || Contains(r.out, L"store add"), false,
                "client REPL store", "");
-        Report(c, Contains(r.out, L"place cave") || Contains(r.out, L"AllocNear fallback") ||
-                      Contains(r.out, L"store updated interest"),
+        Report(c,
+               Contains(r.out, L"place cave") || Contains(r.out, L"AllocNear fallback") ||
+                   Contains(r.out, L"store updated interest"),
                false, "client REPL recipe place", "");
-        Report(c, !stitch_pad || Contains(r.out, L"stub_va=") ||
-                      Contains(r.out, L"stub+patch") || Contains(r.out, L"patch handle="),
+        Report(c,
+               !stitch_pad || Contains(r.out, L"stub_va=") || Contains(r.out, L"stub+patch") ||
+                   Contains(r.out, L"patch handle="),
                false, "client REPL recipe stitch", "");
 
         hdlcli::InterestStore loaded;
@@ -1030,7 +1132,7 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     }
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     std::wstring dll_path;
@@ -1076,6 +1178,38 @@ int wmain(int argc, wchar_t** argv) {
     std::wprintf(L"client=%ls\ndll=%ls\ntarget=%ls\n", client_full, dll_full, target_full);
 
     Counters c;
+    Report(c, hdl::proto::HDL_IPC_PROTO_MAJOR == 1, false, "ipc/proto_major_v1", "");
+
+    /* HDL_PIPE must stay under \\.\pipe\; reject file/device path overrides. */
+    {
+        wchar_t prev[512];
+        const DWORD prev_n = GetEnvironmentVariableW(L"HDL_PIPE", prev, 512);
+        wchar_t name[128];
+        SetEnvironmentVariableW(L"HDL_PIPE", L"C:\\Windows\\System32\\notepad.exe");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_non_pipe_hdl_pipe", "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\%s");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_format_string_hdl_pipe",
+               "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\hdl_test_%n");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_percent_n_hdl_pipe", "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\hdl_test_%lu");
+        Report(c,
+               HdlFormatPipeName(0xABCDu, name, 128) == 0 &&
+                   wcscmp(name, L"\\\\.\\pipe\\hdl_test_43981") == 0,
+               false, "ipc/accept_safe_pipe_format", "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\ExactPipeName");
+        Report(c,
+               HdlFormatPipeName(1, name, 128) == 0 &&
+                   wcscmp(name, L"\\\\.\\pipe\\ExactPipeName") == 0,
+               false, "ipc/accept_exact_pipe_rebuild", "");
+        if (prev_n > 0 && prev_n < 512) {
+            SetEnvironmentVariableW(L"HDL_PIPE", prev);
+        } else {
+            SetEnvironmentVariableW(L"HDL_PIPE", nullptr);
+        }
+    }
+
+    RunNegotiateMismatch(c);
     RunStoreUnit(c);
     RunClientLiveTests(c, client_full, target_full, dll_full);
 

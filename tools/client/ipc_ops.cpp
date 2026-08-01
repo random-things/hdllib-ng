@@ -1,5 +1,6 @@
 #include "ipc_ops.hpp"
 
+#include "ipc/wire.hpp"
 #include "protocol.hpp"
 #include "util.hpp"
 
@@ -18,7 +19,7 @@ IpcStatus TakeStatus(const std::vector<uint8_t>&, Reader* r) {
     return s;
 }
 
-}  // namespace
+} // namespace
 
 IpcStatus Ping(PipeClient& c, uint32_t* out_pid) {
     std::vector<uint8_t> req, resp;
@@ -77,7 +78,7 @@ IpcStatus ResolvePattern(PipeClient& c, const char* pattern, uint32_t hit_index,
     Reader r(resp);
     IpcStatus s = TakeStatus(resp, &r);
     HdlPatternResult pr{};
-    r.Take(&pr, sizeof(pr));
+    hdl::proto::TakeHdlPatternResult(r, pr);
     if (out) {
         *out = pr;
     }
@@ -211,7 +212,7 @@ IpcStatus DiscoverRank(PipeClient& c, uint64_t session, const char* name,
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlCandidate));
+            hdl::proto::TakeHdlCandidate(r, (*out)[i]);
         }
     }
     return s;
@@ -234,7 +235,7 @@ IpcStatus DiscoverSynth(PipeClient& c, uint64_t session, uint64_t cand_id, uint3
     Reader r(resp);
     IpcStatus s = TakeStatus(resp, &r);
     HdlSynthesizedPattern pat{};
-    r.Take(&pat, sizeof(pat));
+    hdl::proto::TakeHdlSynthesizedPattern(r, pat);
     if (out) {
         *out = pat;
     }
@@ -254,7 +255,7 @@ IpcStatus DiscoverConstraint(PipeClient& c, uint64_t session, uint32_t object_si
     AppendWString(req, module_or_null ? module_or_null : L"");
     AppendString(req, tag ? tag : "");
     for (const auto& p : preds) {
-        AppendPod(req, p);
+        AppendHdlFieldPred(req, p);
     }
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -278,7 +279,7 @@ IpcStatus DiscoverGetCandidates(PipeClient& c, uint64_t session, std::vector<Hdl
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlCandidate));
+            hdl::proto::TakeHdlCandidate(r, (*out)[i]);
         }
     }
     return s;
@@ -344,7 +345,7 @@ IpcStatus PathConsensus(PipeClient& c, uint64_t target, uint32_t max_depth, uint
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlPointerPath));
+            hdl::proto::TakeHdlPointerPath(r, (*out)[i]);
         }
     }
     return s;
@@ -359,7 +360,7 @@ IpcStatus PathValidate(PipeClient& c, uint64_t expected, std::vector<HdlPointerP
     AppendPod(req, expected);
     AppendPod(req, static_cast<uint32_t>(paths->size()));
     for (const auto& p : *paths) {
-        AppendBytes(req, &p, sizeof(p));
+        AppendHdlPointerPath(req, p);
     }
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -370,7 +371,7 @@ IpcStatus PathValidate(PipeClient& c, uint64_t expected, std::vector<HdlPointerP
     r.TakePod(kept);
     paths->resize(kept);
     for (uint32_t i = 0; i < kept; ++i) {
-        r.Take(&(*paths)[i], sizeof(HdlPointerPath));
+        hdl::proto::TakeHdlPointerPath(r, (*paths)[i]);
     }
     return s;
 }
@@ -395,7 +396,7 @@ IpcStatus CallExport(PipeClient& c, const wchar_t* module, const char* name,
     Reader r(resp);
     IpcStatus s = TakeStatus(resp, &r);
     HdlCallResult cr{};
-    r.Take(&cr, sizeof(cr));
+    hdl::proto::TakeHdlCallResult(r, cr);
     if (out) {
         *out = cr;
     }
@@ -422,7 +423,7 @@ IpcStatus FindCaves(PipeClient& c, const HdlCaveQuery& q, std::vector<HdlCaveInf
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlCaveInfo));
+            hdl::proto::TakeHdlCaveInfo(r, (*out)[i]);
         }
     }
     return s;
@@ -469,7 +470,7 @@ IpcStatus BuildStub(PipeClient& c, const HdlStubDesc& desc, HdlStubResult* out) 
     Reader r(resp);
     IpcStatus s = TakeStatus(resp, &r);
     HdlStubResult result{};
-    r.Take(&result, sizeof(result));
+    hdl::proto::TakeHdlStubResult(r, result);
     if (out) {
         *out = result;
     }
@@ -535,7 +536,7 @@ IpcStatus PatchEnum(PipeClient& c, std::vector<HdlPatchInfo>* out) {
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlPatchInfo));
+            hdl::proto::TakeHdlPatchInfo(r, (*out)[i]);
         }
     }
     return s;
@@ -562,7 +563,8 @@ IpcStatus WatchHw(PipeClient& c, uint64_t addr, uint32_t size, uint32_t access, 
     return s;
 }
 
-IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode, uint64_t* out_handle) {
+IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode,
+                    uint64_t* out_handle) {
     std::vector<uint8_t> req, resp;
     AppendPod(req, static_cast<uint32_t>(OpWatchPage));
     AppendPod(req, addr);
@@ -592,7 +594,8 @@ IpcStatus Unwatch(PipeClient& c, uint64_t handle) {
     return TakeStatus(resp, &r);
 }
 
-IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name, uint64_t* out_addr) {
+IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name,
+                        uint64_t* out_addr) {
     std::vector<uint8_t> req, resp;
     AppendPod(req, static_cast<uint32_t>(OpResolveExport));
     AppendWString(req, module ? module : L"");
@@ -624,7 +627,7 @@ IpcStatus EnumImports(PipeClient& c, uint64_t module_base, std::vector<HdlImport
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlImportInfo));
+            hdl::proto::TakeHdlImportInfo(r, (*out)[i]);
         }
     }
     return s;
@@ -644,10 +647,10 @@ IpcStatus Fingerprint(PipeClient& c, uint32_t scan_flags, std::vector<HdlFingerp
     if (out) {
         out->resize(count);
         for (uint32_t i = 0; i < count; ++i) {
-            r.Take(&(*out)[i], sizeof(HdlFingerprintTag));
+            hdl::proto::TakeHdlFingerprintTag(r, (*out)[i]);
         }
     }
     return s;
 }
 
-}  // namespace hdlcli
+} // namespace hdlcli

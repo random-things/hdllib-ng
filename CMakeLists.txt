@@ -127,6 +127,8 @@ set(HDL_INJECT_SOURCES
   src/inject/set_windows_hook_ex.cpp
   src/inject/thread_hijack.cpp
   src/inject/manual_map.cpp
+  src/inject/pe_image_view.cpp
+  src/inject/pe_relocs.cpp
   src/inject/early_bird_apc.cpp
   src/inject/atom_bombing.cpp
   src/inject/module_stomp.cpp
@@ -398,6 +400,14 @@ if(HDL_BUILD_TESTS)
     LABELS "gui;inject"
     RESOURCE_LOCK hdl_gui_desktop)
 
+  add_test(NAME hdl_lifecycle_tests
+    COMMAND hdl_tests --lifecycle-only
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
+  set_tests_properties(hdl_lifecycle_tests PROPERTIES
+    TIMEOUT 600
+    LABELS "lifecycle;gui"
+    RESOURCE_LOCK hdl_gui_desktop)
+
   add_test(NAME hdl_tests
     COMMAND hdl_tests
     WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_tests>)
@@ -423,10 +433,31 @@ if(HDL_BUILD_TESTS)
     TIMEOUT 30
     LABELS "headless;unit")
 
+  add_executable(hdl_pe_tests
+    tests/pe_image_test.cpp
+    src/inject/pe_image_view.cpp
+    src/inject/pe_relocs.cpp
+  )
+  target_include_directories(hdl_pe_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(hdl_pe_tests PRIVATE UNICODE _UNICODE)
+  hdl_configure_target(hdl_pe_tests)
+  add_test(NAME hdl_pe_tests COMMAND hdl_pe_tests)
+  set_tests_properties(hdl_pe_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
+
   if(HDL_BUILD_TOOLS)
-    add_executable(hdl_client_tests tests/client_test_main.cpp tools/client/store.cpp)
+    add_executable(hdl_client_tests
+      tests/client_test_main.cpp
+      tools/client/store.cpp
+      tools/client/pipe_client.cpp
+    )
     target_include_directories(hdl_client_tests PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
       ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )

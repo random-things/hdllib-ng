@@ -1,4 +1,5 @@
 #include "handlers.hpp"
+#include "wire.hpp"
 
 #include "core.hpp"
 #include "fingerprint.hpp"
@@ -15,6 +16,27 @@
 
 namespace hdl {
 namespace ipc {
+
+bool HandleHello(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    (void)r;
+    std::vector<uint8_t> resp;
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
+    AppendPod(resp, HDL_IPC_PROTO_MAJOR);
+    AppendPod(resp, HDL_IPC_PROTO_MINOR);
+    AppendPod(resp, HDL_IPC_ENDIAN_LE);
+    AppendString(resp, "hdllib");
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleCapabilities(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    (void)r;
+    std::vector<uint8_t> resp;
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
+    AppendPod(resp, DefaultCapabilityBits());
+    return WriteFrame(pipe, resp);
+}
 
 bool HandlePing(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
@@ -91,10 +113,9 @@ bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
     }
     uint64_t base = 0;
     uint32_t out_pid = 0;
-    const HdlStatus st = InjectDllEx(pid, path.c_str(), static_cast<int>(method),
-                                     exe_path.empty() ? nullptr : exe_path.c_str(),
-                                     hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid,
-                                     &base);
+    const HdlStatus st = InjectDllEx(
+        pid, path.c_str(), static_cast<int>(method), exe_path.empty() ? nullptr : exe_path.c_str(),
+        hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid, &base);
     if (st == HDL_OK && base) {
         const DWORD self = GetCurrentProcessId();
         const uint32_t effective = out_pid ? out_pid : (pid ? pid : self);
@@ -222,7 +243,8 @@ bool HandleEnumRegions(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        AppendBytes(resp, regions.data(), count * sizeof(HdlRegionInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlRegionInfo(resp, regions[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -249,7 +271,8 @@ bool HandleEnumModules(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        AppendBytes(resp, modules.data(), count * sizeof(HdlModuleInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlModuleInfo(resp, modules[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -286,7 +309,8 @@ bool HandleFingerprint(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        AppendBytes(resp, tags.data(), count * sizeof(HdlFingerprintTag));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlFingerprintTag(resp, tags[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -342,7 +366,7 @@ bool HandleGetHealth(HANDLE pipe, proto::Reader& r) {
     HdlHealthInfo info{};
     const HdlStatus st = GetHealth(&info);
     AppendPod(resp, static_cast<int32_t>(st));
-    AppendBytes(resp, &info, sizeof(info));
+    proto::AppendHdlHealthInfo(resp, info);
     return WriteFrame(pipe, resp);
 }
 
@@ -368,7 +392,8 @@ bool HandleEnumThreads(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(st));
     AppendPod(resp, count);
     if (count) {
-        AppendBytes(resp, threads.data(), count * sizeof(HdlThreadInfo));
+        for (uint32_t _i = 0; _i < count; ++_i)
+            proto::AppendHdlThreadInfo(resp, threads[_i]);
     }
     return WriteFrame(pipe, resp);
 }
@@ -390,10 +415,11 @@ bool HandlePollEvents(HANDLE pipe, proto::Reader& r) {
     AppendPod(resp, static_cast<int32_t>(HDL_OK));
     AppendPod(resp, got);
     if (got) {
-        AppendBytes(resp, events.data(), got * sizeof(HdlEvent));
+        for (uint32_t _i = 0; _i < got; ++_i)
+            proto::AppendHdlEvent(resp, events[_i]);
     }
     return WriteFrame(pipe, resp);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl
