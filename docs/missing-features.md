@@ -81,42 +81,13 @@ acknowledgment.
 
 ---
 
-## 3. Remote surface parity for operator-critical controls
+## 3. Remote surface parity for operator-critical controls — DONE
 
-**Why it matters:** Controllers should drive an injected DLL without shipping
-extra in-process code. Several controls that matter after inject are C-API-only
-or only approximated by client composition.
-
-**Current state (C-API-only or incomplete IPC):**
-
-| Capability | Today | Gap |
-|---|---|---|
-| `HdlSetLogFile` | C API / env | No opcode to redirect logs from the controller |
-| `HdlSetHealthVeh` | C API / `HDL_HEALTH_VEH` | No pipe verb; first `PollEvents` may enable VEH as a side effect |
-| Custom `HdlHook` detours | C API only | IPC exposes `HookTrace` / `HookImport` capture hooks only |
-| `HdlDiscoverScanValue` | C API | No opcode; `discover-scan` composes `SearchFirst` + `AddCandidate` |
-
-Sources: [capabilities.md](capabilities.md) leftovers list, [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h),
-[`src/ipc/handlers_*.cpp`](../src/ipc/).
-
-**What needs to be done:**
-
-1. Add opcodes + handlers + `hdlclient` verbs for log file path and health-VEH
-   enable/disable (mirror existing `OpSetLogLevel` shape).
-2. Decide whether custom detours belong on the pipe at all. If yes: a constrained
-   design (e.g. install a named built-in detour template, or ship a small
-   controller-provided RX stub via `BuildStub` + `Hook` trampoline wiring) —
-   do not accept raw remote function pointers from another process without a
-   clear in-target landing pad.
-3. Add `OpDiscoverScanValue` (or document `discover-scan` as the official remote
-   equivalent and keep the C API as a thin local helper). Prefer a real opcode
-   if other clients should not reimplement Search+Add.
-4. Update the “C-API-only leftovers” section in capabilities and the client
-   command map; cover with IPC tests.
-
-**Acceptance:** After inject, an external controller can set logging, toggle
-health VEH, seed discover from a typed scan, and install the supported hook
-kinds without linking extra code into the target.
+Landed as pipe ops **96…100**: `OpSetLogFile`, `OpSetHealthVeh` /
+`OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook` (target/detour VA). Client
+verbs: `log-file`, `health-veh`, `discover-scan`, `hook`. Custom disasm backend
+registration is intentionally not remote (built-in Enum/Get/Set only). The
+exported C control ABI was removed; only inject callbacks remain.
 
 ---
 

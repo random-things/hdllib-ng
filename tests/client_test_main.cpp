@@ -339,6 +339,21 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
 
     ExpectOk(c, "client ping", Cli(ctx, {L"ping"}));
     ExpectOk(c, "client log", Cli(ctx, {L"log", L"1"}));
+    {
+        wchar_t tmp[MAX_PATH];
+        GetTempPathW(MAX_PATH, tmp);
+        wcscat_s(tmp, L"hdl_client_logfile.txt");
+        ExpectOk(c, "client log-file set", Cli(ctx, {L"log-file", tmp}));
+        ExpectOk(c, "client log-file clear", Cli(ctx, {L"log-file"}));
+        DeleteFileW(tmp);
+    }
+    ExpectOk(c, "client health-veh on", Cli(ctx, {L"health-veh", L"on"}));
+    {
+        auto r = Cli(ctx, {L"health-veh", L"status"});
+        ExpectOk(c, "client health-veh status", r);
+        Report(c, Contains(r.out, L"enabled=1"), false, "client health-veh enabled", "");
+    }
+    ExpectOk(c, "client health-veh off", Cli(ctx, {L"health-veh", L"off"}));
     ExpectOk(c, "client modules", Cli(ctx, {L"modules"}));
     ExpectOk(c, "client regions", Cli(ctx, {L"regions"}));
     ExpectOk(c, "client threads", Cli(ctx, {L"threads"}));
@@ -658,6 +673,32 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                        "client hookhits nonempty", "");
             }
             ExpectOk(c, "client unhook", Cli(ctx, {L"unhook", h}));
+        }
+
+        /* Pipe-native OpHook: place a stub that jumps to leaf, then hook fn -> stub. */
+        if (leaf) {
+            wchar_t tgt_s[32], leaf_s[32];
+            swprintf_s(tgt_s, L"0x%llx", static_cast<unsigned long long>(fn));
+            swprintf_s(leaf_s, L"0x%llx", static_cast<unsigned long long>(leaf));
+            auto stub = Cli(ctx, {L"stub", L"--kind", L"mov_rax_jmp", L"--target", leaf_s, L"--alloc"});
+            ExpectOk(c, "client hook-by-va stub", stub);
+            uint64_t detour = 0;
+            ParseHexAfter(stub.out, L"stub_va=", &detour);
+            if (detour) {
+                wchar_t det_s[32];
+                swprintf_s(det_s, L"0x%llx", static_cast<unsigned long long>(detour));
+                auto hr = Cli(ctx, {L"hook", tgt_s, det_s});
+                ExpectOk(c, "client hook-by-va", hr);
+                uint64_t hh = 0;
+                ParseHexAfter(hr.out, L"handle=", &hh);
+                Report(c, hh != 0 && Contains(hr.out, L"trampoline="), false,
+                       "client hook-by-va trampoline", "");
+                if (hh) {
+                    wchar_t h2[32];
+                    swprintf_s(h2, L"0x%llx", static_cast<unsigned long long>(hh));
+                    ExpectOk(c, "client hook-by-va unhook", Cli(ctx, {L"unhook", h2}));
+                }
+            }
         }
     }
 

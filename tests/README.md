@@ -3,7 +3,7 @@
 | Binary | Role |
 |--------|------|
 | `hdl_test_target.exe` | Configurable victim (`--window`, `--alertable`, `--integrity low\|medium`, inheritable `--ready-handle` / `--exit-handle`). Also hosts locate/discover ground-truth exports. |
-| `hdl_tests.exe` | Local API coverage + locate/discover inject checks + full injection × target-profile matrix |
+| `hdl_tests.exe` | In-process domain coverage (links `hdl_domain_obj`, not DLL control exports) + locate/discover inject checks + full injection × target-profile matrix |
 | `hdl_client_tests.exe` | End-to-end `hdlclient` vs `hdl_test_target` (CLI + REPL + store; inject via `hdlclient inject`) |
 | `hdl_store_tests.exe` | Interest-store JSON round-trip |
 
@@ -24,7 +24,7 @@ Each live inject method is run against:
 
 Expected outcomes follow method requirements (APC/atom need alertable; hook/subclass/KCT need a window). Early bird is tested separately by spawning the target EXE suspended.
 
-Success for inject means `HdlInjectDllEx == HDL_OK`, nonzero base, module list entry (except manual map), and IPC `ping` on `HdlFormatPipeName(pid)` (default `\\.\pipe\RPCControl_<hash>`).
+Success for inject means `hdl::InjectDllEx == HDL_OK`, nonzero base, module list entry (except manual map), and IPC `ping` on `HdlFormatPipeName(pid)` (default `\\.\pipe\RPCControl_<hash>`).
 
 Soft-pass (`[SOFT]`) covers flaky verify, privilege/version-sensitive methods, and known-hard paths (console hijack / RtlRemoteCall, ETW). Negative capability checks (no window / non-alertable APC) remain hard.
 

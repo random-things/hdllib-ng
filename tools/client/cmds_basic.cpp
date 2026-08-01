@@ -98,6 +98,106 @@ int CmdLog(CmdCtx& ctx) {
     return st == HDL_OK ? 0 : 1;
 }
 
+int CmdLogFile(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+
+    const wchar_t* path = L"";
+    if (ctx.argc >= 4) {
+        path = ctx.argv[3];
+    }
+    AppendPod(req, static_cast<uint32_t>(OpSetLogFile));
+    AppendWString(req, path);
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
+    Reader r(resp);
+    int32_t st = 0;
+    r.TakePod(st);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("path");
+        w.Str(path && path[0] ? path : L"");
+        w.EndObject();
+        EmitEnvelope(ctx, st, L"log-file", w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
+    wprintf(L"status=%ls\n", StatusName(st));
+    PrintStatusHint(L"log-file", st);
+    return st == HDL_OK ? 0 : 1;
+}
+
+int CmdHealthVeh(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+
+    if (ctx.argc < 4) {
+        return FailUsage(ctx);
+    }
+    const wchar_t* sub = ctx.argv[3];
+    if (_wcsicmp(sub, L"status") == 0) {
+        AppendPod(req, static_cast<uint32_t>(OpGetHealthVeh));
+        if (!ctx.client.Request(req, resp)) {
+            return FailIpc(ctx);
+        }
+        Reader r(resp);
+        int32_t st = 0;
+        int32_t enabled = 0;
+        if (!r.TakePod(st) || !r.TakePod(enabled)) {
+            if (ctx.json) {
+                EmitError(ctx, HDL_E_FAILED, L"health-veh", L"bad response");
+            } else {
+                wprintf(L"Bad response\n");
+            }
+            return 1;
+        }
+        if (ctx.json) {
+            JsonWriter w;
+            w.BeginObject();
+            w.Key("enabled");
+            w.Bool(enabled != 0);
+            w.EndObject();
+            EmitEnvelope(ctx, st, L"health-veh", w.Take());
+            return st == HDL_OK ? 0 : 1;
+        }
+        wprintf(L"status=%ls enabled=%d\n", StatusName(st), enabled != 0 ? 1 : 0);
+        PrintStatusHint(L"health-veh", st);
+        return st == HDL_OK ? 0 : 1;
+    }
+
+    int32_t enabled = -1;
+    if (_wcsicmp(sub, L"on") == 0 || wcscmp(sub, L"1") == 0) {
+        enabled = 1;
+    } else if (_wcsicmp(sub, L"off") == 0 || wcscmp(sub, L"0") == 0) {
+        enabled = 0;
+    } else {
+        return FailUsage(ctx);
+    }
+    AppendPod(req, static_cast<uint32_t>(OpSetHealthVeh));
+    AppendPod(req, enabled);
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
+    Reader r(resp);
+    int32_t st = 0;
+    r.TakePod(st);
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("enabled");
+        w.Bool(enabled != 0);
+        w.EndObject();
+        EmitEnvelope(ctx, st, L"health-veh", w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
+    wprintf(L"status=%ls enabled=%d\n", StatusName(st), enabled);
+    PrintStatusHint(L"health-veh", st);
+    return st == HDL_OK ? 0 : 1;
+}
+
 int CmdModules(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;

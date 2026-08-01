@@ -8,7 +8,9 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <Windows.h>
-#  ifdef HDL_EXPORTS
+#  ifdef HDL_DOMAIN_TESTS
+#    define HDL_API
+#  elif defined(HDL_EXPORTS)
 #    define HDL_API __declspec(dllexport)
 #  else
 #    define HDL_API __declspec(dllimport)
@@ -106,107 +108,15 @@ typedef struct HdlModuleInfo {
 
 typedef void* HdlHookHandle;
 
-/* Lifecycle */
-HDL_API HdlStatus HdlInit(void);
-HDL_API void      HdlShutdown(void);
-/* Same as HdlShutdown when flags==0. HDL_SHUTDOWN_UNLOAD_MODULES also FreeLibrary-tracks
- * module-list DLLs registered via inject/track (never unloads the calling module). */
+/* OpShutdown / HdlShutdownEx flags (pipe + domain). */
 #define HDL_SHUTDOWN_UNLOAD_MODULES 1u
-HDL_API void      HdlShutdownEx(uint32_t flags);
-HDL_API int       HdlIsInitialized(void);
-
-/* Logging */
-HDL_API void HdlSetLogLevel(int level);
-HDL_API HdlStatus HdlSetLogFile(const wchar_t* path_or_null);
 
 /*
- * Exception VEH backing health events. Off by default after HdlInit / inject.
- * Enable with this API or env HDL_HEALTH_VEH=1. HdlPollEvents also enables on first use.
+ * Shared types/status/enums for the named-pipe control channel and domain code.
+ * The DLL does not export a general C control ABI — drive an injected helper over
+ * the pipe (see protocol / hdlclient). Exported callbacks below are for inject
+ * techniques only (SetWindowsHookEx / SetWinEventHook).
  */
-HDL_API HdlStatus HdlSetHealthVeh(int enabled);
-HDL_API int       HdlIsHealthVehEnabled(void);
-
-/* IPC */
-HDL_API HdlStatus HdlStartIpc(void);
-HDL_API void      HdlStopIpc(void);
-HDL_API int       HdlIsIpcRunning(void);
-
-/*
- * Inject: pid==0 => current process (LoadLibraryW; method ignored except EARLY_BIRD).
- * HDL_INJECT_EARLY_BIRD_APC: creates suspended process from exe_path (required), queues
- * APC, resumes; pid ignored; out_pid receives new PID when non-null.
- * HDL_INJECT_SET_WINDOWS_HOOK_EX: DLL must export hook_export (default "HdlHookProc").
- * HDL_INJECT_SET_WIN_EVENT_HOOK: DLL must export hook_export (default "HdlWinEventProc").
- * Returns module base via out_base when possible (may be null / truncated).
- */
-HDL_API HdlStatus HdlInjectDll(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base);
-HDL_API HdlStatus HdlInjectDllEx(
-    uint32_t pid,
-    const wchar_t* dll_path,
-    int method,
-    const wchar_t* exe_path_or_null,
-    const char* hook_export_or_null,
-    uint32_t* out_pid,
-    uint64_t* out_base);
-
-/*
- * Unload a DLL that has a module-list entry (LoadLibrary / most inject methods).
- * pid==0 => current process. Manual-map / module-stomp images without a list entry
- * are not supported (HDL_E_NOT_FOUND).
- * reload!=0 => after a successful unload, LoadLibraryW the same path again;
- * *out_base receives the new base (or 0 when reload==0).
- * Unloading the module that contains the calling code in-process returns HDL_E_BUSY;
- * eject that module from another process instead.
- * Remote unload of a helper that still has a live pipe first sends OpShutdown(shutdown_flags)
- * so hooks/patches/watches are restored outside the loader lock before FreeLibrary.
- */
-HDL_API HdlStatus HdlUnloadDll(uint32_t pid, const wchar_t* dll_path, int reload,
-                               uint64_t* out_base);
-HDL_API HdlStatus HdlUnloadDllEx(uint32_t pid, const wchar_t* dll_path, int reload,
-                                 uint32_t shutdown_flags, uint64_t* out_base);
-
-/* Announce a module-list DLL loaded into this process (controller remote inject). */
-HDL_API HdlStatus HdlTrackLoadedDll(const wchar_t* dll_path, uint64_t base);
-
-/*
- * Resolve pid/hwnd from HdlTargetSpec (pid and/or window title substring / class).
- * Multiple title/class matches => HDL_E_BUSY. HWND may be null when only pid is given
- * and the process has no top-level window.
- */
-HDL_API HdlStatus HdlResolveTarget(const HdlTargetSpec* spec, uint32_t* out_pid, HWND* out_hwnd);
-
-/*
- * Rank injection methods for a target without injecting. dll_path_or_null enables
- * export probes for hook / win-event methods. On HDL_E_BUFFER_SMALL, *inout_count is
- * the required entry count (currently 20).
- */
-HDL_API HdlStatus HdlRecommendInject(
-    const HdlTargetSpec* spec,
-    const wchar_t* dll_path_or_null,
-    const char* hook_export_or_null,
-    HdlInjectCandidate* out,
-    uint32_t* inout_count);
-
-/* Memory R/W (current process) */
-HDL_API HdlStatus HdlReadMemory(uint64_t address, void* buffer, size_t size, size_t* bytes_read);
-HDL_API HdlStatus HdlWriteMemory(uint64_t address, const void* buffer, size_t size, size_t* bytes_written);
-
-/* Enumeration (fill buffers; on HDL_E_BUFFER_SMALL, *inout_count is required size) */
-HDL_API HdlStatus HdlEnumRegions(HdlRegionInfo* out, uint32_t* inout_count);
-HDL_API HdlStatus HdlEnumModules(HdlModuleInfo* out, uint32_t* inout_count);
-
-/*
- * AOB search. pattern: "48 8B ?? ?? 90" (spaces optional, ?? or ? = wildcard).
- * If start==0 && size==0, scan all committed readable regions.
- * cancel: optional volatile int*; set nonzero to abort (returns HDL_E_CANCELLED).
- */
-HDL_API HdlStatus HdlSearchMemory(
-    uint64_t start,
-    uint64_t size,
-    const char* pattern,
-    uint64_t* out_hits,
-    uint32_t* inout_hit_count,
-    volatile int* cancel);
 
 /* Typed value kinds for incremental searches. */
 enum {
@@ -266,27 +176,9 @@ enum {
  * HdlSearchNext to narrow candidates. Snapshots of prior values are kept for
  * changed/increased/decreased comparisons.
  */
-HDL_API HdlStatus HdlSearchCreate(HdlSearchSession** out_session);
-HDL_API void      HdlSearchClose(HdlSearchSession* session);
-HDL_API void      HdlSearchReset(HdlSearchSession* session);
 
-HDL_API HdlStatus HdlSearchFirst(
-    HdlSearchSession* session,
-    const HdlSearchDesc* desc,
-    volatile int* cancel);
 
-HDL_API HdlStatus HdlSearchNext(
-    HdlSearchSession* session,
-    int cmp,
-    const void* value,
-    size_t value_size,
-    volatile int* cancel);
 
-HDL_API HdlStatus HdlSearchGetCount(const HdlSearchSession* session, uint32_t* out_count);
-HDL_API HdlStatus HdlSearchGetHits(
-    const HdlSearchSession* session,
-    uint64_t* out_hits,
-    uint32_t* inout_count);
 
 /* ---- Locate: pattern resolve, xrefs, pointer scan, struct probe ---- */
 
@@ -310,10 +202,6 @@ typedef struct HdlPatternResult {
     uint64_t rva;           /* resolved_addr - module_base when base known */
 } HdlPatternResult;
 
-HDL_API HdlStatus HdlResolvePattern(
-    const HdlPatternResolve* in,
-    HdlPatternResult* out,
-    volatile int* cancel);
 
 /* HdlFindStringXrefs flags */
 enum {
@@ -325,16 +213,6 @@ enum {
  * Locate string bytes, then find code/data references to those addresses.
  * string_size 0 with narrow/wide C string uses strlen/wcslen.
  */
-HDL_API HdlStatus HdlFindStringXrefs(
-    const void* string,
-    size_t string_size,
-    int is_wide,
-    uint32_t xref_flags,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    uint64_t* out_xrefs,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
 typedef struct HdlPointerPath {
     uint64_t static_base; /* address of the first pointer in static/image memory */
@@ -347,16 +225,6 @@ typedef struct HdlPointerPath {
  * CE-style pointer scan: find static paths that reach target_addr with
  * per-level offsets in [0, max_offset]. Typically use HDL_SEARCH_IMAGE.
  */
-HDL_API HdlStatus HdlPointerScan(
-    uint64_t target_addr,
-    uint32_t max_depth,
-    uint32_t max_offset,
-    uint32_t max_results,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    HdlPointerPath* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
 /* HdlStructField.kind */
 enum {
@@ -376,11 +244,6 @@ typedef struct HdlStructField {
 } HdlStructField;
 
 /* Heuristic field classification over [addr, addr+size). size capped at 4096. */
-HDL_API HdlStatus HdlProbeStruct(
-    uint64_t addr,
-    uint32_t size,
-    HdlStructField* out,
-    uint32_t* inout_count);
 
 /* ---- Discover: automated find / stabilize / expand ---- */
 
@@ -442,55 +305,23 @@ typedef struct HdlHeatField {
 
 typedef struct HdlDiscoverSession HdlDiscoverSession;
 
-HDL_API HdlStatus HdlDiscoverCreate(HdlDiscoverSession** out_session);
-HDL_API void      HdlDiscoverClose(HdlDiscoverSession* session);
 
 /* Manually seed a candidate. tag may be null. out_id optional. */
-HDL_API HdlStatus HdlDiscoverAddCandidate(
-    HdlDiscoverSession* session,
-    uint32_t kind,
-    uint64_t address,
-    const char* tag_or_null,
-    uint64_t* out_id);
 
 /*
  * Typed exact scan; each hit becomes an HDL_CAND_ADDRESS (tag applied).
  * desc.cmp should be HDL_CMP_EXACT (or UNKNOWN for all slots — not recommended).
  */
-HDL_API HdlStatus HdlDiscoverScanValue(
-    HdlDiscoverSession* session,
-    const HdlSearchDesc* desc,
-    const char* tag_or_null,
-    volatile int* cancel);
 
 /*
  * Find object bases of object_size where every predicate holds.
  * Adds HDL_CAND_OBJECT candidates. object_size capped at 4096; alignment 8.
  */
-HDL_API HdlStatus HdlDiscoverConstraintScan(
-    HdlDiscoverSession* session,
-    uint32_t object_size,
-    const HdlFieldPred* preds,
-    uint32_t pred_count,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    uint32_t max_results,
-    const char* tag_or_null,
-    volatile int* cancel);
 
 /*
  * Build a module-unique AOB for cand_id's address. window_before/after bound the
  * bytes considered (each capped at 64). Prefer HDL_SEARCH_MODULE|IMAGE.
  */
-HDL_API HdlStatus HdlDiscoverSynthesizePattern(
-    HdlDiscoverSession* session,
-    uint64_t cand_id,
-    uint32_t window_before,
-    uint32_t window_after,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    HdlSynthesizedPattern* out,
-    volatile int* cancel);
 
 /*
  * Pointer-scan then keep only paths that still resolve to target_addr.
@@ -498,51 +329,18 @@ HDL_API HdlStatus HdlDiscoverSynthesizePattern(
  * when the caller mutates memory between IPC round-trips via PathScan/PathValidate).
  * For a one-shot filter of an existing list, use HdlDiscoverPathValidate.
  */
-HDL_API HdlStatus HdlDiscoverPathConsensus(
-    uint64_t target_addr,
-    uint32_t max_depth,
-    uint32_t max_offset,
-    uint32_t max_results,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    HdlPointerPath* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
 /* Drop paths that do not currently resolve to expected_target. Compacts in place. */
-HDL_API HdlStatus HdlDiscoverPathValidate(
-    HdlPointerPath* paths,
-    uint32_t* inout_count,
-    uint64_t expected_target);
 
 /* HookTrace watch; callers during actions are ranked as functions. */
-HDL_API HdlStatus HdlDiscoverWatch(HdlDiscoverSession* session, uint64_t fn_addr, uint32_t arg_count);
-HDL_API HdlStatus HdlDiscoverWatchImport(
-    HdlDiscoverSession* session,
-    const wchar_t* module_or_null,
-    const char* dll_name,
-    const char* import_name,
-    uint32_t arg_count);
-HDL_API HdlStatus HdlDiscoverUnwatchAll(HdlDiscoverSession* session);
 
 /*
  * Action window: drains/associates hook hits and diffs watched regions.
  * name max 47 chars; Begin fails if another action is open.
  */
-HDL_API HdlStatus HdlDiscoverActionBegin(HdlDiscoverSession* session, const char* name);
-HDL_API HdlStatus HdlDiscoverActionEnd(HdlDiscoverSession* session);
 
 /* Register [base, base+size) for change-heat across the next action window. */
-HDL_API HdlStatus HdlDiscoverWatchRegion(
-    HdlDiscoverSession* session,
-    uint64_t base,
-    uint32_t size);
 
-HDL_API HdlStatus HdlDiscoverGetHeat(
-    HdlDiscoverSession* session,
-    uint64_t base,
-    HdlHeatField* out,
-    uint32_t* inout_count);
 
 /*
  * Rank functions seen during a named action (frame-weighted by default).
@@ -550,63 +348,20 @@ HDL_API HdlStatus HdlDiscoverGetHeat(
  */
 enum { HDL_RANK_CALLER_ONLY = 1u };
 
-HDL_API HdlStatus HdlDiscoverRankFunctions(
-    HdlDiscoverSession* session,
-    const char* action_name,
-    uint32_t flags,
-    HdlCandidate* out,
-    uint32_t* inout_count);
 
-HDL_API HdlStatus HdlDiscoverResetHeat(HdlDiscoverSession* session, uint64_t base);
 
-HDL_API HdlStatus HdlDiscoverDiffObjects(
-    HdlDiscoverSession* session,
-    const uint64_t* addrs,
-    uint32_t count,
-    uint32_t max_size,
-    HdlHeatField* out,
-    uint32_t* inout_count);
 
-HDL_API HdlStatus HdlDiscoverApplyWatchHits(
-    HdlDiscoverSession* session,
-    uint64_t object_base,
-    uint32_t size);
 
-HDL_API HdlStatus HdlDiscoverGetCandidateEvidence(
-    HdlDiscoverSession* session,
-    uint64_t cand_id,
-    char* buf,
-    uint32_t cap);
 
 /* UTF-8 JSON export (max 4 MiB): candidates, evidence, heat, action names. */
-HDL_API HdlStatus HdlDiscoverExport(
-    HdlDiscoverSession* session,
-    char* buf,
-    uint32_t* inout_size);
 
 /* Best-effort import: AddCandidate for each candidate in JSON. */
-HDL_API HdlStatus HdlDiscoverImport(
-    HdlDiscoverSession* session,
-    const char* json,
-    uint32_t size);
 
 /*
  * Find other bases with the same vtable pointer (offset 0) and compatible size.
  * seed must look like an object with a vtable. Adds HDL_CAND_OBJECT candidates.
  */
-HDL_API HdlStatus HdlDiscoverClusterType(
-    HdlDiscoverSession* session,
-    uint64_t seed_addr,
-    uint32_t object_size,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    uint32_t max_results,
-    volatile int* cancel);
 
-HDL_API HdlStatus HdlDiscoverGetCandidates(
-    HdlDiscoverSession* session,
-    HdlCandidate* out,
-    uint32_t* inout_count);
 
 /* ---- Process / thread health ---- */
 
@@ -643,8 +398,6 @@ typedef struct HdlThreadInfo {
     uint64_t start_address; /* best-effort; 0 if unknown */
 } HdlThreadInfo;
 
-HDL_API HdlStatus HdlGetHealth(HdlHealthInfo* out);
-HDL_API HdlStatus HdlEnumThreads(HdlThreadInfo* out, uint32_t* inout_count);
 
 /* ---- Process fingerprint (passive module / import / PE signals) ---- */
 
@@ -698,24 +451,11 @@ typedef struct HdlFingerprintImport {
  * Passive fingerprint of the current process (loaded modules + main IAT + PE subsystem).
  * Classic size-query: out==nullptr or too small => HDL_E_BUFFER_SMALL + needed count.
  */
-HDL_API HdlStatus HdlEnumFingerprintTags(
-    uint32_t scan_flags,
-    HdlFingerprintTag* out,
-    uint32_t* inout_count);
 
 /*
  * Classify from caller-provided signals (no process walk). Useful for tests and offline dumps.
  * pe_subsystem: IMAGE_SUBSYSTEM_* (0 = unknown / skip PE rules unless SCAN_PE cleared).
  */
-HDL_API HdlStatus HdlClassifyFingerprint(
-    const wchar_t* const* module_basenames,
-    uint32_t module_count,
-    const HdlFingerprintImport* imports,
-    uint32_t import_count,
-    uint16_t pe_subsystem,
-    uint32_t scan_flags,
-    HdlFingerprintTag* out,
-    uint32_t* inout_count);
 
 /* ---- Events (exception / health notifications) ---- */
 
@@ -739,24 +479,12 @@ typedef struct HdlEvent {
  * Drain queued events. Blocks up to timeout_ms (0 = non-blocking) until at least
  * one event is available or the timeout elapses (OK with *inout_count==0).
  */
-HDL_API HdlStatus HdlPollEvents(HdlEvent* out, uint32_t* inout_count, uint32_t timeout_ms);
 
 /* ---- Cooperative jobs (cancel / timeout across clients) ---- */
 
-HDL_API HdlStatus HdlJobCreate(uint32_t timeout_ms, uint64_t* out_job_id);
-HDL_API HdlStatus HdlJobCancel(uint64_t job_id);
-HDL_API void      HdlJobClose(uint64_t job_id);
 
 /* ---- Durable in-process allocation ---- */
 
-HDL_API HdlStatus HdlAlloc(size_t size, uint32_t protect /* PAGE_* */, uint64_t* out_addr);
-HDL_API HdlStatus HdlAllocNear(
-    uint64_t near_addr,
-    uint64_t max_distance,
-    size_t size,
-    uint32_t protect /* PAGE_* */,
-    uint64_t* out_addr);
-HDL_API HdlStatus HdlFree(uint64_t addr);
 
 /* ---- Place: caves, protect, icache ---- */
 
@@ -777,14 +505,7 @@ typedef struct HdlCaveQuery {
     const wchar_t* module_or_null;
 } HdlCaveQuery;
 
-HDL_API HdlStatus HdlFindCaves(
-    const HdlCaveQuery* query,
-    HdlCaveInfo* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
-HDL_API HdlStatus HdlProtectMemory(uint64_t addr, size_t size, uint32_t protect, uint32_t* out_old);
-HDL_API HdlStatus HdlFlushICache(uint64_t addr, size_t size);
 
 /* ---- Address resolution helpers ---- */
 
@@ -792,20 +513,9 @@ HDL_API HdlStatus HdlFlushICache(uint64_t addr, size_t size);
  * RIP-relative: *out = addr + instr_len + *(int32_t*)(addr + disp_offset).
  * Typical LEA/CALL/JMP: disp_offset=3, instr_len=7 (or disp_offset=1, instr_len=5 for call/jmp).
  */
-HDL_API HdlStatus HdlResolveRipRelative(
-    uint64_t addr,
-    uint32_t disp_offset,
-    uint32_t instr_len,
-    uint64_t* out_addr);
 
 /* Multilevel pointer: start at base, then repeatedly read ptr and add offsets[i]. */
-HDL_API HdlStatus HdlFollowPointers(
-    uint64_t base,
-    const int64_t* offsets,
-    uint32_t offset_count,
-    uint64_t* out_addr);
 
-HDL_API HdlStatus HdlModuleBase(const wchar_t* module_or_null, uint64_t* out_base);
 
 /* ---- In-process call (exports / absolute / vtable) ---- */
 
@@ -847,66 +557,33 @@ typedef struct HdlCallDesc {
     uint32_t          reserved;
 } HdlCallDesc;
 
-HDL_API HdlStatus HdlResolveExport(
-    const wchar_t* module_or_null,
-    const char* export_name,
-    uint64_t* out_addr);
 
 /*
  * Invoke an absolute address with up to 16 args (Microsoft x64 ABI, including floats).
  * On HDL_E_TIMEOUT / HDL_E_CANCELLED the callee may still be running.
  * BUF args are copied back into the caller's buffer on success.
  */
-HDL_API HdlStatus HdlCall(const HdlCallDesc* desc, HdlCallResult* out, volatile int* cancel);
 
 /*
  * Resolve export then HdlCall (thread_mode = WORKER).
  * module_or_null: NULL/empty => main EXE; otherwise LoadLibrary/GetModuleHandle name.
  */
-HDL_API HdlStatus HdlCallExport(
-    const wchar_t* module_or_null,
-    const char* export_name,
-    const HdlCallArg* args,
-    uint32_t arg_count,
-    HdlCallResult* out,
-    uint32_t timeout_ms,
-    volatile int* cancel);
 
 /*
  * Read vtable from *obj, take slot index, then HdlCall.
  * If arg_count==0 or args[0] is not the object, a synthetic this (PTR to obj) is prepended
  * when prepend_this != 0. When prepend_this==0, args are passed as-is (caller supplies this).
  */
-HDL_API HdlStatus HdlCallVtable(
-    uint64_t obj,
-    uint32_t index,
-    const HdlCallArg* args,
-    uint32_t arg_count,
-    int prepend_this,
-    uint32_t thread_mode,
-    HdlCallResult* out,
-    uint32_t timeout_ms,
-    volatile int* cancel);
 
 /* ---- Hooks (MinHook) ---- */
 
 /* Custom detour; trampoline receives original if non-null. */
-HDL_API HdlStatus HdlHook(void* target, void* detour, void** trampoline, HdlHookHandle* out_handle);
-HDL_API HdlStatus HdlEnableHook(HdlHookHandle handle, int enable);
-HDL_API HdlStatus HdlUnhook(HdlHookHandle handle);
 
 /*
  * Install a capture-only hook: calls original, records up to 8 integer-view args + return
  * into the hook-hit queue (also wakes PollEvents with HDL_EVENT_HOOK).
  */
-HDL_API HdlStatus HdlHookTrace(uint64_t target, uint32_t arg_count /* 0..8 */, HdlHookHandle* out);
 
-HDL_API HdlStatus HdlHookImport(
-    const wchar_t* module_or_null,
-    const char* dll_name,
-    const char* import_name,
-    uint32_t arg_count,
-    HdlHookHandle* out);
 
 enum { HDL_HOOK_MAX_FRAMES = 8 };
 
@@ -921,7 +598,6 @@ typedef struct HdlHookHit {
     uint64_t frames[HDL_HOOK_MAX_FRAMES]; /* stack frames (best-effort) */
 } HdlHookHit;
 
-HDL_API HdlStatus HdlPollHookHits(HdlHookHit* out, uint32_t* inout_count, uint32_t timeout_ms);
 
 /*
  * Default SetWindowsHookEx callback exported by hdllib. Arbitrary inject targets should
@@ -979,11 +655,6 @@ enum {
     HDL_INSN_BRANCH  = 16u, /* has resolvable branch/call target in out_branch */
 };
 
-HDL_API HdlStatus HdlDisasmEnumBackends(HdlDisasmBackendInfo* out, uint32_t* inout_count);
-HDL_API HdlStatus HdlDisasmGetBackend(int32_t* out_id);
-HDL_API HdlStatus HdlDisasmSetBackend(int32_t id);
-HDL_API HdlStatus HdlDisasmRegisterBackend(const HdlDisasmBackendFns* fns, int32_t* out_id);
-HDL_API HdlStatus HdlDisasmUnregisterBackend(int32_t id);
 
 typedef struct HdlInsn {
     uint64_t addr;
@@ -996,8 +667,6 @@ typedef struct HdlInsn {
     char     op_str[96];
 } HdlInsn;
 
-HDL_API HdlStatus HdlInstrLen(uint64_t addr, uint32_t* out_len);
-HDL_API HdlStatus HdlDisasm(uint64_t addr, uint32_t max_insns, HdlInsn* out, uint32_t* inout_count);
 
 enum {
     HDL_STUB_ABS_JMP    = 1, /* FF 25 / mov rax; jmp rax style absolute */
@@ -1025,19 +694,10 @@ typedef struct HdlStubResult {
     uint8_t  code[256];
 } HdlStubResult;
 
-HDL_API HdlStatus HdlBuildStub(const HdlStubDesc* desc, HdlStubResult* out);
 
 /* Patch ledger */
 typedef uint64_t HdlPatchHandle;
 
-HDL_API HdlStatus HdlPatchCreate(
-    uint64_t addr,
-    const void* bytes,
-    size_t size,
-    const char* name_or_null,
-    HdlPatchHandle* out);
-HDL_API HdlStatus HdlPatchEnable(HdlPatchHandle handle, int enable);
-HDL_API HdlStatus HdlPatchRemove(HdlPatchHandle handle);
 
 typedef struct HdlPatchInfo {
     uint64_t handle;
@@ -1047,7 +707,6 @@ typedef struct HdlPatchInfo {
     char     name[48];
 } HdlPatchInfo;
 
-HDL_API HdlStatus HdlPatchEnum(HdlPatchInfo* out, uint32_t* inout_count);
 
 /* ---- PE metadata ---- */
 
@@ -1077,9 +736,6 @@ typedef struct HdlImportInfo {
     uint64_t bound_va; /* current IAT value */
 } HdlImportInfo;
 
-HDL_API HdlStatus HdlEnumSections(uint64_t module_base_or_0, HdlSectionInfo* out, uint32_t* inout_count);
-HDL_API HdlStatus HdlEnumExports(uint64_t module_base_or_0, HdlExportInfo* out, uint32_t* inout_count);
-HDL_API HdlStatus HdlEnumImports(uint64_t module_base_or_0, HdlImportInfo* out, uint32_t* inout_count);
 
 /* ---- Bounded functions / xrefs ---- */
 
@@ -1111,60 +767,23 @@ typedef struct HdlXrefEdge {
     uint32_t reserved;
 } HdlXrefEdge;
 
-HDL_API HdlStatus HdlEnumFunctions(
-    uint64_t start,
-    uint64_t size,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    uint32_t max_results,
-    HdlFunctionInfo* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
-HDL_API HdlStatus HdlXrefsFrom(
-    uint64_t seed,
-    uint32_t max_depth,
-    uint32_t max_nodes,
-    uint32_t kinds, /* HDL_XREF_* mask; 0 = call|jmp */
-    HdlXrefEdge* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
 /*
  * Map any interior byte address into an instruction-aligned function range for
  * the owning module (or given module_or_null). x64 unwind metadata is preferred;
  * the bounded function index is the fallback. out->end may be 0 if unknown.
  */
-HDL_API HdlStatus HdlResolveFunction(
-    uint64_t addr,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    HdlFunctionInfo* out,
-    volatile int* cancel);
 
 /*
  * Find call/jmp (and optional DATA) sites that target `target`. With HDL_XREF_FUNC
  * also match branches into the resolved function body containing target.
  */
-HDL_API HdlStatus HdlXrefsTo(
-    uint64_t target,
-    uint32_t max_nodes,
-    uint32_t kinds,
-    uint32_t search_flags,
-    const wchar_t* module_or_null,
-    HdlXrefEdge* out,
-    uint32_t* inout_count,
-    volatile int* cancel);
 
 /* Drop cached EnumFunctions index for module (null = all). */
-HDL_API HdlStatus HdlInvalidateFunctionIndex(const wchar_t* module_or_null);
 
 /* ---- Vtable / RTTI ---- */
 
-HDL_API HdlStatus HdlWalkVtable(uint64_t obj_or_vtable, int is_object, uint64_t* out_slots,
-                                uint32_t* inout_count);
-HDL_API HdlStatus HdlQueryRttiName(uint64_t obj_or_vtable, int is_object, char* out_name,
-                                   uint32_t name_cap);
 
 /* ---- Watchpoints ---- */
 
@@ -1190,18 +809,8 @@ typedef struct HdlWatchInfo {
     uint32_t tid;  /* 0 = all / process */
 } HdlWatchInfo;
 
-HDL_API HdlStatus HdlWatchHw(
-    uint64_t addr,
-    uint32_t size, /* 1,2,4,8 */
-    uint32_t access, /* HDL_WATCH_HW_* */
-    uint32_t tid, /* 0 = current / best-effort all */
-    HdlWatchHandle* out);
-HDL_API HdlStatus HdlWatchPage(uint64_t addr, size_t size, uint32_t mode, HdlWatchHandle* out);
-HDL_API HdlStatus HdlUnwatch(HdlWatchHandle handle);
-HDL_API HdlStatus HdlEnumWatches(HdlWatchInfo* out, uint32_t* inout_count);
 
 /* Re-apply all HW watches to current process threads. */
-HDL_API HdlStatus HdlWatchRefresh(void);
 
 typedef struct HdlWatchHit {
     uint64_t watch_handle;
@@ -1215,7 +824,6 @@ typedef struct HdlWatchHit {
 } HdlWatchHit;
 
 /* Drain watch-hit queue (full payload). HDL_EVENT_WATCH is wake-only. */
-HDL_API HdlStatus HdlPollWatchHits(HdlWatchHit* out, uint32_t* inout_count, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

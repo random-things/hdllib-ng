@@ -24,6 +24,31 @@ bool HandleHookTrace(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
+bool HandleHook(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    uint64_t target_va = 0;
+    uint64_t detour_va = 0;
+    uint32_t flags = 0;
+    if (!r.TakePod(target_va) || !r.TakePod(detour_va) || !r.TakePod(flags)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    (void)flags;
+    if (!target_va || !detour_va) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    void* trampoline = nullptr;
+    HdlHookHandle handle = nullptr;
+    const HdlStatus st = Hook(reinterpret_cast<void*>(target_va), reinterpret_cast<void*>(detour_va),
+                              &trampoline, &handle);
+    AppendPod(resp, static_cast<int32_t>(st));
+    AppendPod(resp, reinterpret_cast<uint64_t>(handle));
+    AppendPod(resp, reinterpret_cast<uint64_t>(trampoline));
+    return WriteFrame(pipe, resp);
+}
+
 bool HandleEnableHook(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
     std::vector<uint8_t> resp;

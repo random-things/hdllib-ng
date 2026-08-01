@@ -678,7 +678,7 @@ HdlStatus DiscoverAddCandidate(HdlDiscoverSession* session, uint32_t kind, uint6
 }
 
 HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* desc,
-                            const char* tag_or_null, volatile int* cancel) {
+                            const char* tag_or_null, const CancelToken& token) {
     if (!session || !desc) {
         return HDL_E_INVALID_ARG;
     }
@@ -687,7 +687,7 @@ HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* de
     if (st != HDL_OK) {
         return st;
     }
-    st = SearchFirst(search, desc, cancel);
+    st = SearchFirst(search, desc, token);
     if (st != HDL_OK) {
         SearchClose(search);
         return st;
@@ -707,6 +707,11 @@ HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* de
         s->cands.push_back(MakeCand(s, HDL_CAND_ADDRESS, hits[i], tag_or_null, 60));
     }
     return got ? HDL_OK : HDL_E_NOT_FOUND;
+}
+
+HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* desc,
+                            const char* tag_or_null, volatile int* cancel) {
+    return DiscoverScanValue(session, desc, tag_or_null, MakeToken(cancel, nullptr));
 }
 
 HdlStatus DiscoverConstraintScan(HdlDiscoverSession* session, uint32_t object_size,

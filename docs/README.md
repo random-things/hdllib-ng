@@ -7,9 +7,9 @@ the public API and protocol references.
 `hdllib` is a Windows x64 helper DLL that runs inside a target process. It
 provides memory inspection, search and discovery, code placement and patching,
 calls, hooks, watchpoints, PE/code graph inspection, process fingerprinting,
-health events, and further DLL injection. Callers use either the exported C API
-or a multi-client named pipe. `hdlclient.exe` supplies injection, a CLI,
-REPL/TUI, recipes, and a persistent interest store.
+health events, and further DLL injection. Controllers talk over a multi-client
+named pipe (sole remote control channel). `hdlclient.exe` supplies injection, a
+CLI, REPL/TUI, recipes, and a persistent interest store.
 
 ## Start here
 
@@ -19,7 +19,7 @@ REPL/TUI, recipes, and a persistent interest store.
 | Choose an end-to-end outcome | [goal-oriented workflows](workflows.md) | [client command workflows](client.md) |
 | Run a concrete end-to-end investigation | [toy arena walkthrough](toy-arena-walkthrough.md) | [`tests/toy_test_main.cpp`](../tests/toy_test_main.cpp) |
 | System boundaries, lifecycle, and data flow | [architecture](architecture.md) | [`src/core.cpp`](../src/core.cpp), [`src/ipc/`](../src/ipc/) |
-| Find the implementation of a feature | [functionality index](#functionality-index) | [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h), [`src/api.cpp`](../src/api.cpp) |
+| Find the implementation of a feature | [functionality index](#functionality-index) | domain `src/*.cpp`, [`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/`](../src/ipc/) |
 | Understand an IPC opcode or payload | [capability reference](capabilities.md) | [`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) |
 | Understand a CLI or recipe workflow | [client workflows](client.md) | [`tools/client/main.cpp`](../tools/client/main.cpp), [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) |
 | Change or extend the project | [development guide](development.md) | [`CMakeLists.txt`](../CMakeLists.txt), [test guide](../tests/README.md) |
@@ -40,14 +40,11 @@ flowchart LR
 
     subgraph Target["Target process"]
         DLL["hdllib.dll"]
-        CAPI["Exported Hdl* C API"]
         IPC["Named-pipe server"]
         Handlers["Opcode handlers"]
         Core["Shared in-target subsystems"]
-        DLL --> CAPI
         DLL --> IPC
         IPC --> Handlers
-        CAPI --> Core
         Handlers --> Core
     end
 
@@ -56,9 +53,9 @@ flowchart LR
     Custom -- "length-prefixed frames" --> IPC
 ```
 
-The exported API and IPC handlers are adapters over the same internal
-functions. The client is a third surface that serializes those operations.
-When a feature is changed, trace all applicable surfaces.
+IPC handlers adapt the pipe onto shared domain functions. The client is a
+human/script surface that serializes those operations. When a feature is
+changed, update domain, opcode/handler, client, and tests.
 
 ## Source-of-truth order
 
@@ -108,14 +105,14 @@ the enum: `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
 ## Repository map
 
 ```text
-include/hdllib/       Stable public C ABI and shared pipe-name helper
-src/api.cpp           Thin exported-C-to-C++ facade
+include/hdllib/       Shared types/enums + pipe-name helper; inject callback decls
+src/api.cpp           Inject callback exports only (HdlHookProc / HdlWinEventProc)
 src/*.cpp             In-target domain implementations
 src/ipc/              Pipe server, framing, opcode dispatch, domain adapters
 src/inject/           One injection technique per file plus selection/common code
-src/disasm/           Pluggable built-in and external disassembly backends
+src/disasm/           Pluggable built-in disassembly backends
 tools/client/         Injector, pipe client, CLI, REPL/TUI, store, recipes
-tests/                Unit, local API, live IPC, injection-matrix, and toy tests
+tests/                Domain, live IPC, injection-matrix, and toy tests
 toys/arena/           Deterministic target for higher-level discovery workflows
 third_party/minhook/  Vendored MinHook v1.3.3
 docs/inject/          Per-technique behavior and constraints
@@ -132,10 +129,9 @@ runtime state.
 |---|---|
 | In-target | Code executing inside the process that loaded `hdllib.dll`; memory addresses are meaningful only there. |
 | Controller | `hdlclient` or another process using the pipe to control the in-target DLL. |
-| C API surface | Stable `Hdl*` exports declared in `hdllib.h`; most are thin wrappers in `api.cpp`. |
-| IPC surface | Numeric opcodes and byte layouts in `protocol.hpp` plus the matching handlers. |
+| IPC surface | Numeric opcodes and byte layouts in `protocol.hpp` plus the matching handlers (sole remote control channel). |
 | Client surface | Human-facing commands and higher-level recipes; some compose several IPC operations. |
-| Search session | Mutable typed-scan candidate/snapshot state. C callers hold an opaque pointer; IPC callers hold a process-global numeric ID. |
+| Search session | Mutable typed-scan candidate/snapshot state. Domain callers hold an opaque pointer; IPC callers hold a process-global numeric ID. |
 | Discover session | Server-side candidate, evidence, hook, action, and heat state. It is richer than a search session. |
 | Interest store | Client-side durable JSON locators. It is separate from a discover-session export and is designed for revalidation across ASLR/restarts. |
 | Place | Find or allocate executable space and manage protection/cache coherency. |

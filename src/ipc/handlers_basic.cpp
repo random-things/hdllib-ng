@@ -38,6 +38,40 @@ bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
+bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    std::wstring path;
+    if (!r.TakeWString(path)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    const HdlStatus st = SetLogFile(path.empty() ? nullptr : path.c_str()) ? HDL_OK : HDL_E_FAILED;
+    AppendPod(resp, static_cast<int32_t>(st));
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    int32_t enabled = 0;
+    if (!r.TakePod(enabled)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    AppendPod(resp, static_cast<int32_t>(SetHealthVeh(enabled != 0)));
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleGetHealthVeh(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    (void)r;
+    std::vector<uint8_t> resp;
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
+    AppendPod(resp, static_cast<int32_t>(IsHealthVehEnabled() ? 1 : 0));
+    return WriteFrame(pipe, resp);
+}
+
 bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
     std::vector<uint8_t> resp;

@@ -39,7 +39,7 @@ flowchart TB
 
 `hdl_inject` is deliberately separate from `hdllib.dll`: the controller needs
 injection before a target-side pipe exists, while the DLL also exposes injection
-through its C API and IPC. MinHook is vendored. Zydis, Capstone, and optionally
+through IPC (and inject helpers in `hdl_inject`). MinHook is vendored. Zydis, Capstone, and optionally
 PDCurses are populated by CMake.
 
 ## Runtime boundaries
@@ -49,8 +49,8 @@ There are two distinct execution phases:
 1. Controller-side injection chooses a technique and loads the DLL.
 2. Target-side operation begins when the DLL bootstraps its subsystems and pipe.
 
-An address returned by an IPC operation belongs to the target process. An
-address used by a C API call belongs to whichever process loaded the library.
+An address returned by an IPC operation belongs to the target process. Domain
+APIs used by in-process tests operate on the calling process address space.
 
 ```mermaid
 sequenceDiagram
@@ -190,7 +190,7 @@ for layouts and operation-specific payloads.
 
 ## Domain dependency map
 
-Arrows mean “uses,” not ownership. The C API and IPC adapters are omitted so the
+Arrows mean “uses,” not ownership. The IPC adapters are omitted so the
 shared implementation relationships remain visible.
 
 ```mermaid

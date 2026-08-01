@@ -1,8 +1,8 @@
 # hdllib
 
-Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, passive process fingerprinting (language/runtime/UI/graphics/engine tags), code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel—plus the same surface as a stable exported C API. `hdlclient` adds an interest store and place/stitch/discover recipes on top.
+Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, passive process fingerprinting (language/runtime/UI/graphics/engine tags), code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel. The pipe is the sole remote control surface. `hdlclient` adds an interest store and place/stitch/discover recipes on top. The DLL exports only inject-technique callbacks (`HdlHookProc`, `HdlWinEventProc`); shared types live in `hdllib.h`.
 
-Capability reference (opcodes **1…91** plus **`OpUnloadDll` = 92**, **`OpFingerprint` = 93** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
+Capability reference (opcodes **1…100** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
 
 ## Build
 
@@ -98,63 +98,27 @@ Pipe: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` (see `include/hd
 
 Quiet / anti-fingerprint defaults after inject:
 
-- Log level **off** (set `HDL_LOG_LEVEL=0..3` or `HdlSetLogLevel`)
-- Health **VEH off** until `HdlSetHealthVeh(1)`, `HDL_HEALTH_VEH=1`, or first `HdlPollEvents`
-- Optional skip IPC: `HDL_NO_IPC=1` (then call `HdlStartIpc` yourself)
+- Log level **off** (set `HDL_LOG_LEVEL=0..3` or `hdlclient <pid> log N`)
+- Health **VEH off** until `hdlclient <pid> health-veh on`, `HDL_HEALTH_VEH=1`, or first `events` poll
+- Optional skip IPC: `HDL_NO_IPC=1` (bootstrap without starting the pipe server)
 - `--stealth` on inject: stage a bland `%TEMP%\drvstore_*.dll` copy and prefer `manual_map` / `module_stomp` on auto
 
-Logs go to `OutputDebugString` when enabled (view with DebugView). Optional file sink via `HdlSetLogFile`.
+Logs go to `OutputDebugString` when enabled (view with DebugView). Optional file sink via `hdlclient <pid> log-file [path]`.
 
-## Exported C API
+## DLL exports
 
-Link against `hdllib.lib` / include `hdllib/hdllib.h`:
+Only inject-technique callbacks are exported from `hdllib.dll`:
 
 | Export | Purpose |
 |--------|---------|
-| `HdlInit` / `HdlShutdown` / `HdlShutdownEx` | Lifecycle (auto-started after inject; prepare before unload) |
-| `HdlInjectDll` | Default `CreateRemoteThread` inject (`pid==0` = in-process) |
-| `HdlInjectDllEx` | Same with method / early-bird exe / hook export (`HDL_INJECT_AUTO` picks) |
-| `HdlUnloadDll` / `HdlUnloadDllEx` | `FreeLibrary` unload; optional reload; prepare helper via pipe first |
-| `HdlResolveTarget` | Resolve PID/HWND from pid and/or window title/class |
-| `HdlRecommendInject` | Rank methods with confidence (no inject) |
 | `HdlHookProc` | Default `SetWindowsHookEx` callback |
-| `HdlReadMemory` / `HdlWriteMemory` | SEH-safe copies |
-| `HdlEnumRegions` / `HdlEnumModules` | Fill-buffer enumeration |
-| `HdlSearchMemory` | IDA-style AOB (`"48 8B ?? ?? 90"`) |
-| `HdlSearchCreate` / `HdlSearchClose` / `HdlSearchReset` | Incremental search session |
-| `HdlSearchFirst` / `HdlSearchNext` | Typed first scan + refine (exact / changed / increased / …) |
-| `HdlSearchGetCount` / `HdlSearchGetHits` | Read session candidate addresses |
-| `HdlGetHealth` / `HdlEnumThreads` | Process/thread health (GUI hang, CPU, VEH last exception) |
-| `HdlPollEvents` | Drain exception/health/hook/watch wake-ups (optional wait) |
-| `HdlJobCreate` / `HdlJobCancel` / `HdlJobClose` | Cross-client cancel + deadline tokens |
-| `HdlAlloc` / `HdlFree` / `HdlAllocNear` | Tracked scratch (+ nearby VA) |
-| `HdlFindCaves` / `HdlProtectMemory` / `HdlFlushICache` | Code caves, protect, I-cache flush |
-| `HdlDisasmEnumBackends` / `Get` / `Set` / `Register` / `Unregister` | Pluggable Zydis/Capstone (+ custom C-API backends) |
-| `HdlInstrLen` / `HdlDisasm` / `HdlBuildStub` | Decode + trampoline templates |
-| `HdlPatchCreate` / `Enable` / `Remove` / `Enum` | Reversible patch ledger |
-| `HdlEnumSections` / `Exports` / `Imports` | PE metadata |
-| `HdlResolveRipRelative` / `HdlFollowPointers` / `HdlModuleBase` | Signature → address helpers |
-| `HdlResolvePattern` | AOB + optional RIP/follows → abs/RVA |
-| `HdlFindStringXrefs` | String → absolute / RIP-relative xrefs |
-| `HdlPointerScan` | CE-style static pointer paths to a target |
-| `HdlProbeStruct` | Heuristic field classification over a range |
-| `HdlEnumFunctions` / `HdlResolveFunction` / `HdlInvalidateFunctionIndex` | Function index (confidence/flags/ends + cache) |
-| `HdlXrefsFrom` / `HdlXrefsTo` | Outbound / inbound call·jmp·data edges |
-| `HdlWalkVtable` / `HdlQueryRttiName` | Vtable walk + best-effort MSVC RTTI |
-| `HdlDiscover*` | Discover sessions: constraints, sig synth, path consensus, action windows, accumulating heat, frame-aware rank, type cluster, import watch, object diff, watch→fields, evidence, JSON export/import |
-| `HdlResolveExport` / `HdlCall` / `HdlCallExport` / `HdlCallVtable` | In-process calls (≤16 args, F32/F64, BUF inout, worker or UI thread) |
-| `HdlHook` / `HdlEnableHook` / `HdlUnhook` | MinHook wrappers |
-| `HdlHookTrace` / `HdlHookImport` / `HdlPollHookHits` | Capture-only hooks, IAT-sink hook, hit queue |
-| `HdlWatchHw` / `HdlWatchPage` / `HdlUnwatch` / `HdlEnumWatches` / `HdlWatchRefresh` / `HdlPollWatchHits` | HW/page watches + refresh + hit queue (`HDL_EVENT_WATCH` = wake) |
-| `HdlStartIpc` / `HdlStopIpc` | Named-pipe server control |
-| `HdlSetHealthVeh` | Opt-in exception VEH for health events |
-| `HdlSetLogLevel` / `HdlSetLogFile` | Logging |
+| `HdlWinEventProc` | Default `SetWinEventHook` callback |
 
-Hook trampolines live as long as `hdllib.dll` remains loaded. `HdlCall` with `HDL_CALL_THREAD_MAIN` posts to the process primary HWND (console windows skipped); returns `HDL_E_NOT_FOUND` if none.
+Shared statuses, enums, and POD shapes for the pipe protocol live in `include/hdllib/hdllib.h` (not a linkable control SDK). Controller inject/recommend helpers are in `hdl_inject` / `hdlclient inject`.
 
 ## IPC protocol
 
-Length-prefixed frames: `uint32_t size` + payload. Payload starts with `uint32_t opcode`; reply starts with `int32_t status`. Opcodes **1…91** (+ **92** unload, **93** fingerprint, **94** shutdown, **95** track-loaded) mirror the C API. See `src/protocol.hpp` and `src/ipc/` (handlers by domain).
+Length-prefixed frames: `uint32_t size` + payload. Payload starts with `uint32_t opcode`; reply starts with `int32_t status`. Opcodes **1…95** plus parity ops **96…100** (`OpSetLogFile`, `OpSetHealthVeh`, `OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook`). See `src/protocol.hpp` and `src/ipc/` (handlers by domain).
 
 **Full capability reference** (all opcodes, wire layouts, search/locate/discover/call/hook/place/code surfaces): [docs/capabilities.md](docs/capabilities.md).
 
@@ -164,9 +128,9 @@ The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Adm
 
 `OpUnloadDll` payload: `pid`, `reload`, `dll_path`. Reply: `status`, `base` (set when reloading).
 
-`hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `shutdown [--modules]`, `unload`/`reload`, REPL/`--tui`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
+`hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, REPL/`--tui`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
 
-Discover / recipe workflows (command sequences, predicates, store locators): [docs/client.md](docs/client.md). See also `HdlDiscover*` in `hdllib.h`. C-API-only leftovers (no pipe): `HdlSetLogFile`, `HdlSetHealthVeh`, custom `HdlHook`, custom `HdlDisasmRegisterBackend`.
+Discover / recipe workflows: [docs/client.md](docs/client.md). Built-in disasm backends (Zydis/Capstone) are selected over the pipe; there is no remote custom-backend registration.
 
 ## Notes
 
@@ -174,7 +138,7 @@ Discover / recipe workflows (command sequences, predicates, store locators): [do
 - Remote inject methods generally need sufficient process access (often elevation for protected targets).
 - `SetWindowsHookEx` requires a UI thread/window on the target and a suitable hook export on the DLL.
 - Prefer `hdlclient <pid> modules` to resolve bases after inject when unsure.
-- `HdlCall` / `HdlCallExport` timeouts abandon waiting; the callee thread may still be running.
+- In-process `call` timeouts abandon waiting; the callee thread may still be running.
 - `HDL_CALL_THREAD_MAIN` requires a non-console top-level HWND in the target process.
-- Functional / injection / place-code API tests: [tests/README.md](tests/README.md) (`hdl_tests.exe --api-only`, `hdl_client_tests.exe`, `hdl_store_tests.exe`).
+- Domain / injection / pipe tests: [tests/README.md](tests/README.md) (`hdl_tests.exe --api-only`, `hdl_client_tests.exe`, `hdl_store_tests.exe`).
 - Higher-level locate/discover + place/code playground: [toys/arena/README.md](toys/arena/README.md) (`hdl_toy_arena.exe`, `HDL_BUILD_TOYS`). Automated verify: `hdl_toy_tests.exe`.

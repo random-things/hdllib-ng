@@ -155,9 +155,7 @@ target_compile_definitions(hdl_inject PRIVATE UNICODE _UNICODE)
 hdl_configure_target(hdl_inject)
 target_link_libraries(hdl_inject PUBLIC Psapi Advapi32)
 
-add_library(hdllib SHARED
-  src/dllmain.cpp
-  src/api.cpp
+set(HDL_DOMAIN_SOURCES
   src/core.cpp
   src/loaded_modules.cpp
   src/memory.cpp
@@ -197,6 +195,25 @@ add_library(hdllib SHARED
   src/disasm/capstone_backend.cpp
 )
 
+# Shared domain objects: linked into hdllib.dll and into in-process domain tests.
+add_library(hdl_domain_obj OBJECT ${HDL_DOMAIN_SOURCES})
+target_include_directories(hdl_domain_obj
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(hdl_domain_obj PRIVATE UNICODE _UNICODE)
+hdl_configure_target(hdl_domain_obj)
+target_link_libraries(hdl_domain_obj PUBLIC hdl_inject minhook)
+
+add_library(hdllib SHARED
+  src/dllmain.cpp
+  src/api.cpp
+  $<TARGET_OBJECTS:hdl_domain_obj>
+)
+
 target_include_directories(hdllib
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -211,16 +228,22 @@ target_link_libraries(hdllib PRIVATE hdl_inject minhook)
 set_target_properties(hdllib PROPERTIES OUTPUT_NAME hdllib)
 
 if(HDL_DISASM_ZYDIS)
+  target_compile_definitions(hdl_domain_obj PRIVATE HDL_HAS_ZYDIS)
   target_compile_definitions(hdllib PRIVATE HDL_HAS_ZYDIS)
+  target_link_libraries(hdl_domain_obj PUBLIC Zydis)
   target_link_libraries(hdllib PRIVATE Zydis)
 endif()
 if(HDL_DISASM_CAPSTONE)
+  target_compile_definitions(hdl_domain_obj PRIVATE HDL_HAS_CAPSTONE)
   target_compile_definitions(hdllib PRIVATE HDL_HAS_CAPSTONE)
   if(TARGET capstone)
+    target_link_libraries(hdl_domain_obj PUBLIC capstone)
     target_link_libraries(hdllib PRIVATE capstone)
   elseif(TARGET capstone_static)
+    target_link_libraries(hdl_domain_obj PUBLIC capstone_static)
     target_link_libraries(hdllib PRIVATE capstone_static)
   else()
+    target_link_libraries(hdl_domain_obj PUBLIC capstone)
     target_link_libraries(hdllib PRIVATE capstone)
   endif()
 endif()
@@ -305,15 +328,32 @@ if(HDL_BUILD_TESTS)
   hdl_configure_target(hdl_test_target)
   target_link_libraries(hdl_test_target PRIVATE advapi32)
 
-  add_executable(hdl_tests tests/test_main.cpp)
+  add_executable(hdl_tests
+    tests/test_main.cpp
+    $<TARGET_OBJECTS:hdl_domain_obj>
+  )
   target_include_directories(hdl_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
-  target_compile_definitions(hdl_tests PRIVATE UNICODE _UNICODE)
+  target_compile_definitions(hdl_tests PRIVATE UNICODE _UNICODE HDL_DOMAIN_TESTS)
   hdl_configure_target(hdl_tests)
-  target_link_libraries(hdl_tests PRIVATE hdllib advapi32)
+  target_link_libraries(hdl_tests PRIVATE hdl_inject minhook advapi32)
+  if(HDL_DISASM_ZYDIS)
+    target_compile_definitions(hdl_tests PRIVATE HDL_HAS_ZYDIS)
+    target_link_libraries(hdl_tests PRIVATE Zydis)
+  endif()
+  if(HDL_DISASM_CAPSTONE)
+    target_compile_definitions(hdl_tests PRIVATE HDL_HAS_CAPSTONE)
+    if(TARGET capstone)
+      target_link_libraries(hdl_tests PRIVATE capstone)
+    elseif(TARGET capstone_static)
+      target_link_libraries(hdl_tests PRIVATE capstone_static)
+    else()
+      target_link_libraries(hdl_tests PRIVATE capstone)
+    endif()
+  endif()
   add_dependencies(hdl_tests hdllib hdl_test_target)
 
   add_executable(hdl_select_tests tests/test_select.cpp)

@@ -22,6 +22,12 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return HandlePing(pipe, r);
     case OpSetLogLevel:
         return HandleSetLogLevel(pipe, r);
+    case OpSetLogFile:
+        return HandleSetLogFile(pipe, r);
+    case OpSetHealthVeh:
+        return HandleSetHealthVeh(pipe, r);
+    case OpGetHealthVeh:
+        return HandleGetHealthVeh(pipe, r);
     case OpInjectDll:
         return HandleInjectDll(pipe, r);
     case OpUnloadDll:
@@ -86,6 +92,8 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return HandleCallVtable(pipe, r);
     case OpHookTrace:
         return HandleHookTrace(pipe, r);
+    case OpHook:
+        return HandleHook(pipe, r);
     case OpEnableHook:
         return HandleEnableHook(pipe, r);
     case OpUnhook:
@@ -106,6 +114,8 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return HandleDiscoverClose(pipe, r);
     case OpDiscoverAddCandidate:
         return HandleDiscoverAddCandidate(pipe, r);
+    case OpDiscoverScanValue:
+        return HandleDiscoverScanValue(pipe, r);
     case OpDiscoverConstraintScan:
         return HandleDiscoverConstraintScan(pipe, r);
     case OpDiscoverSynthesizePattern:

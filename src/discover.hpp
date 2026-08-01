@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hdllib/hdllib.h"
+#include "jobs.hpp"
 
 namespace hdl {
 
@@ -12,6 +13,8 @@ HdlStatus DiscoverAddCandidate(HdlDiscoverSession* session, uint32_t kind, uint6
                                const char* tag_or_null, uint64_t* out_id);
 HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* desc,
                             const char* tag_or_null, volatile int* cancel);
+HdlStatus DiscoverScanValue(HdlDiscoverSession* session, const HdlSearchDesc* desc,
+                            const char* tag_or_null, const CancelToken& token);
 HdlStatus DiscoverConstraintScan(HdlDiscoverSession* session, uint32_t object_size,
                                  const HdlFieldPred* preds, uint32_t pred_count,
                                  uint32_t search_flags, const wchar_t* module_or_null,

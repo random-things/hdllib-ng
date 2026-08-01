@@ -81,6 +81,53 @@ int CmdHooktrace(CmdCtx& ctx) {
     return st == HDL_OK ? 0 : 1;
 }
 
+int CmdHook(CmdCtx& ctx) {
+    using namespace hdl::proto;
+    std::vector<uint8_t> req;
+    std::vector<uint8_t> resp;
+
+    if (ctx.argc < 5) {
+        return FailUsage(ctx);
+    }
+    const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
+    const uint64_t detour = _wcstoui64(ctx.argv[4], nullptr, 0);
+    uint32_t flags = 0;
+    for (int i = 5; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--flags") == 0 && i + 1 < ctx.argc) {
+            flags = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
+        }
+    }
+    AppendPod(req, static_cast<uint32_t>(OpHook));
+    AppendPod(req, target);
+    AppendPod(req, detour);
+    AppendPod(req, flags);
+    if (!ctx.client.Request(req, resp)) {
+        return FailIpc(ctx);
+    }
+    Reader r(resp);
+    int32_t st = 0;
+    uint64_t handle = 0;
+    uint64_t trampoline = 0;
+    if (!r.TakePod(st) || !r.TakePod(handle) || !r.TakePod(trampoline)) {
+        return FailBadResp(ctx);
+    }
+    if (ctx.json) {
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("handle");
+        w.HexStr(handle);
+        w.Key("trampoline");
+        w.HexStr(trampoline);
+        w.EndObject();
+        EmitEnvelope(ctx, st, L"hook", w.Take());
+        return st == HDL_OK ? 0 : 1;
+    }
+    wprintf(L"status=%ls handle=%016llx trampoline=%016llx\n", StatusName(st),
+            static_cast<unsigned long long>(handle), static_cast<unsigned long long>(trampoline));
+    PrintStatusHint(L"hook", st);
+    return st == HDL_OK ? 0 : 1;
+}
+
 int CmdUnhook(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;

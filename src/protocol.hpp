@@ -112,6 +112,12 @@ enum Op : uint32_t {
     OpFingerprint = 93,
     OpShutdown = 94,
     OpTrackLoadedDll = 95,
+    /* Pipe parity for former C-API-only controls */
+    OpSetLogFile = 96,
+    OpSetHealthVeh = 97,
+    OpGetHealthVeh = 98,
+    OpDiscoverScanValue = 99,
+    OpHook = 100,
 };
 
 /* Optional request trailer / streaming response flags. */
