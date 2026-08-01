@@ -1179,6 +1179,29 @@ int wmain(int argc, wchar_t** argv) {
 
     Counters c;
     Report(c, hdl::proto::HDL_IPC_PROTO_MAJOR == 1, false, "ipc/proto_major_v1", "");
+
+    /* HDL_PIPE must stay under \\.\pipe\; reject file/device path overrides. */
+    {
+        wchar_t prev[512];
+        const DWORD prev_n = GetEnvironmentVariableW(L"HDL_PIPE", prev, 512);
+        wchar_t name[128];
+        SetEnvironmentVariableW(L"HDL_PIPE", L"C:\\Windows\\System32\\notepad.exe");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_non_pipe_hdl_pipe", "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\%s");
+        Report(c, HdlFormatPipeName(1, name, 128) != 0, false, "ipc/reject_format_string_hdl_pipe",
+               "");
+        SetEnvironmentVariableW(L"HDL_PIPE", L"\\\\.\\pipe\\hdl_test_%lu");
+        Report(c,
+               HdlFormatPipeName(0xABCDu, name, 128) == 0 &&
+                   wcscmp(name, L"\\\\.\\pipe\\hdl_test_43981") == 0,
+               false, "ipc/accept_safe_pipe_format", "");
+        if (prev_n > 0 && prev_n < 512) {
+            SetEnvironmentVariableW(L"HDL_PIPE", prev);
+        } else {
+            SetEnvironmentVariableW(L"HDL_PIPE", nullptr);
+        }
+    }
+
     RunNegotiateMismatch(c);
     RunStoreUnit(c);
     RunClientLiveTests(c, client_full, target_full, dll_full);

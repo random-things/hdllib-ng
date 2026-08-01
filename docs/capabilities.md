@@ -30,7 +30,7 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 | `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
 | `protocol.hpp` | Opcode enum + POD/string encode helpers used by server and client |
 
-Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact path, or a `swprintf` format with `%lu` for the pid). ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
+Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or a format with one unsigned pid conversion such as `%lu`). Non-pipe paths and unsafe format conversions are rejected. ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
 
 ---
 
