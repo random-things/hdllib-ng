@@ -1,5 +1,5 @@
-# Same gate as cpp-security-extended, plus alert-suppression for // codeql[...]
-# comments, minus intentional LoadLibrary-style process operations.
+# Single suite for local + GitHub Actions (do not also pull in security-extended
+# separately — an additive exclude would not remove queries from the other suite).
 - description: hdllib C/C++ security-extended (injection toolkit profile)
 - import: codeql-suites/cpp-security-extended.qls
   from: codeql/cpp-queries
