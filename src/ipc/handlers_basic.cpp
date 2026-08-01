@@ -46,6 +46,9 @@ bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
         AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
         return WriteFrame(pipe, resp);
     }
+    /* The pipe path is untrusted, but the pipe DACL admits only SYSTEM/Admins/owner (see
+     * BuildPipeSa), all of whom can already run arbitrary code via OpWriteMemory/OpCall. Opening an
+     * append-only log at a caller-chosen path is strictly weaker, so no path sanitization here. */
     const HdlStatus st = SetLogFile(path.empty() ? nullptr : path.c_str()) ? HDL_OK : HDL_E_FAILED;
     AppendPod(resp, static_cast<int32_t>(st));
     return WriteFrame(pipe, resp);
