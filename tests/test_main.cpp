@@ -736,6 +736,10 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
                 st = hdl::Free(alloc_addr);
                 Report(c, st == HDL_OK, false, "HdlFree", "");
             }
+            uint64_t rejected_addr = 0;
+            st = hdl::Alloc(0x1000, 0xDEADBEEFu, &rejected_addr);
+            Report(c, st == HDL_E_INVALID_ARG && rejected_addr == 0, false,
+                   "HdlAlloc rejects invalid protection", "");
         }
 
         {

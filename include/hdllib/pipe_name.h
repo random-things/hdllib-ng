@@ -91,17 +91,43 @@ static inline int HdlIsLocalPipePath(const wchar_t* path) {
     return 1;
 }
 
-/* Rebuild \\.\pipe\<name> from a sanitized name (literal prefix copy, no user format). */
+/* Return one validated pipe-name character, or NUL if it is unsafe. */
+static inline wchar_t HdlSanitizePipeNameChar(const wchar_t* name, size_t index) {
+    const wchar_t c = name ? name[index] : L'\0';
+    if (c < 0x20 || c == L'/' || c == L'\\' || c == L':' || c == L'"' || c == L'|' || c == L'<' ||
+        c == L'>' || c == L'*' || c == L'?' || c == L'%' ||
+        (c == L'.' && name[index + 1] == L'.')) {
+        return L'\0';
+    }
+    return c;
+}
+
+/* Rebuild \\.\pipe\<name> from individually sanitized characters. */
 static inline int HdlWriteLocalPipePath(wchar_t* out, size_t out_cch, const wchar_t* pipe_name) {
     static const wchar_t kPrefix[HDL_PIPE_PREFIX_LEN] = {L'\\', L'\\', L'.', L'\\', L'p',
                                                          L'i',  L'p',  L'e', L'\\'};
-    const size_t nlen = pipe_name ? wcslen(pipe_name) : 0;
-    if (!out || !HdlPipeNameCharsOk(pipe_name) || nlen + HDL_PIPE_PREFIX_LEN + 1 > out_cch ||
-        nlen + HDL_PIPE_PREFIX_LEN >= 256) {
+    wchar_t clean_name[256 - HDL_PIPE_PREFIX_LEN];
+    size_t nlen = 0;
+    if (!out || !pipe_name) {
         return 1;
     }
+    while (pipe_name[nlen]) {
+        wchar_t clean;
+        if (nlen + 1 >= sizeof(clean_name) / sizeof(clean_name[0])) {
+            return 1;
+        }
+        clean = HdlSanitizePipeNameChar(pipe_name, nlen);
+        if (!clean) {
+            return 1;
+        }
+        clean_name[nlen++] = clean;
+    }
+    if (!nlen || nlen + HDL_PIPE_PREFIX_LEN + 1 > out_cch) {
+        return 1;
+    }
+    clean_name[nlen] = L'\0';
     memcpy(out, kPrefix, HDL_PIPE_PREFIX_LEN * sizeof(wchar_t));
-    memcpy(out + HDL_PIPE_PREFIX_LEN, pipe_name, (nlen + 1) * sizeof(wchar_t));
+    memcpy(out + HDL_PIPE_PREFIX_LEN, clean_name, (nlen + 1) * sizeof(wchar_t));
     return 0;
 }
 
@@ -236,12 +262,7 @@ static inline HANDLE HdlOpenLocalPipe(uint32_t pid) {
         SetLastError(ERROR_INVALID_NAME);
         return INVALID_HANDLE_VALUE;
     }
-    /* Path is always \\.\pipe\ + charset-validated name from HdlFormatPipeName.
-     * Named-pipe opens are not filesystem path traversal; keep suppressions on
-     * the CreateFileW line so GitHub Code Scanning and the local CLI agree. */
-    // codeql[cpp/path-injection]
-    return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
-                       nullptr); // lgtm[cpp/path-injection]
+    return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 }
 
 static inline BOOL HdlWaitLocalPipe(uint32_t pid, DWORD timeout_ms) {
