@@ -629,27 +629,8 @@ int CmdDiscoverScan(CmdCtx& ctx) {
 
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r0(resp);
-    int32_t st = 0;
-    uint64_t search_id = 0;
-    if (!r0.TakePod(st) || !r0.TakePod(search_id) || st != HDL_OK) {
-        if (ctx.json) {
-            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), L"SearchCreate failed");
-        } else {
-            wprintf(L"SearchCreate failed status=%ls\n", StatusName(st));
-            PrintStatusHint(ctx.cmd, st);
-        }
-        return 1;
-    }
-
-    req.clear();
-    resp.clear();
-    AppendPod(req, static_cast<uint32_t>(OpSearchFirst));
-    AppendPod(req, search_id);
+    AppendPod(req, static_cast<uint32_t>(OpDiscoverScanValue));
+    AppendPod(req, disc_id);
     AppendPod(req, static_cast<uint64_t>(0));
     AppendPod(req, static_cast<uint64_t>(0));
     AppendPod(req, value_type);
@@ -660,118 +641,28 @@ int CmdDiscoverScan(CmdCtx& ctx) {
     AppendBytes(req, value_bytes.data(), value_bytes.size());
     AppendPod(req, search_flags);
     AppendWString(req, module.c_str());
+    AppendString(req, tag.c_str());
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
-    Reader r1(resp);
-    uint32_t count = 0;
-    if (!r1.TakePod(st) || !r1.TakePod(count) || st != HDL_OK) {
-        if (!ctx.json) {
-            wprintf(L"SearchFirst status=%ls\n", StatusName(st));
-            PrintStatusHint(ctx.cmd, st);
-        } else {
-            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), L"SearchFirst failed");
-        }
-        req.clear();
-        resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpSearchClose));
-        AppendPod(req, search_id);
-        ctx.client.Request(req, resp);
-        return 1;
-    }
-
-    req.clear();
-    resp.clear();
-    AppendPod(req, static_cast<uint32_t>(OpSearchGetHits));
-    AppendPod(req, search_id);
-    AppendPod(req, count ? count : max_hits);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r2(resp);
-    uint32_t total = 0;
-    uint32_t got = 0;
-    if (!r2.TakePod(st) || !r2.TakePod(total) || !r2.TakePod(got)) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-        }
-        return 1;
-    }
-    std::vector<uint64_t> hits(got);
-    bool bad_resp = false;
-    for (uint32_t i = 0; i < got; ++i) {
-        if (!r2.TakePod(hits[i])) {
-            bad_resp = true;
-            break;
-        }
-    }
-
-    req.clear();
-    resp.clear();
-    AppendPod(req, static_cast<uint32_t>(OpSearchClose));
-    AppendPod(req, search_id);
-    ctx.client.Request(req, resp);
-
-    if (bad_resp) {
-        return FailBadResp(ctx);
-    }
-
+    Reader r(resp);
+    int32_t st = 0;
     uint32_t added = 0;
-    struct ScanAddEntry {
-        uint64_t cand;
-        uint64_t addr;
-    };
-    std::vector<ScanAddEntry> entries;
-    for (uint64_t hit : hits) {
-        req.clear();
-        resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverAddCandidate));
-        AppendPod(req, disc_id);
-        AppendPod(req, static_cast<uint32_t>(HDL_CAND_ADDRESS));
-        AppendPod(req, hit);
-        AppendString(req, tag.c_str());
-        if (!ctx.client.Request(req, resp)) {
-            continue;
-        }
-        Reader ra(resp);
-        int32_t ast = 0;
-        uint64_t cand = 0;
-        ra.TakePod(ast);
-        ra.TakePod(cand);
-        if (ast == HDL_OK) {
-            ++added;
-            entries.push_back({cand, hit});
-            if (!ctx.json) {
-                wprintf(L"  cand=%llu addr=%016llx\n", static_cast<unsigned long long>(cand),
-                        static_cast<unsigned long long>(hit));
-            }
-        }
+    if (!r.TakePod(st) || !r.TakePod(added)) {
+        return FailBadResp(ctx);
     }
     if (ctx.json) {
         JsonWriter w;
         w.BeginObject();
-        w.Key("hits");
-        w.Num(got);
         w.Key("added");
         w.Num(added);
-        w.Key("entries");
-        w.BeginArray();
-        for (const auto& e : entries) {
-            w.BeginObject();
-            w.Key("cand");
-            w.HexStr(e.cand);
-            w.Key("addr");
-            w.HexStr(e.addr);
-            w.EndObject();
-        }
-        w.EndArray();
         w.EndObject();
-        const int32_t out_st = HDL_OK;
-        EmitEnvelope(ctx, out_st, ctx.cmd.c_str(), w.Take());
-        return added ? 0 : (got == 0 ? 1 : 0);
+        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+        return (st == HDL_OK || (st == HDL_E_NOT_FOUND && added == 0)) ? (added ? 0 : 1) : 1;
     }
-    wprintf(L"status=%ls hits=%u added=%u\n", StatusName(HDL_OK), got, added);
-    return added ? 0 : (got == 0 ? 1 : 0);
+    wprintf(L"status=%ls added=%u\n", StatusName(st), added);
+    PrintStatusHint(ctx.cmd, st);
+    return st == HDL_OK ? 0 : 1;
 }
 
 static bool OpenInWide(const wchar_t* path, std::ifstream* out) {

@@ -1,8 +1,8 @@
 # hdllib capabilities
 
-Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](../src/protocol.hpp). The named-pipe protocol is the remote control surface for an injected `hdllib.dll`; the same operations are also exposed as the exported C API in [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h).
+Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](../src/protocol.hpp). The named-pipe protocol is the sole remote control surface for an injected `hdllib.dll`. Shared types/enums live in [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h).
 
-**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, passive process fingerprinting, allocation, and further DLL injection—controllable from outside via a multi-client named pipe, or in-process via `Hdl*`. The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
+**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, passive process fingerprinting, allocation, and further DLL injection—controllable from outside via a multi-client named pipe (the sole remote control channel). The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
 
 **Client workflows** (CLI groups, `discover-*` pipelines, recipes / store): [client.md](client.md).
 
@@ -27,7 +27,7 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 |-------|------|
 | `hdllib.dll` | Loaded in-target; runs IPC server, memory/search/call/hook/place/code/discover logic |
 | `hdlclient.exe` | CLI: local multi-technique inject + pipe protocol + REPL/TUI interest store & recipes |
-| `hdllib.h` | Stable C exports (link `hdllib.lib`) |
+| `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
 | `protocol.hpp` | Opcode enum + POD/string encode helpers used by server and client |
 
 Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact path, or a `swprintf` format with `%lu` for the pid). ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
@@ -112,9 +112,9 @@ Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` =
 | `OpPing` | 1 | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
 | `OpSetLogLevel` | 8 | Set log verbosity | `HdlSetLogLevel` |
 
-**Also (C API / env, not only opcodes):** `HdlInit` / `HdlShutdown` / `HdlShutdownEx`, `HdlStartIpc` / `HdlStopIpc`, `HdlSetLogFile`, `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is also on the pipe as `OpShutdown`.
+**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `OpShutdown`. Log file and health VEH are pipe ops (`OpSetLogFile`, `OpSetHealthVeh` / `OpGetHealthVeh`).
 
-Default after inject: log level **off**; health VEH **off** until enabled or first `HdlPollEvents`; IPC starts unless `HDL_NO_IPC`.
+Default after inject: log level **off**; health VEH **off** until enabled or first `PollEvents`; IPC starts unless `HDL_NO_IPC`.
 
 **`OpPing` reply:** `status`, `uint32_t pid`.
 
@@ -168,7 +168,7 @@ Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shu
 | ETW callback | 19 | `EtwEventRegister` enable-callback |
 | Auto | −1 | `HdlRecommendInject` ranking (C API / `hdlclient inject`; not a separate opcode) |
 
-**C-API-only helpers:** `HdlResolveTarget` (pid / window title / class), `HdlRecommendInject` (confidence + eligibility flags). Injector `--stealth` stages a bland temp copy and prefers stealthier techniques on auto.
+**Controller-local (not target-pipe):** target resolve and inject recommend live in `hdl_inject` / `hdlclient inject`. Injector `--stealth` stages a bland temp copy and prefers stealthier techniques on auto.
 
 ---
 
@@ -317,7 +317,7 @@ Thread modes: `WORKER` (default helper thread) or `MAIN` (sync on primary UI HWN
 | `OpPollHookHits` | 33 | Drain hit queue | `HdlPollHookHits` |
 | `OpHookImport` | 83 | Resolve PE import (DLL+name) → `HookTrace` on `bound_va` | `HdlHookImport` |
 
-**C-API-only:** `HdlHook` (custom detour + trampoline). Default exports for inject: `HdlHookProc`, `HdlWinEventProc`.
+**Custom detours over the pipe:** `OpHook` (`target_va`, `detour_va` → handle + trampoline). Default exports for inject: `HdlHookProc`, `HdlWinEventProc`.
 
 Trace hooks call the original, enqueue `HdlHookHit` (incl. `frame_count` + `frames[8]`), and wake `PollEvents` with `HDL_EVENT_HOOK`. Handle is the target address as `uint64_t`. Trampolines live while `hdllib.dll` remains loaded.
 
@@ -393,7 +393,7 @@ Session-based pipeline: seed candidates → constraint / action evidence → sta
 
 Concrete `hdlclient` command sequences for these pipelines (and recipes that wrap them): [client.md § Discover](client.md#3-discover-sessions-discover-).
 
-**Note:** `HdlDiscoverScanValue` (typed exact scan → address candidates) exists on the C API only; there is no matching opcode. From outside the process use `discover-scan` (SearchFirst + AddCandidate per hit) or seed hits via search + `discover-add`.
+**Discover typed scan:** `OpDiscoverScanValue` (opcode 99); `hdlclient discover-scan` uses it.
 
 ---
 
@@ -420,7 +420,7 @@ Concrete `hdlclient` command sequences for these pipelines (and recipes that wra
 | `OpDisasmGetBackend` | 59 | Active backend id | `HdlDisasmGetBackend` |
 | `OpDisasmSetBackend` | 60 | Select Zydis / Capstone / custom | `HdlDisasmSetBackend` |
 
-Built-in: **Zydis** (default) and **Capstone**. Custom engines: `HdlDisasmRegisterBackend` / `HdlDisasmUnregisterBackend` (C API only — function-pointer table, no IPC).
+Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set only (no custom-engine registration over the pipe).
 
 ---
 
@@ -562,7 +562,7 @@ Built-in: **Zydis** (default) and **Capstone**. Custom engines: `HdlDisasmRegist
 In-process placement and analysis surface:
 
 - **Caves / AllocNear / Protect / FlushICache** — executable padding search, nearby scratch, protect + I-cache flush
-- **Disasm backends** — pluggable Zydis + Capstone (runtime select); `HdlDisasmRegisterBackend` is C-API-only for custom engines
+- **Disasm backends** — pluggable Zydis + Capstone (runtime select via Enum/Get/Set); no remote custom-engine registration
 - **InstrLen / Disasm / BuildStub / Patch ledger** — decode, trampoline emit, reversible patches
 - **PE sections / exports / imports** — mapped-image metadata
 - **EnumFunctions / XrefsFrom / ResolveFunction / XrefsTo / InvalidateFunctionIndex** — unwind-aligned x64 resolution plus bounded fallback index (export/call/prologue confidence, ret-based ends, process-local cache) and outbound/inbound edges (`HDL_XREF_CALL|JMP|DATA|FUNC`)
@@ -573,19 +573,17 @@ In-process placement and analysis surface:
 
 Hook hits include `frame_count` + `frames[8]` (stack capture) for frame-aware discover ranking.
 
-These are first-class library capabilities but are not IPC opcodes (`hdlclient inject` / local C API):
+Controller-local (not target-pipe opcodes):
 
-- **Inject method ranking** — `HdlRecommendInject` / `hdlclient inject --recommend` / `--method auto`
-- **Target resolution** — `HdlResolveTarget` (pid + window title substring / class)
-- **Custom MinHook detours** — `HdlHook` (IPC exposes trace/import hooks only)
-- **Custom disasm backends** — `HdlDisasmRegisterBackend` / `Unregister` (function pointers; C API only)
-- **Log file / health VEH** — `HdlSetLogFile`, `HdlSetHealthVeh` (also env `HDL_HEALTH_VEH`)
+- **Inject method ranking** — `hdlclient inject --recommend` / `--method auto` (`hdl_inject`)
+- **Target resolution** — pid + window title substring / class (`hdl_inject`)
 
-In-process lifecycle prepare is on the pipe: `OpShutdown` / `hdlclient <pid> shutdown [--modules]` (`HdlShutdown` / `HdlShutdownEx`).
+Pipe parity ops **96…100:** `OpSetLogFile`, `OpSetHealthVeh` / `OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook`.
 
-**Client-side approximations / orchestration (no new DLL opcode):**
+In-process lifecycle prepare is on the pipe: `OpShutdown` / `hdlclient <pid> shutdown [--modules]`.
 
-- **`discover-scan`** — typed/AOB `SearchFirst` then `DiscoverAddCandidate` per hit (covers `HdlDiscoverScanValue` workflows from outside)
+**Client-side orchestration (no new DLL opcode):**
+
 - **Interest store + recipes** — JSON locators and `recipe place` / `stitch` / `expand` / discover recipes (see [Interest store and recipes](#interest-store-and-recipes-client-only))
 
 Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [docs/future/](future/README.md).
@@ -596,7 +594,8 @@ Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [do
 
 | Command area | Ops used |
 |--------------|----------|
-| `ping`, `log` | Ping, SetLogLevel |
+| `ping`, `log`, `log-file`, `health-veh` | Ping, SetLogLevel, SetLogFile, Set/GetHealthVeh |
+| `hook` | OpHook (target_va + detour_va) |
 | `shutdown` | Shutdown (optional `--modules`) |
 | `inject` (pipe + `hdlclient inject`) | InjectDll / local inject |
 | `read`, `write` | ReadMemory, WriteMemory |

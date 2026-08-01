@@ -11,6 +11,9 @@ namespace ipc {
 
 bool HandlePing(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r);
+bool HandleSetLogFile(HANDLE pipe, proto::Reader& r);
+bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r);
+bool HandleGetHealthVeh(HANDLE pipe, proto::Reader& r);
 bool HandleInjectDll(HANDLE pipe, proto::Reader& r);
 bool HandleUnloadDll(HANDLE pipe, proto::Reader& r);
 bool HandleShutdown(HANDLE pipe, proto::Reader& r);
@@ -46,6 +49,7 @@ bool HandleModuleBase(HANDLE pipe, proto::Reader& r);
 bool HandleCallVtable(HANDLE pipe, proto::Reader& r);
 
 bool HandleHookTrace(HANDLE pipe, proto::Reader& r);
+bool HandleHook(HANDLE pipe, proto::Reader& r);
 bool HandleEnableHook(HANDLE pipe, proto::Reader& r);
 bool HandleUnhook(HANDLE pipe, proto::Reader& r);
 bool HandlePollHookHits(HANDLE pipe, proto::Reader& r);
@@ -59,6 +63,7 @@ bool HandleProbeStruct(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverCreate(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverClose(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverAddCandidate(HANDLE pipe, proto::Reader& r);
+bool HandleDiscoverScanValue(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverConstraintScan(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverSynthesizePattern(HANDLE pipe, proto::Reader& r);
 bool HandleDiscoverPathConsensus(HANDLE pipe, proto::Reader& r);

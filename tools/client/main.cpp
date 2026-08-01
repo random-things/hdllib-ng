@@ -15,6 +15,8 @@
 static const CmdEntry kCommands[] = {
     {L"ping", CmdPing},
     {L"log", CmdLog},
+    {L"log-file", CmdLogFile},
+    {L"health-veh", CmdHealthVeh},
     {L"modules", CmdModules},
     {L"regions", CmdRegions},
     {L"threads", CmdThreads},
@@ -30,6 +32,7 @@ static const CmdEntry kCommands[] = {
     {L"alloc", CmdAlloc},
     {L"free", CmdFree},
     {L"hooktrace", CmdHooktrace},
+    {L"hook", CmdHook},
     {L"unhook", CmdUnhook},
     {L"hook-enable", CmdHookEnable},
     {L"enablehook", CmdHookEnable},

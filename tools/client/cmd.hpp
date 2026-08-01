@@ -32,6 +32,8 @@ struct CmdEntry {
 
 int CmdPing(CmdCtx& ctx);
 int CmdLog(CmdCtx& ctx);
+int CmdLogFile(CmdCtx& ctx);
+int CmdHealthVeh(CmdCtx& ctx);
 int CmdModules(CmdCtx& ctx);
 int CmdRegions(CmdCtx& ctx);
 int CmdThreads(CmdCtx& ctx);
@@ -47,6 +49,7 @@ int CmdVcall(CmdCtx& ctx);
 int CmdAlloc(CmdCtx& ctx);
 int CmdFree(CmdCtx& ctx);
 int CmdHooktrace(CmdCtx& ctx);
+int CmdHook(CmdCtx& ctx);
 int CmdUnhook(CmdCtx& ctx);
 int CmdHookEnable(CmdCtx& ctx);
 int CmdHookhits(CmdCtx& ctx);

@@ -49,9 +49,7 @@ untrusted pull-request code on a persistent machine.
 
 ```mermaid
 flowchart LR
-    ABI["hdllib.h ABI"] --> API["api.cpp wrapper"]
-    API --> Domain["src domain implementation"]
-
+    Types["hdllib.h types/enums"] --> Domain["src domain implementation"]
     Opcode["protocol.hpp opcode"] --> Dispatch["ipc/dispatch.cpp"]
     Dispatch --> Handler["ipc/handlers_*.cpp"]
     Handler --> Domain
@@ -59,44 +57,39 @@ flowchart LR
     Command["client main/usage/cmds"] --> Pipe["PipeClient serialization"]
     Pipe --> Handler
 
-    Domain --> LocalTests["local API tests"]
+    Domain --> LocalTests["hdl_tests domain link"]
     Handler --> LiveTests["client/IPC tests"]
     Command --> LiveTests
     Domain --> Docs["capabilities/client docs"]
 ```
 
-Not every feature needs all three surfaces:
+The named pipe is the sole remote control channel. `api.cpp` only exports
+`HdlHookProc` / `HdlWinEventProc` for inject techniques.
 
-- Custom C detours, external disassembly backend registration, log-file
-  selection, and direct health-VEH control are intentionally C-API-only.
 - Recipes and the interest store are intentionally client-only.
 - Ping is IPC-only.
+- Disasm custom backends are not remote; use built-in Enum/Get/Set.
 
-Check the existing capability map before assuming a missing surface is a bug.
+## Add or change a pipe-backed operation
 
-## Add or change a cross-surface operation
-
-Use this sequence for a feature exposed through both C API and IPC:
-
-1. Define or update flags, structures, and `Hdl*` declarations in
-   [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h). Preserve C ABI
-   compatibility and fixed-width field types where possible.
+1. Define or update flags, structures, and enums in
+   [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) when wire types change.
 2. Implement the operation in its domain `.cpp`/`.hpp`. Keep process mechanics
    out of adapters.
-3. Add a thin exported wrapper in [`src/api.cpp`](../src/api.cpp).
-4. Assign an explicit opcode in [`src/protocol.hpp`](../src/protocol.hpp).
+3. Assign an explicit opcode in [`src/protocol.hpp`](../src/protocol.hpp).
    Never renumber existing opcodes.
-5. Declare the handler in [`src/ipc/handlers.hpp`](../src/ipc/handlers.hpp),
+4. Declare the handler in [`src/ipc/handlers.hpp`](../src/ipc/handlers.hpp),
    implement it in the matching `handlers_*.cpp`, and register it in
    [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp).
-6. Update client serialization or add a `Cmd*` handler in the matching
+5. Update client serialization or add a `Cmd*` handler in the matching
    [`tools/client/cmds_*.cpp`](../tools/client/) file. Register human-facing
    commands in [`tools/client/main.cpp`](../tools/client/main.cpp) and document
    syntax in [`tools/client/usage.cpp`](../tools/client/usage.cpp).
-7. Add local API coverage and live pipe/client coverage.
-8. Update [capabilities.md](capabilities.md), and update
+6. Add domain coverage in `hdl_tests` (links `hdl_domain_obj`) and live
+   pipe/client coverage in `hdl_client_tests`.
+7. Update [capabilities.md](capabilities.md), and update
    [client.md](client.md) when users receive a command or workflow.
-9. Recheck all size-query, streaming, cancellation, and cleanup paths.
+8. Recheck all size-query, streaming, cancellation, and cleanup paths.
 
 ### Handler family routing
 

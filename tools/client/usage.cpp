@@ -25,6 +25,8 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> regions [--stream]
   hdlclient <pid> threads [--stream]
   hdlclient <pid> health
+  hdlclient <pid> health-veh on|off|status
+  hdlclient <pid> log-file [path]   (omit path to clear file sink)
   hdlclient <pid> fingerprint [--stream] [--modules-only] [--no-imports]
   hdlclient <pid> events [--timeout MS] [--max N]
   hdlclient <pid> job create [--timeout MS]
@@ -62,6 +64,7 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> ptrchain HEX_BASE [+/-OFFSET ...]
   hdlclient <pid> modbase [--module NAME]
   hdlclient <pid> hooktrace HEX_ADDR [--args N]
+  hdlclient <pid> hook HEX_TARGET HEX_DETOUR [--flags N]
   hdlclient <pid> hook-import DLL!Name | --dll X --import Y [--module M] [--args N]
   hdlclient <pid> unhook HEX_HANDLE
   hdlclient <pid> hook-enable HEX_HANDLE 0|1

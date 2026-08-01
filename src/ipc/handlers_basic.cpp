@@ -38,6 +38,44 @@ bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r) {
     return WriteFrame(pipe, resp);
 }
 
+bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    std::wstring path;
+    if (!r.TakeWString(path)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    /* The pipe path is untrusted, but the pipe DACL admits only SYSTEM/Admins/owner (see
+     * BuildPipeSa), all of whom can already run arbitrary code via OpWriteMemory/OpCall. Opening an
+     * append-only log at a caller-chosen path is strictly weaker, so no path sanitization here. */
+    const wchar_t* log_path = path.empty() ? nullptr : path.c_str();
+    const bool log_ok = SetLogFile(log_path); // codeql[cpp/path-injection]: trusted control pipe
+    AppendPod(resp, static_cast<int32_t>(log_ok ? HDL_OK : HDL_E_FAILED));
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    std::vector<uint8_t> resp;
+    int32_t enabled = 0;
+    if (!r.TakePod(enabled)) {
+        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
+        return WriteFrame(pipe, resp);
+    }
+    AppendPod(resp, static_cast<int32_t>(SetHealthVeh(enabled != 0)));
+    return WriteFrame(pipe, resp);
+}
+
+bool HandleGetHealthVeh(HANDLE pipe, proto::Reader& r) {
+    using namespace proto;
+    (void)r;
+    std::vector<uint8_t> resp;
+    AppendPod(resp, static_cast<int32_t>(HDL_OK));
+    AppendPod(resp, static_cast<int32_t>(IsHealthVehEnabled() ? 1 : 0));
+    return WriteFrame(pipe, resp);
+}
+
 bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
     std::vector<uint8_t> resp;
