@@ -1,11 +1,12 @@
 #include "cmd.hpp"
+#include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "session_modules.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -15,23 +16,7 @@
 #include <string>
 #include <vector>
 
-static int FailUsage(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
-    } else {
-        PrintUsage();
-    }
-    return 1;
-}
-
-static int FailIpc(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-    }
-    return 1;
-}
-
-int CmdInject(CmdCtx& ctx) {
+CommandResult CmdInject(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -90,12 +75,7 @@ int CmdInject(CmdCtx& ctx) {
             } else if (_wcsicmp(ctx.argv[i], L"etw_callback") == 0) {
                 method = HDL_INJECT_ETW_CALLBACK;
             } else {
-                if (ctx.json) {
-                    EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"unknown inject method");
-                } else {
-                    wprintf(L"Unknown method: %ls\n", ctx.argv[i]);
-                }
-                return 1;
+                return CmdFail(ctx.cmd.c_str(), HDL_E_INVALID_ARG, L"unknown inject method");
             }
         } else if (wcscmp(ctx.argv[i], L"--exe") == 0 && i + 1 < ctx.argc) {
             exe_path = ctx.argv[++i];
@@ -125,10 +105,7 @@ int CmdInject(CmdCtx& ctx) {
     uint64_t base = 0;
     uint32_t out_pid = 0;
     if (!r.TakePod(st) || !r.TakePod(base)) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-        }
-        return 1;
+        return FailBadResp(ctx);
     }
     r.TakePod(out_pid);
     if (st == HDL_OK && base) {
@@ -143,24 +120,17 @@ int CmdInject(CmdCtx& ctx) {
             ctx.client.Request(treq, tresp);
         }
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("base");
-        w.HexStr(base);
-        w.Key("out_pid");
-        w.Num(out_pid);
-        w.EndObject();
-        EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls base=%016llx out_pid=%u\n", StatusName(st),
-            static_cast<unsigned long long>(base), out_pid);
-    PrintStatusHint(ctx.cmd, st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("base");
+    w.HexStr(base);
+    w.Key("out_pid");
+    w.Num(out_pid);
+    w.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
 }
 
-int CmdShutdown(CmdCtx& ctx) {
+CommandResult CmdShutdown(CmdCtx& ctx) {
     using namespace hdl::proto;
     uint32_t flags = 0;
     for (int i = 3; i < ctx.argc; ++i) {
@@ -190,30 +160,20 @@ int CmdShutdown(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     if (!r.TakePod(st)) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-        }
-        return 1;
+        return FailBadResp(ctx);
     }
     if (st == HDL_OK) {
         hdlcli::ClearInjectedModules(ctx.pid);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("flags");
-        w.Num(flags);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"shutdown", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls flags=0x%X (helper prepared; use local unload to FreeLibrary hdllib)\n",
-            StatusName(st), flags);
-    PrintStatusHint(ctx.cmd, st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("flags");
+    w.Num(flags);
+    w.EndObject();
+    return CmdStatus(L"shutdown", st, w.Take());
 }
 
-int CmdUnload(CmdCtx& ctx) {
+CommandResult CmdUnload(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -247,27 +207,15 @@ int CmdUnload(CmdCtx& ctx) {
     int32_t st = 0;
     uint64_t base = 0;
     if (!r.TakePod(st) || !r.TakePod(base)) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-        }
-        return 1;
+        return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("base");
-        w.HexStr(base);
-        w.Key("reload");
-        w.Bool(reload != 0);
-        w.EndObject();
-        const wchar_t* cmd_name =
-            _wcsicmp(ctx.cmd.c_str(), L"reload") == 0 ? L"reload" : L"unload";
-        EmitEnvelope(ctx, st, cmd_name, w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls base=%016llx reload=%d\n", StatusName(st),
-            static_cast<unsigned long long>(base), reload);
-    PrintStatusHint(ctx.cmd, st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("base");
+    w.HexStr(base);
+    w.Key("reload");
+    w.Bool(reload != 0);
+    w.EndObject();
+    const wchar_t* cmd_name = _wcsicmp(ctx.cmd.c_str(), L"reload") == 0 ? L"reload" : L"unload";
+    return CmdStatus(cmd_name, st, w.Take());
 }
-

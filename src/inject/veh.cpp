@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -13,7 +14,7 @@ struct VehStub {
     uint8_t mov_rax_rcx[3] = {0x48, 0x8B, 0x01};
     // cmp dword ptr [rax], 80000003h  ; EXCEPTION_BREAKPOINT
     uint8_t cmp_code[6] = {0x81, 0x38, 0x03, 0x00, 0x00, 0x80};
-    uint8_t jne_out[2] = {0x75, 0x00};  // patch
+    uint8_t jne_out[2] = {0x75, 0x00}; // patch
     uint8_t sub_rsp[4] = {0x48, 0x83, 0xEC, 0x28};
     uint8_t mov_rcx[2] = {0x48, 0xB9};
     uint64_t path = 0;
@@ -37,15 +38,15 @@ using RtlAddVectoredExceptionHandler_t = PVOID(NTAPI*)(ULONG, PVOID);
 struct VehAddArgs {
     uint64_t add_veh;
     uint64_t handler;
-    uint64_t out_handle;  // written by stub
+    uint64_t out_handle; // written by stub
 };
 
 // Thread start: rcx = VehAddArgs*
 #pragma pack(push, 1)
 struct CallAddVehStub {
     uint8_t sub_rsp[4] = {0x48, 0x83, 0xEC, 0x28};
-    uint8_t mov_rsi[3] = {0x48, 0x89, 0xCE};  // mov rsi, rcx
-    uint8_t mov_ecx[5] = {0xB9, 0x01, 0x00, 0x00, 0x00};  // First=1
+    uint8_t mov_rsi[3] = {0x48, 0x89, 0xCE};             // mov rsi, rcx
+    uint8_t mov_ecx[5] = {0xB9, 0x01, 0x00, 0x00, 0x00}; // First=1
     // mov rdx, [rsi+8] handler
     uint8_t mov_rdx[4] = {0x48, 0x8B, 0x56, 0x08};
     // mov rax, [rsi]
@@ -58,10 +59,10 @@ struct CallAddVehStub {
 };
 #pragma pack(pop)
 
-}  // namespace
+} // namespace
 
 HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
@@ -72,14 +73,12 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
         GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlRemoveVectoredExceptionHandler"));
     auto debug_break = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetKernel32Proc("DebugBreak"));
     if (!add_veh || !debug_break) {
-        CloseHandle(process);
         return HDL_E_NOT_FOUND;
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
@@ -89,9 +88,8 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     handler.jne_out[1] = 36;
 
     RemoteAlloc handler_mem;
-    if (!handler_mem.Alloc(process, sizeof(handler), PAGE_EXECUTE_READWRITE) ||
+    if (!handler_mem.Alloc(process.get(), sizeof(handler), PAGE_EXECUTE_READWRITE) ||
         !handler_mem.Write(&handler, sizeof(handler))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
@@ -100,48 +98,46 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     args.handler = reinterpret_cast<uint64_t>(handler_mem.ptr);
     args.out_handle = 0;
     RemoteAlloc args_mem;
-    if (!args_mem.Alloc(process, sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
-        CloseHandle(process);
+    if (!args_mem.Alloc(process.get(), sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
         return HDL_E_NO_MEM;
     }
 
     CallAddVehStub add_stub{};
     RemoteAlloc add_stub_mem;
-    if (!add_stub_mem.Alloc(process, sizeof(add_stub), PAGE_EXECUTE_READWRITE) ||
+    if (!add_stub_mem.Alloc(process.get(), sizeof(add_stub), PAGE_EXECUTE_READWRITE) ||
         !add_stub_mem.Write(&add_stub, sizeof(add_stub))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0,
-                                    reinterpret_cast<LPTHREAD_START_ROUTINE>(add_stub_mem.ptr),
-                                    args_mem.ptr, 0, nullptr);
+    win::unique_handle t(::CreateRemoteThread(
+        process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(add_stub_mem.ptr),
+        args_mem.ptr, 0, nullptr));
     if (!t) {
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
-    WaitForSingleObject(t, INFINITE);
-    CloseHandle(t);
+    WaitForSingleObject(t.get(), INFINITE);
+    t.reset();
 
     VehAddArgs args_out{};
-    ReadRemote(process, args_mem.ptr, &args_out, sizeof(args_out));
+    ReadRemote(process.get(), args_mem.ptr, &args_out, sizeof(args_out));
     if (!args_out.out_handle) {
-        CloseHandle(process);
         HDL_LOG_ERROR("VEH: RtlAddVectoredExceptionHandler returned null");
         return HDL_E_FAILED;
     }
 
-    HANDLE brk = ::CreateRemoteThread(process, nullptr, 0, debug_break, nullptr, 0, nullptr);
+    win::unique_handle brk(
+        ::CreateRemoteThread(process.get(), nullptr, 0, debug_break, nullptr, 0, nullptr));
     if (brk) {
-        WaitForSingleObject(brk, 5000);
-        CloseHandle(brk);
+        WaitForSingleObject(brk.get(), 5000);
     }
+    brk.reset();
 
     st = PollForModule(pid, dll_path, out_base);
 
     if (remove_veh && args_out.out_handle) {
         // Best-effort remove via remote thread calling RtlRemoveVectoredExceptionHandler.
-        ::CreateRemoteThread(process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(remove_veh),
+        ::CreateRemoteThread(process.get(), nullptr, 0,
+                             reinterpret_cast<LPTHREAD_START_ROUTINE>(remove_veh),
                              reinterpret_cast<void*>(args_out.out_handle), 0, nullptr);
         // Don't wait forever if remove hangs — detach and continue.
     }
@@ -150,7 +146,6 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     handler_mem.Detach();
     args_mem.Detach();
     add_stub_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("VEH inject into pid %u ok", pid);
@@ -158,5 +153,5 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

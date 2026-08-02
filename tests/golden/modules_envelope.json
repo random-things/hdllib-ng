@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "status": 0,
+  "cmd": "modules",
+  "data": {
+    "count": "*",
+    "modules": "*"
+  },
+  "error": null
+}

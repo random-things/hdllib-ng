@@ -6,6 +6,7 @@
 #include "framing.hpp"
 #include "hdllib/pipe_name.h"
 #include "log.hpp"
+#include "win/raii.hpp"
 
 #include <atomic>
 #include <memory>
@@ -23,7 +24,7 @@ std::atomic<bool> g_ready{false};
 std::atomic<bool> g_stop{false};
 /* True while ThreadMain is on the stack (including post-loop cleanup). */
 std::atomic<bool> g_accept_alive{false};
-HANDLE g_stop_event = nullptr;
+hdl::win::unique_handle g_stop_event;
 std::thread g_thread;
 
 std::mutex g_clients_mu;
@@ -41,7 +42,7 @@ std::vector<WorkerSlot> g_workers;
 void SignalStop() {
     g_stop = true;
     if (g_stop_event) {
-        SetEvent(g_stop_event);
+        SetEvent(g_stop_event.get());
     }
     HANDLE client = HdlOpenLocalPipe(GetCurrentProcessId());
     if (client != INVALID_HANDLE_VALUE) {
@@ -52,7 +53,7 @@ void SignalStop() {
 void WaitAcceptThreadExit() {
     for (int i = 0; i < 250 && g_accept_alive.load(); ++i) {
         if (g_stop_event) {
-            SetEvent(g_stop_event);
+            SetEvent(g_stop_event.get());
         }
         Sleep(20);
     }
@@ -154,11 +155,12 @@ void ThreadMain() {
         std::vector<uint8_t> sd_storage;
         SECURITY_ATTRIBUTES* sa = BuildPipeSa(sd_storage);
 
-        HANDLE pipe = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                       PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, sa);
+        hdl::win::unique_handle pipe(
+            CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                             PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, sa));
 
-        if (pipe == INVALID_HANDLE_VALUE) {
+        if (!pipe) {
             HDL_LOG_ERROR("CreateNamedPipeW failed: %lu", GetLastError());
             Sleep(200);
             continue;
@@ -169,39 +171,35 @@ void ThreadMain() {
         g_running = true;
 
         OVERLAPPED ov{};
-        ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        ConnectNamedPipe(pipe, &ov);
+        hdl::win::unique_handle ov_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        ov.hEvent = ov_event.get();
+        ConnectNamedPipe(pipe.get(), &ov);
         DWORD err = GetLastError();
 
         bool connected = false;
         if (err == ERROR_PIPE_CONNECTED) {
             connected = true;
         } else if (err == ERROR_IO_PENDING) {
-            HANDLE waits[2] = {ov.hEvent, g_stop_event};
+            HANDLE waits[2] = {ov.hEvent, g_stop_event.get()};
             const DWORD wr = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
             if (wr == WAIT_OBJECT_0) {
                 connected = true;
             } else {
-                CancelIoEx(pipe, &ov);
-                CloseHandle(ov.hEvent);
-                CloseHandle(pipe);
+                CancelIoEx(pipe.get(), &ov);
                 break;
             }
         } else {
             HDL_LOG_ERROR("ConnectNamedPipe failed: %lu", err);
-            CloseHandle(ov.hEvent);
-            CloseHandle(pipe);
             continue;
         }
 
-        CloseHandle(ov.hEvent);
+        ov_event.reset();
 
         if (!connected || g_stop.load()) {
-            CloseHandle(pipe);
             break;
         }
 
-        SpawnWorker(pipe);
+        SpawnWorker(pipe.release());
     }
 
     /* Wake blocked readers, then join every worker before tearing down maps. */
@@ -245,9 +243,9 @@ HdlStatus Start() {
     g_ready = false;
     g_running = false;
     if (!g_stop_event) {
-        g_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_stop_event.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     } else {
-        ResetEvent(g_stop_event);
+        ResetEvent(g_stop_event.get());
     }
     g_thread = std::thread(ThreadMain);
     for (int i = 0; i < 50 && !g_ready.load(); ++i) {
@@ -272,10 +270,7 @@ void Stop() {
         }
     }
     WaitAcceptThreadExit();
-    if (g_stop_event) {
-        CloseHandle(g_stop_event);
-        g_stop_event = nullptr;
-    }
+    g_stop_event.reset();
 }
 
 void StopNoJoin(void* keep_alive_pipe) {

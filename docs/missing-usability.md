@@ -12,29 +12,25 @@ Related: [client](client.md), [workflows](workflows.md),
 
 ## 1. Structured output (`--json`) for CLI verbs
 
-**Why it matters:** One-shot `hdlclient <pid> …` is the scripting surface, but
-output is human text only. Automation must scrape hex addresses and counts.
-This is the highest-leverage usability fix because it unlocks CI, agents, and
-thin wrappers without waiting for a full SDK.
+**Why it matters:** One-shot `hdlclient <pid> …` is the scripting surface.
+Structured output unlocks CI, agents, and thin wrappers without a full SDK.
 
-**Current state:** Command handlers under [`tools/client/cmds_*.cpp`](../tools/client/)
-print with `wprintf`; no `--json` / NDJSON path. REPL/TUI stay human-first.
+**Current state:** Global `--json` (before or after pid; also per-line in REPL)
+is implemented. Handlers under [`tools/client/cmds_*.cpp`](../tools/client/)
+emit the envelope from [`EmitEnvelope`](../tools/client/json_out.cpp):
+`{ "ok", "status", "cmd", "data", "error": { "code", "name", "hint" } | null }`.
+Default remains human text. See [client.md](client.md).
 
-**What needs to be done:**
+**Remaining gaps:**
 
-1. Add a process-wide `--json` (before the verb) or per-command flag; default
-   remains text.
-2. Standardize an envelope: `{ "ok": bool, "status": N, "cmd": "...", "data": …,
-   "error": { "code": N, "hint": "..." } }`.
-3. Prioritize verbs used in workflows: `ping`, `modules`, `scan` / `--hits`,
-   `discover-create` / `discover-cands` / `discover-rank`, `hookhits`,
-   `watch hits`, `fingerprint`, `health`.
-4. Ensure stream ops emit one JSON value per chunk or a final aggregated array
-   (document the choice).
-5. Golden tests comparing JSON shape for a few verbs against the toy arena.
+1. Expand golden fixtures beyond ping/modules/error (`scan`, `discover-cands`,
+   `hookhits`, `watch hits`, `fingerprint`, `health`).
+2. Stream-heavy ops emit one final JSON envelope today (not NDJSON chunks).
 
-**Acceptance:** `hdlclient --json <pid> ping` is valid JSON with the host pid;
-scripts never need to parse prose.
+**Acceptance (done):** `hdlclient --json <pid> ping` is valid JSON with the
+remote pid; handlers return `CommandResult` with structured `data_json` only and
+`Render()` selects JSON vs human text. Golden fixtures under `tests/golden/` are
+consumed by `hdl_client_tests`.
 
 ---
 
@@ -374,7 +370,7 @@ stabilize it without typing `stabilize <id>` by hand.
 
 If only a few items ship next:
 
-1. `--json` + error hints (automation + clarity)
+1. Broader JSON schema/golden fixtures (`scan`, `discover-cands`, …)
 2. inject `--then` + implicit discover session (loop time)
 3. one-shot `recipe` + `cleanup` (parity with documented workflows)
 4. annotated hits / auto-resolve (investigation speed)

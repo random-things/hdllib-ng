@@ -1,5 +1,6 @@
 #include "repl.hpp"
 
+#include "json_out.hpp"
 #include "util.hpp"
 
 #include <cstdio>
@@ -71,7 +72,7 @@ bool AttachPathLocator(ControllerState& st, Interest* in, LogFn log) {
     return true;
 }
 
-}  // namespace
+} // namespace
 
 int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, LogFn log) {
     if (!log) {
@@ -84,7 +85,8 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
     const std::wstring& cmd = toks[0];
 
     if (cmd == L"help" || cmd == L"?") {
-        log(L"Controller: store load|save|list|revalidate|add <name> [--kind K] [synth|path|export N|cave|stub|patch],");
+        log(L"Controller: store load|save|list|revalidate|add <name> [--kind K] [synth|path|export "
+            L"N|cave|stub|patch],");
         log(L"  session new|show|close,");
         log(L"  recipe action <name> <watch_hex>, recipe constrain <size> <pred>...,");
         log(L"  recipe place <interest> <near_hex>, recipe expand <base_hex> <size>,");
@@ -150,8 +152,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
             for (const auto& in : st.store.interests) {
                 wchar_t buf[512];
                 swprintf_s(buf, L"  %ls kind=%ls locators=%u", Utf8ToWide(in.name).c_str(),
-                           Utf8ToWide(in.kind).c_str(),
-                           static_cast<unsigned>(in.locators.size()));
+                           Utf8ToWide(in.kind).c_str(), static_cast<unsigned>(in.locators.size()));
                 log(buf);
             }
             return 0;
@@ -250,7 +251,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
                 };
             }
             return RecipeAction(st, WideToUtf8(toks[2]).c_str(),
-                               _wcstoui64(toks[3].c_str(), nullptr, 0), log, wait);
+                                _wcstoui64(toks[3].c_str(), nullptr, 0), log, wait);
         }
         if (toks[1] == L"constrain" && toks.size() >= 4) {
             std::vector<HdlFieldPred> preds;
@@ -263,7 +264,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
                 preds.push_back(p);
             }
             return RecipeConstrain(st, static_cast<uint32_t>(_wtoi(toks[2].c_str())), preds,
-                                  HDL_SEARCH_IMAGE, nullptr, log);
+                                   HDL_SEARCH_IMAGE, nullptr, log);
         }
         if (toks[1] == L"place" && toks.size() >= 4) {
             const uint64_t near_addr = _wcstoui64(toks[3].c_str(), nullptr, 0);
@@ -375,7 +376,7 @@ int DispatchLine(ControllerState& st, uint32_t pid, const std::wstring& line, Lo
     }
     CmdCtx ctx{static_cast<int>(argv.size()), argv.data(), pid, resolved, *st.client, &st};
     ctx.json = want_json;
-    return handler(ctx);
+    return Render(ctx, handler(ctx));
 }
 
 int RunRepl(uint32_t pid, PipeClient& client, const wchar_t* store_path_or_null) {
@@ -404,4 +405,4 @@ int RunRepl(uint32_t pid, PipeClient& client, const wchar_t* store_path_or_null)
     return 0;
 }
 
-}  // namespace hdlcli
+} // namespace hdlcli

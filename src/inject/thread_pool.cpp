@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -31,13 +32,13 @@ struct TpRemoteArgs {
     uint64_t tp_release_work;
     uint64_t callback;
     uint64_t context;
-    uint64_t work_out;  // written by stub
+    uint64_t work_out; // written by stub
 };
 
 #pragma pack(push, 1)
 struct TpDriverStub {
     uint8_t sub_rsp[4] = {0x48, 0x83, 0xEC, 0x28};
-    uint8_t mov_rsi[3] = {0x48, 0x89, 0xCE};  // rsi = args
+    uint8_t mov_rsi[3] = {0x48, 0x89, 0xCE}; // rsi = args
     // lea rcx, [rsi+28h]  -> &work_out  (offset of work_out in TpRemoteArgs)
     uint8_t lea_rcx[4] = {0x48, 0x8D, 0x4E, 0x28};
     // mov rdx, [rsi+18h] callback
@@ -51,7 +52,7 @@ struct TpDriverStub {
     uint8_t call_rax1[2] = {0xFF, 0xD0};
     // test eax, eax (NTSTATUS)
     uint8_t test_eax[2] = {0x85, 0xC0};
-    uint8_t js_out[2] = {0x78, 0x00};  // patch
+    uint8_t js_out[2] = {0x78, 0x00}; // patch
     // mov rcx, [rsi+28h] work
     uint8_t mov_rcx_work[4] = {0x48, 0x8B, 0x4E, 0x28};
     // mov rax, [rsi+8] TpPostWork
@@ -69,7 +70,7 @@ struct TpDriverStub {
 };
 #pragma pack(pop)
 
-}  // namespace
+} // namespace
 
 HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -80,24 +81,22 @@ HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_
         return HDL_E_NOT_FOUND;
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     TpWorkStub cb{};
     cb.loadlib = reinterpret_cast<uint64_t>(GetKernel32Proc("LoadLibraryW"));
     RemoteAlloc cb_mem;
-    if (!cb_mem.Alloc(process, sizeof(cb), PAGE_EXECUTE_READWRITE) ||
+    if (!cb_mem.Alloc(process.get(), sizeof(cb), PAGE_EXECUTE_READWRITE) ||
         !cb_mem.Write(&cb, sizeof(cb))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
@@ -110,8 +109,7 @@ HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_
     args.work_out = 0;
 
     RemoteAlloc args_mem;
-    if (!args_mem.Alloc(process, sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
-        CloseHandle(process);
+    if (!args_mem.Alloc(process.get(), sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
         return HDL_E_NO_MEM;
     }
 
@@ -121,28 +119,25 @@ HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_
     driver.js_out[1] = 20;
 
     RemoteAlloc driver_mem;
-    if (!driver_mem.Alloc(process, sizeof(driver), PAGE_EXECUTE_READWRITE) ||
+    if (!driver_mem.Alloc(process.get(), sizeof(driver), PAGE_EXECUTE_READWRITE) ||
         !driver_mem.Write(&driver, sizeof(driver))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0,
-                                    reinterpret_cast<LPTHREAD_START_ROUTINE>(driver_mem.ptr),
-                                    args_mem.ptr, 0, nullptr);
+    win::unique_handle t(::CreateRemoteThread(
+        process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(driver_mem.ptr),
+        args_mem.ptr, 0, nullptr));
     if (!t) {
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
-    WaitForSingleObject(t, 10000);
-    CloseHandle(t);
+    WaitForSingleObject(t.get(), 10000);
+    t.reset();
 
     st = PollForModule(pid, dll_path, out_base);
     path_mem.Detach();
     cb_mem.Detach();
     args_mem.Detach();
     driver_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("ThreadPool (TpAllocWork/TpPostWork) inject into pid %u ok", pid);
@@ -150,5 +145,5 @@ HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

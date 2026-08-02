@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "recipes.hpp"
 #include "usage.hpp"
@@ -16,34 +17,7 @@
 #include <string>
 #include <vector>
 
-static int FailUsage(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
-    } else {
-        PrintUsage();
-    }
-    return 1;
-}
-
-static int FailIpc(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-    } else {
-        wprintf(L"IPC request failed\n");
-    }
-    return 1;
-}
-
-static int FailBadResp(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-    } else {
-        wprintf(L"Bad response\n");
-    }
-    return 1;
-}
-
-int CmdRip(CmdCtx& ctx) {
+CommandResult CmdRip(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -74,21 +48,15 @@ int CmdRip(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(out)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("addr");
-        w.HexStr(out);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"rip", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls addr=%016llx\n", StatusName(st), static_cast<unsigned long long>(out));
-    PrintStatusHint(L"rip", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("addr");
+    w.HexStr(out);
+    w.EndObject();
+    return CmdStatus(L"rip", st, w.Take());
 }
 
-int CmdPtrchain(CmdCtx& ctx) {
+CommandResult CmdPtrchain(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -116,21 +84,15 @@ int CmdPtrchain(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(out)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("addr");
-        w.HexStr(out);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"ptrchain", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls addr=%016llx\n", StatusName(st), static_cast<unsigned long long>(out));
-    PrintStatusHint(L"ptrchain", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("addr");
+    w.HexStr(out);
+    w.EndObject();
+    return CmdStatus(L"ptrchain", st, w.Take());
 }
 
-int CmdModbase(CmdCtx& ctx) {
+CommandResult CmdModbase(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -152,21 +114,15 @@ int CmdModbase(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(base)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("base");
-        w.HexStr(base);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"modbase", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls base=%016llx\n", StatusName(st), static_cast<unsigned long long>(base));
-    PrintStatusHint(L"modbase", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("base");
+    w.HexStr(base);
+    w.EndObject();
+    return CmdStatus(L"modbase", st, w.Take());
 }
 
-int CmdResolvePattern(CmdCtx& ctx) {
+CommandResult CmdResolvePattern(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -225,31 +181,21 @@ int CmdResolvePattern(CmdCtx& ctx) {
     if (!r.TakePod(st) || !hdl::proto::TakeHdlPatternResult(r, out)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("match");
-        w.HexStr(out.match_addr);
-        w.Key("resolved");
-        w.HexStr(out.resolved_addr);
-        w.Key("base");
-        w.HexStr(out.module_base);
-        w.Key("rva");
-        w.HexStr(out.rva);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"resolve-pattern", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls match=%016llx resolved=%016llx base=%016llx rva=%llx\n", StatusName(st),
-            static_cast<unsigned long long>(out.match_addr),
-            static_cast<unsigned long long>(out.resolved_addr),
-            static_cast<unsigned long long>(out.module_base),
-            static_cast<unsigned long long>(out.rva));
-    PrintStatusHint(L"resolve-pattern", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("match");
+    w.HexStr(out.match_addr);
+    w.Key("resolved");
+    w.HexStr(out.resolved_addr);
+    w.Key("base");
+    w.HexStr(out.module_base);
+    w.Key("rva");
+    w.HexStr(out.rva);
+    w.EndObject();
+    return CmdStatus(L"resolve-pattern", st, w.Take());
 }
 
-int CmdXrefs(CmdCtx& ctx) {
+CommandResult CmdXrefs(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -306,38 +252,30 @@ int CmdXrefs(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(count)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("count");
-        w.Num(count);
-        w.Key("addresses");
-        w.BeginArray();
-        for (uint32_t i = 0; i < count; ++i) {
-            uint64_t a = 0;
-            if (!r.TakePod(a)) {
-                return FailBadResp(ctx);
-            }
-            w.HexStr(a);
-        }
-        w.EndArray();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"xrefs", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls count=%u\n", StatusName(st), count);
+    std::vector<uint64_t> addrs;
+    addrs.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         uint64_t a = 0;
         if (!r.TakePod(a)) {
             return FailBadResp(ctx);
         }
-        wprintf(L"  %016llx\n", static_cast<unsigned long long>(a));
+        addrs.push_back(a);
     }
-    PrintStatusHint(L"xrefs", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("count");
+    w.Num(count);
+    w.Key("addresses");
+    w.BeginArray();
+    for (uint64_t a : addrs) {
+        w.HexStr(a);
+    }
+    w.EndArray();
+    w.EndObject();
+    return CmdStatus(L"xrefs", st, w.Take());
 }
 
-int CmdPtrscan(CmdCtx& ctx) {
+CommandResult CmdPtrscan(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -379,41 +317,8 @@ int CmdPtrscan(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(count)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("count");
-        w.Num(count);
-        w.Key("paths");
-        w.BeginArray();
-        for (uint32_t i = 0; i < count; ++i) {
-            HdlPointerPath path{};
-            if (!hdl::proto::TakeHdlPointerPath(r, path)) {
-                return FailBadResp(ctx);
-            }
-            if (i == 0) {
-                hdlcli::RememberPath(ctx.controller, path,
-                                     module.empty() ? nullptr : module.c_str());
-            }
-            w.BeginObject();
-            w.Key("base");
-            w.HexStr(path.static_base);
-            w.Key("depth");
-            w.Num(path.depth);
-            w.Key("offsets");
-            w.BeginArray();
-            for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
-                w.Num(path.offsets[d]);
-            }
-            w.EndArray();
-            w.EndObject();
-        }
-        w.EndArray();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"ptrscan", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls count=%u\n", StatusName(st), count);
+    std::vector<HdlPointerPath> paths;
+    paths.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlPointerPath path{};
         if (!hdl::proto::TakeHdlPointerPath(r, path)) {
@@ -422,18 +327,40 @@ int CmdPtrscan(CmdCtx& ctx) {
         if (i == 0) {
             hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
         }
-        wprintf(L"  base=%016llx depth=%u offs=", static_cast<unsigned long long>(path.static_base),
-                path.depth);
-        for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
-            wprintf(L"%s0x%x", d ? L"," : L"", path.offsets[d]);
-        }
-        wprintf(L"\n");
+        paths.push_back(path);
     }
-    PrintStatusHint(L"ptrscan", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("count");
+    w.Num(count);
+    w.Key("paths");
+    w.BeginArray();
+    for (const auto& path : paths) {
+        w.BeginObject();
+        w.Key("base");
+        w.HexStr(path.static_base);
+        w.Key("depth");
+        w.Num(path.depth);
+        w.Key("offsets");
+        w.BeginArray();
+        for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
+            w.Num(path.offsets[d]);
+        }
+        w.EndArray();
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    for (const auto& path : paths) {
+        for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
+            wchar_t off[32];
+            swprintf_s(off, L"%s0x%x", d ? L"," : L"", path.offsets[d]);
+        }
+    }
+    return CmdStatus(L"ptrscan", st, w.Take());
 }
 
-int CmdProbe(CmdCtx& ctx) {
+CommandResult CmdProbe(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -461,41 +388,32 @@ int CmdProbe(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(count)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("count");
-        w.Num(count);
-        w.Key("fields");
-        w.BeginArray();
-        for (uint32_t i = 0; i < count; ++i) {
-            HdlStructField f{};
-            if (!hdl::proto::TakeHdlStructField(r, f)) {
-                return FailBadResp(ctx);
-            }
-            w.BeginObject();
-            w.Key("offset");
-            w.Num(f.offset);
-            w.Key("kind");
-            w.Num(f.kind);
-            w.Key("value");
-            w.HexStr(f.value);
-            w.EndObject();
-        }
-        w.EndArray();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"probe", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls fields=%u\n", StatusName(st), count);
+    std::vector<HdlStructField> fields;
+    fields.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         HdlStructField f{};
         if (!hdl::proto::TakeHdlStructField(r, f)) {
             return FailBadResp(ctx);
         }
-        wprintf(L"  +0x%x kind=%u value=%016llx\n", f.offset, f.kind,
-                static_cast<unsigned long long>(f.value));
+        fields.push_back(f);
     }
-    PrintStatusHint(L"probe", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("count");
+    w.Num(count);
+    w.Key("fields");
+    w.BeginArray();
+    for (const auto& f : fields) {
+        w.BeginObject();
+        w.Key("offset");
+        w.Num(f.offset);
+        w.Key("kind");
+        w.Num(f.kind);
+        w.Key("value");
+        w.HexStr(f.value);
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    return CmdStatus(L"probe", st, w.Take());
 }

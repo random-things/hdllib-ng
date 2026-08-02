@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -41,7 +42,7 @@ struct InstrumentationStub {
     uint8_t mov_al_1[2] = {0xB0, 0x01};
     uint8_t xchg_al[2] = {0x86, 0x00};
     uint8_t test_al[2] = {0x84, 0xC0};
-    uint8_t jnz_skip[2] = {0x75, 0x00};  // → restore path
+    uint8_t jnz_skip[2] = {0x75, 0x00}; // → restore path
     // Align stack for call (ABI requires 16-byte alignment before CALL)
     uint8_t push_rbx[1] = {0x53};
     uint8_t mov_rbx_rsp[3] = {0x48, 0x89, 0xE3};
@@ -61,7 +62,7 @@ struct InstrumentationStub {
 };
 #pragma pack(pop)
 
-}  // namespace
+} // namespace
 
 HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     auto nt_set = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationProcess");
@@ -69,22 +70,20 @@ HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, u
         return HDL_E_NOT_FOUND;
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     RemoteAlloc flag_mem;
     uint8_t zero = 0;
-    if (!flag_mem.Alloc(process, 1) || !flag_mem.Write(&zero, 1)) {
-        CloseHandle(process);
+    if (!flag_mem.Alloc(process.get(), 1) || !flag_mem.Write(&zero, 1)) {
         return HDL_E_NO_MEM;
     }
 
@@ -93,13 +92,13 @@ HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, u
     cb.path = reinterpret_cast<uint64_t>(path_mem.ptr);
     cb.loadlib = reinterpret_cast<uint64_t>(GetKernel32Proc("LoadLibraryW"));
     // Bytes after jnz to skip label (pop_rax):
-    // push_rbx(1)+mov_rbx_rsp(3)+and(4)+sub(4)+mov_rcx(10)+mov_rax(10)+call(2)+mov_rsp(3)+pop_rbx(1) = 38
+    // push_rbx(1)+mov_rbx_rsp(3)+and(4)+sub(4)+mov_rcx(10)+mov_rax(10)+call(2)+mov_rsp(3)+pop_rbx(1)
+    // = 38
     cb.jnz_skip[1] = 38;
 
     RemoteAlloc cb_mem;
-    if (!cb_mem.Alloc(process, sizeof(cb), PAGE_EXECUTE_READWRITE) ||
+    if (!cb_mem.Alloc(process.get(), sizeof(cb), PAGE_EXECUTE_READWRITE) ||
         !cb_mem.Write(&cb, sizeof(cb))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
@@ -108,8 +107,7 @@ HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, u
     info.Reserved = 0;
     info.Callback = cb_mem.ptr;
     RemoteAlloc info_mem;
-    if (!info_mem.Alloc(process, sizeof(info)) || !info_mem.Write(&info, sizeof(info))) {
-        CloseHandle(process);
+    if (!info_mem.Alloc(process.get(), sizeof(info)) || !info_mem.Write(&info, sizeof(info))) {
         return HDL_E_NO_MEM;
     }
 
@@ -118,72 +116,69 @@ HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, u
     set_stub.nt_set = reinterpret_cast<uint64_t>(nt_set);
 
     RemoteAlloc set_mem;
-    if (!set_mem.Alloc(process, sizeof(set_stub), PAGE_EXECUTE_READWRITE) ||
+    if (!set_mem.Alloc(process.get(), sizeof(set_stub), PAGE_EXECUTE_READWRITE) ||
         !set_mem.Write(&set_stub, sizeof(set_stub))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0,
-                                    reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr), nullptr, 0,
-                                    nullptr);
+    win::unique_handle t(::CreateRemoteThread(process.get(), nullptr, 0,
+                                              reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr),
+                                              nullptr, 0, nullptr));
     if (!t) {
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
-    WaitForSingleObject(t, 5000);
+    WaitForSingleObject(t.get(), 5000);
     DWORD exit_code = 0;
-    GetExitCodeThread(t, &exit_code);
-    CloseHandle(t);
+    GetExitCodeThread(t.get(), &exit_code);
+    t.reset();
 
     if (static_cast<NTSTATUS>(exit_code) < 0) {
         info.Version = 1;
         info_mem.Write(&info, sizeof(info));
-        t = ::CreateRemoteThread(process, nullptr, 0,
-                                 reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr), nullptr, 0,
-                                 nullptr);
+        t.reset(::CreateRemoteThread(process.get(), nullptr, 0,
+                                     reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr), nullptr,
+                                     0, nullptr));
         if (!t) {
-            CloseHandle(process);
             return HDL_E_FAILED;
         }
-        WaitForSingleObject(t, 5000);
-        GetExitCodeThread(t, &exit_code);
-        CloseHandle(t);
+        WaitForSingleObject(t.get(), 5000);
+        GetExitCodeThread(t.get(), &exit_code);
+        t.reset();
         if (static_cast<NTSTATUS>(exit_code) < 0) {
-            HDL_LOG_ERROR("NtSetInformationProcess(InstrumentationCallback) remote self-set failed: "
-                          "0x%08lX",
-                          exit_code);
-            CloseHandle(process);
+            HDL_LOG_ERROR(
+                "NtSetInformationProcess(InstrumentationCallback) remote self-set failed: "
+                "0x%08lX",
+                exit_code);
             return HDL_E_FAILED;
         }
     }
 
     auto sleep_fn = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetKernel32Proc("Sleep"));
-    HANDLE nudge = ::CreateRemoteThread(process, nullptr, 0, sleep_fn, reinterpret_cast<void*>(1), 0,
-                                        nullptr);
+    win::unique_handle nudge(::CreateRemoteThread(process.get(), nullptr, 0, sleep_fn,
+                                                  reinterpret_cast<void*>(1), 0, nullptr));
     if (nudge) {
-        WaitForSingleObject(nudge, 2000);
-        CloseHandle(nudge);
+        WaitForSingleObject(nudge.get(), 2000);
     }
+    nudge.reset();
 
     st = PollForModule(pid, dll_path, out_base);
 
     info.Version = 0;
     info.Callback = nullptr;
     info_mem.Write(&info, sizeof(info));
-    t = ::CreateRemoteThread(process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr),
-                             nullptr, 0, nullptr);
+    t.reset(::CreateRemoteThread(process.get(), nullptr, 0,
+                                 reinterpret_cast<LPTHREAD_START_ROUTINE>(set_mem.ptr), nullptr, 0,
+                                 nullptr));
     if (t) {
-        WaitForSingleObject(t, 2000);
-        CloseHandle(t);
+        WaitForSingleObject(t.get(), 2000);
     }
+    t.reset();
 
     path_mem.Detach();
     flag_mem.Detach();
     cb_mem.Detach();
     info_mem.Detach();
     set_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("InstrumentationCallback inject into pid %u ok", pid);
@@ -193,5 +188,5 @@ HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, u
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

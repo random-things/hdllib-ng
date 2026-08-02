@@ -244,7 +244,7 @@ flowchart LR
     Call --> Resolve
 ```
 
-This makes `memory.cpp` and `resolve.cpp` foundational. Changes to their
+This makes `memory_*.cpp` / `memory.hpp` and `resolve.cpp` foundational. Changes to their
 validation or address semantics should be tested across locate, graph, code,
 fingerprinting, discover, and the client—not only their direct API tests.
 
@@ -259,9 +259,9 @@ the target. Handles and IDs are not durable across unload/reload.
 | Tracked loaded modules | [`loaded_modules.cpp`](../src/loaded_modules.cpp) | Mutex | `UnloadTrackedExcept` / `OpShutdown` |
 | Pipe accept/client list | [`ipc/server.cpp`](../src/ipc/server.cpp) | Atomics + client mutex | `ipc::Stop`; active pipe I/O is cancelled |
 | IPC search ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
-| Search candidates and snapshots | [`memory.cpp`](../src/memory.cpp) | Owned by opaque session; no internal per-session mutex | `SearchClose` |
+| Search candidates and snapshots | [`memory_search.cpp`](../src/memory_search.cpp) / [`memory_internal.hpp`](../src/memory_internal.hpp) | Owned by opaque session; no internal per-session mutex | `SearchClose` |
 | IPC discover ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
-| Discover candidates, actions, evidence, regions | [`discover.cpp`](../src/discover.cpp) | Per-session mutex plus global live-session set mutex | `DiscoverClose` / `DiscoverCloseAll` |
+| Discover candidates, actions, evidence, regions | [`discover_*.cpp`](../src/discover_session.cpp) / [`discover_internal.hpp`](../src/discover_internal.hpp) | Per-session mutex plus global live-session set mutex | `DiscoverClose` / `DiscoverCloseAll` |
 | Cooperative jobs/deadlines | [`jobs.cpp`](../src/jobs.cpp) | Registry mutex + atomics | Explicit close, server stop, or core shutdown |
 | Scratch allocations | [`alloc.cpp`](../src/alloc.cpp) | Registry mutex | `HdlFree` or `AllocShutdown` |
 | Reversible patches | [`code.cpp`](../src/code.cpp) | Patch mutex | Remove explicitly or `PatchShutdown` |

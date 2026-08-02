@@ -1,179 +1,21 @@
 #include "json_out.hpp"
+#include "usage.hpp"
 #include "util.hpp"
 
 #include <cstdio>
-#include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
-void JsonWriter::CommaIfNeeded() {
-    if (need_comma_.empty()) {
-        return;
-    }
-    if (!expecting_value_ && need_comma_.back()) {
-        buf_.push_back(',');
-    }
-    expecting_value_ = false;
-    need_comma_.back() = true;
-}
-
-void JsonWriter::AppendEscaped(const char* s, size_t n) {
-    for (size_t i = 0; i < n; ++i) {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
-        switch (c) {
-        case '"':
-            buf_ += "\\\"";
-            break;
-        case '\\':
-            buf_ += "\\\\";
-            break;
-        case '\b':
-            buf_ += "\\b";
-            break;
-        case '\f':
-            buf_ += "\\f";
-            break;
-        case '\n':
-            buf_ += "\\n";
-            break;
-        case '\r':
-            buf_ += "\\r";
-            break;
-        case '\t':
-            buf_ += "\\t";
-            break;
-        default:
-            if (c < 0x20) {
-                char tmp[8];
-                snprintf(tmp, sizeof(tmp), "\\u%04x", c);
-                buf_ += tmp;
-            } else {
-                buf_.push_back(static_cast<char>(c));
-            }
-            break;
-        }
-    }
-}
-
-void JsonWriter::BeginObject() {
-    CommaIfNeeded();
-    buf_.push_back('{');
-    need_comma_.push_back(false);
-    expecting_value_ = true;
-}
-
-void JsonWriter::EndObject() {
-    if (!need_comma_.empty()) {
-        need_comma_.pop_back();
-    }
-    buf_.push_back('}');
-    expecting_value_ = false;
-    if (!need_comma_.empty()) {
-        need_comma_.back() = true;
-    }
-}
-
-void JsonWriter::BeginArray() {
-    CommaIfNeeded();
-    buf_.push_back('[');
-    need_comma_.push_back(false);
-    expecting_value_ = true;
-}
-
-void JsonWriter::EndArray() {
-    if (!need_comma_.empty()) {
-        need_comma_.pop_back();
-    }
-    buf_.push_back(']');
-    expecting_value_ = false;
-    if (!need_comma_.empty()) {
-        need_comma_.back() = true;
-    }
-}
-
-void JsonWriter::Key(const char* k) {
-    CommaIfNeeded();
-    buf_.push_back('"');
-    AppendEscaped(k, strlen(k));
-    buf_ += "\":";
-    expecting_value_ = true;
-    if (!need_comma_.empty()) {
-        need_comma_.back() = false;
-    }
-}
-
-void JsonWriter::Str(const char* s) {
-    CommaIfNeeded();
-    buf_.push_back('"');
-    if (s) {
-        AppendEscaped(s, strlen(s));
-    }
-    buf_.push_back('"');
-}
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 
 void JsonWriter::Str(const wchar_t* s) {
-    Str(WideToUtf8(s ? s : L""));
-}
-
-void JsonWriter::Str(const std::string& s) {
-    CommaIfNeeded();
-    buf_.push_back('"');
-    AppendEscaped(s.data(), s.size());
-    buf_.push_back('"');
+    hdl::json::Writer::Str(WideToUtf8(s ? s : L""));
 }
 
 void JsonWriter::Str(const std::wstring& s) {
-    Str(WideToUtf8(s));
-}
-
-void JsonWriter::Num(int64_t v) {
-    CommaIfNeeded();
-    char tmp[32];
-    snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(v));
-    buf_ += tmp;
-}
-
-void JsonWriter::Num(uint64_t v) {
-    CommaIfNeeded();
-    char tmp[32];
-    snprintf(tmp, sizeof(tmp), "%llu", static_cast<unsigned long long>(v));
-    buf_ += tmp;
-}
-
-void JsonWriter::Num(uint32_t v) {
-    Num(static_cast<uint64_t>(v));
-}
-
-void JsonWriter::Num(int32_t v) {
-    Num(static_cast<int64_t>(v));
-}
-
-void JsonWriter::Bool(bool v) {
-    CommaIfNeeded();
-    buf_ += v ? "true" : "false";
-}
-
-void JsonWriter::Null() {
-    CommaIfNeeded();
-    buf_ += "null";
-}
-
-void JsonWriter::HexStr(uint64_t v) {
-    char tmp[24];
-    snprintf(tmp, sizeof(tmp), "0x%llx", static_cast<unsigned long long>(v));
-    Str(tmp);
-}
-
-void JsonWriter::Raw(const std::string& json_fragment) {
-    CommaIfNeeded();
-    buf_ += json_fragment;
-}
-
-std::string JsonWriter::Take() {
-    std::string out = std::move(buf_);
-    buf_.clear();
-    need_comma_.clear();
-    expecting_value_ = true;
-    return out;
+    hdl::json::Writer::Str(WideToUtf8(s));
 }
 
 static void WriteUtf8Line(const std::string& utf8) {
@@ -280,4 +122,130 @@ void PrintStatusHint(const std::wstring& cmd, int32_t status) {
     if (hint && hint[0]) {
         wprintf(L"  hint: %ls\n", hint);
     }
+}
+
+/* Derive human text from structured data_json (handlers no longer pre-format text). */
+static void AppendUtf8AsWide(std::wstring* out, const std::string& utf8) {
+    if (!out) {
+        return;
+    }
+    *out += Utf8ToWide(utf8);
+}
+
+/* CLI historically prints JSON booleans as 1/0 (e.g. enabled=1). */
+static std::string HumanScalar(const std::string& v) {
+    if (v == "true") {
+        return "1";
+    }
+    if (v == "false") {
+        return "0";
+    }
+    return v;
+}
+
+static void AppendFieldKv(std::wstring* out, const std::string& key, const std::string& val) {
+    AppendUtf8AsWide(out, key);
+    out->push_back(L'=');
+    AppendUtf8AsWide(out, HumanScalar(val));
+}
+
+static std::wstring FormatHumanFromData(int32_t status, const std::string& data_json) {
+    wchar_t hdr[64];
+    swprintf_s(hdr, L"status=%ls", StatusName(status));
+    std::wstring out = hdr;
+
+    const std::string& raw = data_json.empty() ? std::string("{}") : data_json;
+    std::vector<std::pair<std::string, std::string>> fields;
+    if (!hdl::json::ParseObjectFields(raw, &fields) || fields.empty()) {
+        out.push_back(L'\n');
+        return out;
+    }
+
+    std::vector<std::pair<std::string, std::string>> scalars;
+    std::vector<std::pair<std::string, std::string>> arrays;
+    std::vector<std::pair<std::string, std::string>> objects;
+    for (auto& f : fields) {
+        if (!f.second.empty() && f.second[0] == '[') {
+            arrays.push_back(std::move(f));
+        } else if (!f.second.empty() && f.second[0] == '{') {
+            objects.push_back(std::move(f));
+        } else {
+            scalars.push_back(std::move(f));
+        }
+    }
+
+    for (const auto& s : scalars) {
+        out.push_back(L' ');
+        AppendFieldKv(&out, s.first, s.second);
+    }
+    out.push_back(L'\n');
+
+    for (const auto& a : arrays) {
+        std::vector<std::string> elems;
+        if (!hdl::json::ParseArrayElements(a.second, &elems)) {
+            continue;
+        }
+        for (const auto& e : elems) {
+            out += L"  ";
+            if (!e.empty() && e[0] == '{') {
+                std::vector<std::pair<std::string, std::string>> nested;
+                if (hdl::json::ParseObjectFields(e, &nested)) {
+                    bool first = true;
+                    for (const auto& nf : nested) {
+                        if (!first) {
+                            out.push_back(L' ');
+                        }
+                        first = false;
+                        AppendFieldKv(&out, nf.first, nf.second);
+                    }
+                } else {
+                    AppendUtf8AsWide(&out, e);
+                }
+            } else {
+                AppendUtf8AsWide(&out, HumanScalar(e));
+            }
+            out.push_back(L'\n');
+        }
+    }
+    for (const auto& o : objects) {
+        out += L"  ";
+        AppendFieldKv(&out, o.first, o.second);
+        out.push_back(L'\n');
+    }
+    return out;
+}
+
+int Render(const CmdCtx& ctx, const CommandResult& result) {
+    if (ctx.json) {
+        if (!result.ok() && result.data_json.empty()) {
+            EmitError(ctx, result.status, result.cmd.c_str(),
+                      result.hint.empty() ? nullptr : result.hint.c_str());
+        } else {
+            EmitEnvelope(ctx, result.status, result.cmd.c_str(), result.data_json);
+        }
+        return result.exit_code();
+    }
+    if (result.print_usage) {
+        PrintUsage();
+        return 1;
+    }
+    if (!result.ok() && result.data_json.empty()) {
+        if (!result.hint.empty()) {
+            wprintf(L"%ls\n", result.hint.c_str());
+        } else {
+            wprintf(L"status=%ls\n", StatusName(result.status));
+            PrintStatusHint(result.cmd, result.status);
+        }
+        return result.exit_code();
+    }
+    const std::wstring text = FormatHumanFromData(result.status, result.data_json);
+    fputws(text.c_str(), stdout);
+    if (!result.ok()) {
+        if (!result.hint.empty()) {
+            wprintf(L"  hint: %ls\n", result.hint.c_str());
+        } else {
+            PrintStatusHint(result.cmd, result.status);
+        }
+    }
+    return result.exit_code();
 }

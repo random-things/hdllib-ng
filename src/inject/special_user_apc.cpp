@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -8,14 +9,15 @@ namespace {
 // QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC = 0x1 (Win10 1809+)
 constexpr ULONG kSpecialUserApc = 0x1;
 
-using NtQueueApcThreadEx2_t = NTSTATUS(NTAPI*)(HANDLE ThreadHandle, HANDLE ReserveHandle, ULONG ApcFlags,
-                                               PVOID ApcRoutine, PVOID SystemArgument1,
-                                               PVOID SystemArgument2, PVOID SystemArgument3);
+using NtQueueApcThreadEx2_t = NTSTATUS(NTAPI*)(HANDLE ThreadHandle, HANDLE ReserveHandle,
+                                               ULONG ApcFlags, PVOID ApcRoutine,
+                                               PVOID SystemArgument1, PVOID SystemArgument2,
+                                               PVOID SystemArgument3);
 
 using NtQueueApcThreadEx_t = NTSTATUS(NTAPI*)(HANDLE ThreadHandle, HANDLE UserApcReserveHandle,
                                               PVOID ApcRoutine, PVOID Arg1, PVOID Arg2, PVOID Arg3);
 
-}  // namespace
+} // namespace
 
 HdlStatus SpecialUserApcMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     auto nt_q2 = reinterpret_cast<NtQueueApcThreadEx2_t>(
@@ -30,51 +32,47 @@ HdlStatus SpecialUserApcMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
         return HDL_E_NOT_FOUND;
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     const auto tids = EnumProcessThreads(pid);
     int queued = 0;
     for (DWORD tid : tids) {
-        HANDLE thread = OpenThread(THREAD_SET_CONTEXT, FALSE, tid);
+        win::unique_handle thread(OpenThread(THREAD_SET_CONTEXT, FALSE, tid));
         if (!thread) {
             continue;
         }
 
         NTSTATUS nt = static_cast<NTSTATUS>(0xC0000001);
         if (nt_q2) {
-            nt = nt_q2(thread, nullptr, kSpecialUserApc, reinterpret_cast<PVOID>(load_library),
-                       path_mem.ptr, nullptr, nullptr);
+            nt = nt_q2(thread.get(), nullptr, kSpecialUserApc,
+                       reinterpret_cast<PVOID>(load_library), path_mem.ptr, nullptr, nullptr);
         }
         // Older: NtQueueApcThreadEx without flags — still distinct from QueueUserAPC.
         if (nt < 0 && nt_q_ex) {
-            nt = nt_q_ex(thread, nullptr, reinterpret_cast<PVOID>(load_library), path_mem.ptr, nullptr,
-                         nullptr);
+            nt = nt_q_ex(thread.get(), nullptr, reinterpret_cast<PVOID>(load_library), path_mem.ptr,
+                         nullptr, nullptr);
         }
         if (nt >= 0) {
             ++queued;
         }
-        CloseHandle(thread);
     }
 
     if (queued == 0) {
-        CloseHandle(process);
         HDL_LOG_ERROR("SpecialUserApc: failed to queue on any thread");
         return HDL_E_FAILED;
     }
 
     st = PollForModule(pid, dll_path, out_base);
     path_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("SpecialUserApc inject into pid %u ok (queued=%d)", pid, queued);
@@ -84,5 +82,5 @@ HdlStatus SpecialUserApcMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

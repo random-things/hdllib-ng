@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 #include <evntprov.h>
 #include <evntrace.h>
@@ -17,8 +18,8 @@ namespace {
 constexpr GUID kHdlEtwProvider = {
     0xb5a6f0c1, 0x4e2d, 0x4a91, {0x9c, 0x3b, 0x7d, 0x1e, 0x8f, 0x0a, 0x2b, 0x44}};
 
-using EtwEventRegister_t = ULONG(NTAPI*)(LPCGUID ProviderId, PVOID EnableCallback, PVOID CallbackContext,
-                                         PREGHANDLE RegHandle);
+using EtwEventRegister_t = ULONG(NTAPI*)(LPCGUID ProviderId, PVOID EnableCallback,
+                                         PVOID CallbackContext, PREGHANDLE RegHandle);
 
 // EnableCallback: if IsEnabled != 0 → LoadLibraryW(path_imm)
 #pragma pack(push, 1)
@@ -60,7 +61,7 @@ struct EtwRegStub {
 };
 #pragma pack(pop)
 
-}  // namespace
+} // namespace
 
 HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -69,21 +70,20 @@ HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out
         return HDL_E_NOT_FOUND;
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     RemoteAlloc guid_mem;
-    if (!guid_mem.Alloc(process, sizeof(GUID)) || !guid_mem.Write(&kHdlEtwProvider, sizeof(GUID))) {
-        CloseHandle(process);
+    if (!guid_mem.Alloc(process.get(), sizeof(GUID)) ||
+        !guid_mem.Write(&kHdlEtwProvider, sizeof(GUID))) {
         return HDL_E_NO_MEM;
     }
 
@@ -94,9 +94,8 @@ HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out
     cb.jz_out[1] = 30;
 
     RemoteAlloc cb_mem;
-    if (!cb_mem.Alloc(process, sizeof(cb), PAGE_EXECUTE_READWRITE) ||
+    if (!cb_mem.Alloc(process.get(), sizeof(cb), PAGE_EXECUTE_READWRITE) ||
         !cb_mem.Write(&cb, sizeof(cb))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
@@ -108,28 +107,25 @@ HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out
     args.reg_handle_out = 0;
 
     RemoteAlloc args_mem;
-    if (!args_mem.Alloc(process, sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
-        CloseHandle(process);
+    if (!args_mem.Alloc(process.get(), sizeof(args)) || !args_mem.Write(&args, sizeof(args))) {
         return HDL_E_NO_MEM;
     }
 
     EtwRegStub reg_stub{};
     RemoteAlloc reg_stub_mem;
-    if (!reg_stub_mem.Alloc(process, sizeof(reg_stub), PAGE_EXECUTE_READWRITE) ||
+    if (!reg_stub_mem.Alloc(process.get(), sizeof(reg_stub), PAGE_EXECUTE_READWRITE) ||
         !reg_stub_mem.Write(&reg_stub, sizeof(reg_stub))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0,
-                                    reinterpret_cast<LPTHREAD_START_ROUTINE>(reg_stub_mem.ptr),
-                                    args_mem.ptr, 0, nullptr);
+    win::unique_handle t(::CreateRemoteThread(
+        process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(reg_stub_mem.ptr),
+        args_mem.ptr, 0, nullptr));
     if (!t) {
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
-    WaitForSingleObject(t, 10000);
-    CloseHandle(t);
+    WaitForSingleObject(t.get(), 10000);
+    t.reset();
 
     const ULONG buf_size = sizeof(EVENT_TRACE_PROPERTIES) + 64 * sizeof(wchar_t);
     std::vector<uint8_t> prop_buf(buf_size);
@@ -163,7 +159,6 @@ HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out
     cb_mem.Detach();
     args_mem.Detach();
     reg_stub_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("ETW enable-callback inject into pid %u ok", pid);
@@ -171,5 +166,5 @@ HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

@@ -1,179 +1,48 @@
-#include "memory.hpp"
-#include "log.hpp"
+#include "memory_internal.hpp"
 
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 #include <Psapi.h>
-
-#include <cstring>
 #include <new>
-#include <vector>
 
 #pragma comment(lib, "Psapi.lib")
 
 namespace hdl {
 namespace {
 
-bool IsReadableProtect(DWORD protect) {
-    protect &= 0xFF;
-    switch (protect) {
-    case PAGE_READONLY:
-    case PAGE_READWRITE:
-    case PAGE_WRITECOPY:
-    case PAGE_EXECUTE_READ:
-    case PAGE_EXECUTE_READWRITE:
-    case PAGE_EXECUTE_WRITECOPY:
-        return true;
-    default:
+bool PushHitImpl(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
+    if (CapReached(s)) {
         return false;
     }
-}
-
-bool IsExecutableProtect(DWORD protect) {
-    protect &= 0xFF;
-    switch (protect) {
-    case PAGE_EXECUTE:
-    case PAGE_EXECUTE_READ:
-    case PAGE_EXECUTE_READWRITE:
-    case PAGE_EXECUTE_WRITECOPY:
-        return true;
-    default:
-        return false;
+    if (s.retain_hits) {
+        s.addresses.push_back(address);
+        s.snapshots.insert(s.snapshots.end(), data, data + n);
     }
-}
-
-bool RegionCommittedReadable(const MEMORY_BASIC_INFORMATION& mbi) {
-    if (mbi.State != MEM_COMMIT) {
-        return false;
-    }
-    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
-        return false;
-    }
-    return IsReadableProtect(mbi.Protect);
-}
-
-struct ScanFilter {
-    uint32_t flags = 0;
-    uint64_t mod_base = 0;
-    uint64_t mod_end = 0;
-};
-
-bool RegionMatchesFilter(const MEMORY_BASIC_INFORMATION& mbi, const ScanFilter& f) {
-    if (!RegionCommittedReadable(mbi)) {
-        return false;
-    }
-    if (f.flags & HDL_SEARCH_IMAGE) {
-        if (mbi.Type != MEM_IMAGE) {
-            return false;
-        }
-    }
-    if (f.flags & HDL_SEARCH_EXECUTABLE) {
-        if (!IsExecutableProtect(mbi.Protect)) {
-            return false;
-        }
-    }
-    if (f.flags & HDL_SEARCH_MODULE) {
-        const uint64_t b = reinterpret_cast<uint64_t>(mbi.BaseAddress);
-        const uint64_t e = b + mbi.RegionSize;
-        if (e <= f.mod_base || b >= f.mod_end) {
+    ++s.emitted_hits;
+    if (s.on_hit) {
+        const HdlStatus st = s.on_hit(address, s.on_hit_user);
+        if (st != HDL_OK) {
+            s.abort_status = st;
             return false;
         }
     }
     return true;
 }
 
-HdlStatus BuildScanFilter(uint32_t flags, const wchar_t* module_or_null, ScanFilter* out) {
-    if (!out) {
-        return HDL_E_INVALID_ARG;
+bool PushHitFromMemoryImpl(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
+    std::vector<uint8_t> tmp(n);
+    if (!SehReadBytes(data, tmp.data(), n)) {
+        return true;
     }
-    *out = ScanFilter{};
-    out->flags = flags;
-    if (flags & HDL_SEARCH_MODULE) {
-        if (!module_or_null || !module_or_null[0]) {
-            return HDL_E_INVALID_ARG;
-        }
-        HMODULE mod = GetModuleHandleW(module_or_null);
-        if (!mod) {
-            /* try basename match via enum */
-            HMODULE mods[1024];
-            DWORD needed = 0;
-            if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
-                return HDL_E_NOT_FOUND;
-            }
-            const uint32_t count = needed / sizeof(HMODULE);
-            for (uint32_t i = 0; i < count; ++i) {
-                wchar_t path[MAX_PATH];
-                if (!GetModuleFileNameW(mods[i], path, MAX_PATH)) {
-                    continue;
-                }
-                const wchar_t* base = wcsrchr(path, L'\\');
-                base = base ? base + 1 : path;
-                if (_wcsicmp(base, module_or_null) == 0 || _wcsicmp(path, module_or_null) == 0) {
-                    mod = mods[i];
-                    break;
-                }
-            }
-        }
-        if (!mod) {
-            return HDL_E_NOT_FOUND;
-        }
-        MODULEINFO mi{};
-        if (!GetModuleInformation(GetCurrentProcess(), mod, &mi, sizeof(mi))) {
-            return HDL_E_FAILED;
-        }
-        out->mod_base = reinterpret_cast<uint64_t>(mi.lpBaseOfDll);
-        out->mod_end = out->mod_base + mi.SizeOfImage;
-    }
-    return HDL_OK;
+    return PushHitImpl(s, address, tmp.data(), n);
 }
 
-int HexNibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
+} // namespace
+
+bool PushHit(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
+    return PushHitImpl(s, address, data, n);
 }
 
-// SEH helpers must not contain C++ objects with destructors.
-size_t SehMemcpy(void* dst, const void* src, size_t size) {
-    size_t copied = 0;
-    __try {
-        memcpy(dst, src, size);
-        copied = size;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        copied = 0;
-    }
-    return copied;
-}
-
-int SehMatchAt(const uint8_t* data, const uint8_t* bytes, const uint8_t* mask, size_t len) {
-    int ok = 0;
-    __try {
-        ok = 1;
-        for (size_t i = 0; i < len; ++i) {
-            if (mask[i] && data[i] != bytes[i]) {
-                ok = 0;
-                break;
-            }
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = 0;
-    }
-    return ok;
-}
-
-int SehBytesEqual(const uint8_t* a, const uint8_t* b, size_t len) {
-    int ok = 0;
-    __try {
-        ok = memcmp(a, b, len) == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = 0;
-    }
-    return ok;
-}
-
-int SehReadBytes(const void* src, void* dst, size_t size) {
-    return SehMemcpy(dst, src, size) == size ? 1 : 0;
+bool PushHitFromMemory(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
+    return PushHitFromMemoryImpl(s, address, data, n);
 }
 
 size_t ValueWidth(int value_type) {
@@ -236,7 +105,6 @@ bool IsNumericType(int value_type) {
 }
 
 int CompareNumeric(int value_type, const uint8_t* a, const uint8_t* b) {
-    // Returns -1 if a<b, 0 if a==b, 1 if a>b (numeric sense).
     switch (value_type) {
     case HDL_VALUE_I8: {
         const int8_t va = *reinterpret_cast<const int8_t*>(a);
@@ -295,8 +163,10 @@ int CompareNumeric(int value_type, const uint8_t* a, const uint8_t* b) {
         float vb = 0;
         memcpy(&va, a, 4);
         memcpy(&vb, b, 4);
-        if (va < vb) return -1;
-        if (va > vb) return 1;
+        if (va < vb)
+            return -1;
+        if (va > vb)
+            return 1;
         return 0;
     }
     case HDL_VALUE_F64: {
@@ -304,8 +174,10 @@ int CompareNumeric(int value_type, const uint8_t* a, const uint8_t* b) {
         double vb = 0;
         memcpy(&va, a, 8);
         memcpy(&vb, b, 8);
-        if (va < vb) return -1;
-        if (va > vb) return 1;
+        if (va < vb)
+            return -1;
+        if (va > vb)
+            return 1;
         return 0;
     }
     default:
@@ -440,247 +312,72 @@ bool MatchCmp(int value_type, int cmp, const uint8_t* current, const uint8_t* pr
     }
 }
 
-}  // namespace
-
-// Concrete session; public API exposes this as opaque HdlSearchSession*.
-struct SearchSession {
-    int value_type = HDL_VALUE_BYTES;
-    int last_cmp = HDL_CMP_EXACT;
-    uint32_t alignment = 1;
-    uint32_t max_results = 0; /* 0 = unlimited */
-    size_t elem_size = 0;
-    bool active = false;
-    bool retain_hits = true;
-    uint32_t emitted_hits = 0; /* total hits seen (for !retain_hits / streaming) */
-    HdlStatus abort_status = HDL_OK;
-    SearchHitFn on_hit = nullptr;
-    void* on_hit_user = nullptr;
-    std::vector<uint8_t> needle;
-    std::vector<uint8_t> mask;
-    std::vector<uint64_t> addresses;
-    std::vector<uint8_t> snapshots;
-};
-
-size_t HitCount(const SearchSession& s) {
-    return s.retain_hits ? s.addresses.size() : static_cast<size_t>(s.emitted_hits);
-}
-
-bool CapReached(const SearchSession& s) {
-    return s.max_results != 0 && HitCount(s) >= static_cast<size_t>(s.max_results);
-}
-
-/* After a failed PushHit: abort_status if handler failed, else HDL_OK (cap reached). */
-HdlStatus AfterPushFail(const SearchSession& s) {
-    return s.abort_status != HDL_OK ? s.abort_status : HDL_OK;
-}
-
-SearchSession* AsSearch(HdlSearchSession* s) {
-    return reinterpret_cast<SearchSession*>(s);
-}
-const SearchSession* AsSearch(const HdlSearchSession* s) {
-    return reinterpret_cast<const SearchSession*>(s);
-}
-
-bool ParseAobPattern(const char* pattern, std::vector<uint8_t>& bytes, std::vector<uint8_t>& mask) {
-    bytes.clear();
-    mask.clear();
-    if (!pattern) {
-        return false;
+HdlStatus BuildScanFilter(uint32_t flags, const wchar_t* module_or_null, ScanFilter* out) {
+    if (!out) {
+        return HDL_E_INVALID_ARG;
     }
-
-    const char* p = pattern;
-    while (*p) {
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
-            ++p;
+    *out = ScanFilter{};
+    out->flags = flags;
+    if (flags & HDL_SEARCH_MODULE) {
+        if (!module_or_null || !module_or_null[0]) {
+            return HDL_E_INVALID_ARG;
         }
-        if (!*p) {
-            break;
-        }
-        if (*p == '?') {
-            bytes.push_back(0);
-            mask.push_back(0);
-            ++p;
-            if (*p == '?') {
-                ++p;
+        HMODULE mod = GetModuleHandleW(module_or_null);
+        if (!mod) {
+            HMODULE mods[1024];
+            DWORD needed = 0;
+            if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
+                return HDL_E_NOT_FOUND;
             }
-            continue;
+            const uint32_t count = needed / sizeof(HMODULE);
+            for (uint32_t i = 0; i < count; ++i) {
+                wchar_t path[MAX_PATH];
+                if (!GetModuleFileNameW(mods[i], path, MAX_PATH)) {
+                    continue;
+                }
+                const wchar_t* base = wcsrchr(path, L'\\');
+                base = base ? base + 1 : path;
+                if (_wcsicmp(base, module_or_null) == 0 || _wcsicmp(path, module_or_null) == 0) {
+                    mod = mods[i];
+                    break;
+                }
+            }
         }
-        const int hi = HexNibble(*p++);
-        if (hi < 0) {
-            return false;
+        if (!mod) {
+            return HDL_E_NOT_FOUND;
         }
-        while (*p == ' ' || *p == '\t') {
-            ++p;
-        }
-        if (!*p) {
-            return false;
-        }
-        const int lo = HexNibble(*p++);
-        if (lo < 0) {
-            return false;
-        }
-        bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
-        mask.push_back(0xFF);
-    }
-    return !bytes.empty() && bytes.size() == mask.size();
-}
-
-HdlStatus ReadMemory(uint64_t address, void* buffer, size_t size, size_t* bytes_read) {
-    if (!buffer || size == 0) {
-        return HDL_E_INVALID_ARG;
-    }
-    if (bytes_read) {
-        *bytes_read = 0;
-    }
-
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery(reinterpret_cast<LPCVOID>(address), &mbi, sizeof(mbi)) == 0) {
-        return HDL_E_ACCESS;
-    }
-    if (!RegionCommittedReadable(mbi)) {
-        return HDL_E_ACCESS;
-    }
-
-    const uint64_t region_end = reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize;
-    if (address >= region_end) {
-        return HDL_E_ACCESS;
-    }
-    const size_t max_in_region = static_cast<size_t>(region_end - address);
-    const size_t to_copy = size < max_in_region ? size : max_in_region;
-
-    const size_t copied = SehMemcpy(buffer, reinterpret_cast<const void*>(address), to_copy);
-    if (copied == 0) {
-        return HDL_E_ACCESS;
-    }
-    if (bytes_read) {
-        *bytes_read = copied;
-    }
-    return copied == size ? HDL_OK : HDL_E_ACCESS;
-}
-
-HdlStatus WriteMemory(uint64_t address, const void* buffer, size_t size, size_t* bytes_written) {
-    if (!buffer || size == 0) {
-        return HDL_E_INVALID_ARG;
-    }
-    if (bytes_written) {
-        *bytes_written = 0;
-    }
-
-    DWORD old_protect = 0;
-    if (!VirtualProtect(reinterpret_cast<LPVOID>(address), size, PAGE_EXECUTE_READWRITE, &old_protect)) {
-        return HDL_E_ACCESS;
-    }
-
-    const size_t copied = SehMemcpy(reinterpret_cast<void*>(address), buffer, size);
-
-    DWORD unused = 0;
-    VirtualProtect(reinterpret_cast<LPVOID>(address), size, old_protect, &unused);
-    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<LPCVOID>(address), size);
-
-    if (copied == 0) {
-        return HDL_E_ACCESS;
-    }
-    if (bytes_written) {
-        *bytes_written = copied;
-    }
-    return HDL_OK;
-}
-
-HdlStatus EnumRegions(HdlRegionInfo* out, uint32_t* inout_count) {
-    if (!inout_count) {
-        return HDL_E_INVALID_ARG;
-    }
-
-    std::vector<HdlRegionInfo> regions;
-    uint8_t* addr = nullptr;
-    MEMORY_BASIC_INFORMATION mbi{};
-
-    while (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
-        if (mbi.State == MEM_COMMIT) {
-            HdlRegionInfo info{};
-            info.base = reinterpret_cast<uint64_t>(mbi.BaseAddress);
-            info.size = mbi.RegionSize;
-            info.protect = mbi.Protect;
-            info.state = mbi.State;
-            info.type = mbi.Type;
-            regions.push_back(info);
-        }
-        const uintptr_t next = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        if (next <= reinterpret_cast<uintptr_t>(addr)) {
-            break;
-        }
-        addr = reinterpret_cast<uint8_t*>(next);
-    }
-
-    const uint32_t needed = static_cast<uint32_t>(regions.size());
-    if (!out || *inout_count < needed) {
-        *inout_count = needed;
-        return HDL_E_BUFFER_SMALL;
-    }
-    memcpy(out, regions.data(), needed * sizeof(HdlRegionInfo));
-    *inout_count = needed;
-    return HDL_OK;
-}
-
-HdlStatus EnumModules(HdlModuleInfo* out, uint32_t* inout_count) {
-    if (!inout_count) {
-        return HDL_E_INVALID_ARG;
-    }
-
-    HMODULE mods[1024];
-    DWORD needed = 0;
-    if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
-        return HDL_E_FAILED;
-    }
-
-    const uint32_t count = needed / sizeof(HMODULE);
-    if (!out || *inout_count < count) {
-        *inout_count = count;
-        return HDL_E_BUFFER_SMALL;
-    }
-
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlModuleInfo info{};
-        info.base = reinterpret_cast<uint64_t>(mods[i]);
         MODULEINFO mi{};
-        if (GetModuleInformation(GetCurrentProcess(), mods[i], &mi, sizeof(mi))) {
-            info.size = mi.SizeOfImage;
+        if (!GetModuleInformation(GetCurrentProcess(), mod, &mi, sizeof(mi))) {
+            return HDL_E_FAILED;
         }
-        GetModuleFileNameW(mods[i], info.path, 260);
-        out[i] = info;
+        out->mod_base = reinterpret_cast<uint64_t>(mi.lpBaseOfDll);
+        out->mod_end = out->mod_base + mi.SizeOfImage;
     }
-    *inout_count = count;
     return HDL_OK;
 }
 
-namespace {
-
-bool PushHit(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
-    if (CapReached(s)) {
+bool RegionMatchesFilter(const MEMORY_BASIC_INFORMATION& mbi, const ScanFilter& f) {
+    if (!RegionCommittedReadable(mbi)) {
         return false;
     }
-    if (s.retain_hits) {
-        s.addresses.push_back(address);
-        s.snapshots.insert(s.snapshots.end(), data, data + n);
+    if (f.flags & HDL_SEARCH_IMAGE) {
+        if (mbi.Type != MEM_IMAGE) {
+            return false;
+        }
     }
-    ++s.emitted_hits;
-    if (s.on_hit) {
-        const HdlStatus st = s.on_hit(address, s.on_hit_user);
-        if (st != HDL_OK) {
-            s.abort_status = st;
+    if (f.flags & HDL_SEARCH_EXECUTABLE) {
+        if (!IsExecutableProtect(mbi.Protect)) {
+            return false;
+        }
+    }
+    if (f.flags & HDL_SEARCH_MODULE) {
+        const uint64_t b = reinterpret_cast<uint64_t>(mbi.BaseAddress);
+        const uint64_t e = b + mbi.RegionSize;
+        if (e <= f.mod_base || b >= f.mod_end) {
             return false;
         }
     }
     return true;
-}
-
-bool PushHitFromMemory(SearchSession& s, uint64_t address, const uint8_t* data, size_t n) {
-    // Copy through SEH so wildcards / live memory become the snapshot, not the needle.
-    std::vector<uint8_t> tmp(n);
-    if (!SehReadBytes(data, tmp.data(), n)) {
-        return true;  // skip unreadable; keep scanning
-    }
-    return PushHit(s, address, tmp.data(), n);
 }
 
 HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t range_size,
@@ -780,7 +477,6 @@ HdlStatus ScanPatternRange(SearchSession& s, uint64_t range_start, uint64_t rang
                     ++i;
                 }
             } else {
-                // Exact byte needle (typed value / string).
                 size_t i = 0;
                 while (i <= last) {
                     const HdlStatus check = TokenCheck(token);
@@ -859,11 +555,10 @@ HdlStatus ScanAllReadable(SearchSession& s, uint64_t start, uint64_t size, const
         }
         return st;
     }
-    /* Explicit range: still honor filters when intersecting regions. */
     uint8_t* addr = reinterpret_cast<uint8_t*>(start);
-    const uint8_t* end = addr + size;
+    const uint8_t* end_ptr = addr + size;
     MEMORY_BASIC_INFORMATION mbi{};
-    while (addr < end && VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
+    while (addr < end_ptr && VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi)) {
         const HdlStatus cst = TokenCheck(token);
         if (cst != HDL_OK) {
             return cst;
@@ -941,9 +636,9 @@ HdlStatus PrepareNeedle(SearchSession& s, int value_type, int cmp, const void* v
         return HDL_OK;
     }
 
-    const bool needs_value =
-        cmp == HDL_CMP_EXACT || cmp == HDL_CMP_GREATER || cmp == HDL_CMP_LESS ||
-        cmp == HDL_CMP_INCREASED_BY || cmp == HDL_CMP_DECREASED_BY;
+    const bool needs_value = cmp == HDL_CMP_EXACT || cmp == HDL_CMP_GREATER ||
+                             cmp == HDL_CMP_LESS || cmp == HDL_CMP_INCREASED_BY ||
+                             cmp == HDL_CMP_DECREASED_BY;
     if (needs_value) {
         if (!value || value_size != width) {
             return HDL_E_INVALID_ARG;
@@ -952,45 +647,6 @@ HdlStatus PrepareNeedle(SearchSession& s, int value_type, int cmp, const void* v
                         static_cast<const uint8_t*>(value) + width);
     }
     return HDL_OK;
-}
-
-}  // namespace
-
-HdlStatus SearchMemory(uint64_t start, uint64_t size, const char* pattern, uint64_t* out_hits,
-                       uint32_t* inout_hit_count, volatile int* cancel) {
-    if (!pattern || !inout_hit_count) {
-        return HDL_E_INVALID_ARG;
-    }
-
-    HdlSearchSession* session = nullptr;
-    HdlStatus st = SearchCreate(&session);
-    if (st != HDL_OK) {
-        return st;
-    }
-
-    HdlSearchDesc desc{};
-    desc.start = start;
-    desc.size = size;
-    desc.value_type = HDL_VALUE_BYTES;
-    desc.cmp = HDL_CMP_EXACT;
-    desc.alignment = 1;
-    desc.max_results = *inout_hit_count; /* 0 = unlimited (e.g. size query) */
-    desc.value = pattern;
-    desc.value_size = 0;
-
-    st = SearchFirst(session, &desc, cancel);
-    if (st == HDL_OK || st == HDL_E_CANCELLED) {
-        uint32_t count = *inout_hit_count;
-        const HdlStatus gst = SearchGetHits(session, out_hits, &count);
-        if (gst == HDL_E_BUFFER_SMALL && (!out_hits || *inout_hit_count == 0)) {
-            *inout_hit_count = count;
-            SearchClose(session);
-            return HDL_E_BUFFER_SMALL;
-        }
-        *inout_hit_count = count;
-    }
-    SearchClose(session);
-    return st;
 }
 
 HdlStatus SearchCreate(HdlSearchSession** out_session) {
@@ -1022,7 +678,6 @@ void SearchReset(HdlSearchSession* session) {
     s->elem_size = 0;
     s->emitted_hits = 0;
     s->abort_status = HDL_OK;
-    /* retain_hits / on_hit survive reset so IPC can arm a sink before SearchFirst. */
 }
 
 void SearchSetHitHandler(HdlSearchSession* session, SearchHitFn fn, void* user) {
@@ -1046,7 +701,8 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, vola
     return SearchFirst(session, desc, MakeToken(cancel, nullptr));
 }
 
-HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, const CancelToken& token) {
+HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc,
+                      const CancelToken& token) {
     SearchSession* s = AsSearch(session);
     if (!s || !desc) {
         return HDL_E_INVALID_ARG;
@@ -1054,8 +710,8 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
 
     SearchReset(session);
 
-    if (desc->cmp != HDL_CMP_EXACT && desc->cmp != HDL_CMP_UNKNOWN && desc->cmp != HDL_CMP_GREATER &&
-        desc->cmp != HDL_CMP_LESS) {
+    if (desc->cmp != HDL_CMP_EXACT && desc->cmp != HDL_CMP_UNKNOWN &&
+        desc->cmp != HDL_CMP_GREATER && desc->cmp != HDL_CMP_LESS) {
         return HDL_E_INVALID_ARG;
     }
     if (desc->cmp == HDL_CMP_UNKNOWN && !IsNumericType(desc->value_type)) {
@@ -1068,7 +724,7 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         return prep;
     }
 
-    s->max_results = desc->max_results; /* 0 = unlimited */
+    s->max_results = desc->max_results;
     s->alignment = desc->alignment ? desc->alignment : NaturalAlignment(desc->value_type);
     if (s->alignment == 0) {
         s->alignment = 1;
@@ -1080,7 +736,6 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         return fst;
     }
 
-    // GREATER/LESS first scan: walk candidates of natural width and filter.
     const bool unknown_fill = (desc->cmp == HDL_CMP_UNKNOWN) || (desc->cmp == HDL_CMP_GREATER) ||
                               (desc->cmp == HDL_CMP_LESS);
 
@@ -1090,13 +745,12 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         probe.elem_size = s->elem_size;
         probe.alignment = s->alignment;
         probe.max_results = s->max_results;
-        probe.retain_hits = true; /* need snapshots to filter GREATER/LESS */
+        probe.retain_hits = true;
         probe.on_hit = (desc->cmp == HDL_CMP_UNKNOWN) ? s->on_hit : nullptr;
         probe.on_hit_user = s->on_hit_user;
         probe.active = true;
 
-        HdlStatus st =
-            ScanAllReadable(probe, desc->start, desc->size, token, /*unknown_fill=*/true, filter);
+        HdlStatus st = ScanAllReadable(probe, desc->start, desc->size, token, true, filter);
         if (st != HDL_OK) {
             return st;
         }
@@ -1111,11 +765,9 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
             return HDL_OK;
         }
 
-        // Filter GREATER/LESS against value; deliver via session PushHit (handler + retain).
         for (size_t i = 0; i < probe.addresses.size(); ++i) {
             const uint8_t* cur = probe.snapshots.data() + i * s->elem_size;
-            if (MatchCmp(s->value_type, desc->cmp, cur, nullptr, s->needle.data(),
-                         s->elem_size)) {
+            if (MatchCmp(s->value_type, desc->cmp, cur, nullptr, s->needle.data(), s->elem_size)) {
                 if (!PushHit(*s, probe.addresses[i], cur, s->elem_size)) {
                     s->active = true;
                     return AfterPushFail(*s);
@@ -1130,8 +782,7 @@ HdlStatus SearchFirst(HdlSearchSession* session, const HdlSearchDesc* desc, cons
         return HDL_E_INVALID_ARG;
     }
 
-    const HdlStatus st =
-        ScanAllReadable(*s, desc->start, desc->size, token, /*unknown_fill=*/false, filter);
+    const HdlStatus st = ScanAllReadable(*s, desc->start, desc->size, token, false, filter);
     if (st != HDL_OK) {
         SearchReset(session);
         return st;
@@ -1155,8 +806,9 @@ HdlStatus SearchNext(HdlSearchSession* session, int cmp, const void* value, size
         return HDL_E_INVALID_ARG;
     }
 
-    const bool needs_value = cmp == HDL_CMP_EXACT || cmp == HDL_CMP_GREATER || cmp == HDL_CMP_LESS ||
-                             cmp == HDL_CMP_INCREASED_BY || cmp == HDL_CMP_DECREASED_BY;
+    const bool needs_value = cmp == HDL_CMP_EXACT || cmp == HDL_CMP_GREATER ||
+                             cmp == HDL_CMP_LESS || cmp == HDL_CMP_INCREASED_BY ||
+                             cmp == HDL_CMP_DECREASED_BY;
     std::vector<uint8_t> needle;
     if (s->value_type == HDL_VALUE_BYTES) {
         if (cmp != HDL_CMP_EXACT && cmp != HDL_CMP_CHANGED && cmp != HDL_CMP_UNCHANGED) {
@@ -1221,8 +873,7 @@ HdlStatus SearchNext(HdlSearchSession* session, int cmp, const void* value, size
         }
         const uint64_t address = s->addresses[i];
         const uint8_t* prev = s->snapshots.data() + i * s->elem_size;
-        if (!SehReadBytes(reinterpret_cast<const void*>(address), current.data(),
-                          s->elem_size)) {
+        if (!SehReadBytes(reinterpret_cast<const void*>(address), current.data(), s->elem_size)) {
             continue;
         }
 
@@ -1260,7 +911,8 @@ HdlStatus SearchGetCount(const HdlSearchSession* session, uint32_t* out_count) {
     return HDL_OK;
 }
 
-HdlStatus SearchGetHits(const HdlSearchSession* session, uint64_t* out_hits, uint32_t* inout_count) {
+HdlStatus SearchGetHits(const HdlSearchSession* session, uint64_t* out_hits,
+                        uint32_t* inout_count) {
     const SearchSession* s = AsSearch(session);
     if (!s || !inout_count) {
         return HDL_E_INVALID_ARG;
@@ -1277,4 +929,4 @@ HdlStatus SearchGetHits(const HdlSearchSession* session, uint64_t* out_hits, uin
     return HDL_OK;
 }
 
-}  // namespace hdl
+} // namespace hdl

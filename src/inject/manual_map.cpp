@@ -2,6 +2,7 @@
 #include "inject/pe_image_view.hpp"
 #include "inject/pe_relocs.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -19,22 +20,21 @@ const uint8_t* FileAtRva(const PeImageView& pe, uint32_t rva, size_t need = 1) {
 
 HMODULE FindRemoteModule(HANDLE process, const wchar_t* name) {
     DWORD pid = GetProcessId(process);
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snap == INVALID_HANDLE_VALUE) {
+    win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid));
+    if (!snap) {
         return nullptr;
     }
     MODULEENTRY32W me{};
     me.dwSize = sizeof(me);
     HMODULE found = nullptr;
-    if (Module32FirstW(snap, &me)) {
+    if (Module32FirstW(snap.get(), &me)) {
         do {
             if (_wcsicmp(me.szModule, name) == 0 || PathEndsWithFile(me.szExePath, name)) {
                 found = me.hModule;
                 break;
             }
-        } while (Module32NextW(snap, &me));
+        } while (Module32NextW(snap.get(), &me));
     }
-    CloseHandle(snap);
     return found;
 }
 
@@ -74,12 +74,12 @@ HMODULE LoadRemoteModule(HANDLE process, const char* mod_name) {
     if (!load_a) {
         return nullptr;
     }
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0, load_a, name_mem.ptr, 0, nullptr);
+    win::unique_handle t(
+        ::CreateRemoteThread(process, nullptr, 0, load_a, name_mem.ptr, 0, nullptr));
     if (!t) {
         return nullptr;
     }
-    WaitForSingleObject(t, INFINITE);
-    CloseHandle(t);
+    WaitForSingleObject(t.get(), INFINITE);
     // Never use GetExitCodeThread for HMODULE — it truncates 64-bit bases.
     if (HMODULE loaded = FindRemoteModule(process, wname)) {
         return loaded;
@@ -387,23 +387,21 @@ bool ApplyRelocationsRemote(uint8_t* remote_base, HANDLE process, const PeImageV
 HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     // Inject API: dll_path is a NormalizePath'd caller-chosen module file.
     // codeql[cpp/path-injection]
-    HANDLE file = CreateFileW(dll_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    win::unique_handle file(CreateFileW(dll_path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file) {
         return HDL_E_NOT_FOUND;
     }
-    const DWORD size = GetFileSize(file, nullptr);
+    const DWORD size = GetFileSize(file.get(), nullptr);
     if (size == INVALID_FILE_SIZE || size < sizeof(IMAGE_DOS_HEADER)) {
-        CloseHandle(file);
         return HDL_E_FAILED;
     }
     std::vector<uint8_t> buf(size);
     DWORD read = 0;
-    if (!ReadFile(file, buf.data(), size, &read, nullptr) || read != size) {
-        CloseHandle(file);
+    if (!ReadFile(file.get(), buf.data(), size, &read, nullptr) || read != size) {
         return HDL_E_FAILED;
     }
-    CloseHandle(file);
+    file.reset();
 
     PeImageView pe;
     if (!PeImageView::TryOpen(std::span<const uint8_t>(buf.data(), buf.size()), &pe)) {
@@ -412,22 +410,19 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
     }
     const auto* nt = pe.nt();
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
-    void* remote = VirtualAllocEx(process, nullptr, nt->OptionalHeader.SizeOfImage,
-                                  MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!remote) {
-        CloseHandle(process);
+    RemoteAlloc remote_image;
+    if (!remote_image.Alloc(process.get(), nt->OptionalHeader.SizeOfImage,
+                            PAGE_EXECUTE_READWRITE)) {
         return HDL_E_NO_MEM;
     }
 
-    if (!WriteProcessMemory(process, remote, buf.data(), nt->OptionalHeader.SizeOfHeaders,
-                            nullptr)) {
-        VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
+    if (!WriteProcessMemory(process.get(), remote_image.ptr, buf.data(),
+                            nt->OptionalHeader.SizeOfHeaders, nullptr)) {
         return HDL_E_FAILED;
     }
 
@@ -438,32 +433,27 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
         }
         if (!pe.ContainsFileRange(sec->PointerToRawData, sec->SizeOfRawData) ||
             !pe.VaInImage(sec->VirtualAddress, sec->SizeOfRawData)) {
-            VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-            CloseHandle(process);
             return HDL_E_FAILED;
         }
-        if (!WriteProcessMemory(process, static_cast<uint8_t*>(remote) + sec->VirtualAddress,
+        if (!WriteProcessMemory(process.get(),
+                                static_cast<uint8_t*>(remote_image.ptr) + sec->VirtualAddress,
                                 buf.data() + sec->PointerToRawData, sec->SizeOfRawData, nullptr)) {
-            VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-            CloseHandle(process);
             return HDL_E_FAILED;
         }
     }
 
-    const uint64_t delta = reinterpret_cast<uint64_t>(remote) - nt->OptionalHeader.ImageBase;
-    if (!ApplyRelocationsRemote(static_cast<uint8_t*>(remote), process, pe, delta)) {
-        VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
+    const uint64_t delta =
+        reinterpret_cast<uint64_t>(remote_image.ptr) - nt->OptionalHeader.ImageBase;
+    if (!ApplyRelocationsRemote(static_cast<uint8_t*>(remote_image.ptr), process.get(), pe,
+                                delta)) {
         return HDL_E_FAILED;
     }
-    if (!ResolveRemoteImports(process, static_cast<uint8_t*>(remote), pe)) {
-        VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
+    if (!ResolveRemoteImports(process.get(), static_cast<uint8_t*>(remote_image.ptr), pe)) {
         return HDL_E_FAILED;
     }
 
     const uint64_t entry =
-        reinterpret_cast<uint64_t>(remote) + nt->OptionalHeader.AddressOfEntryPoint;
+        reinterpret_cast<uint64_t>(remote_image.ptr) + nt->OptionalHeader.AddressOfEntryPoint;
 
 #if defined(_M_X64) || defined(__x86_64__)
 #pragma pack(push, 1)
@@ -483,36 +473,34 @@ HdlStatus ManualMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_b
 #pragma pack(pop)
 
     CallDllMainStub stub{};
-    stub.hmodule = reinterpret_cast<uint64_t>(remote);
+    stub.hmodule = reinterpret_cast<uint64_t>(remote_image.ptr);
     stub.entry = entry;
 
     RemoteAlloc remote_stub;
-    if (!remote_stub.Alloc(process, sizeof(stub), PAGE_EXECUTE_READWRITE) ||
+    if (!remote_stub.Alloc(process.get(), sizeof(stub), PAGE_EXECUTE_READWRITE) ||
         !remote_stub.Write(&stub, sizeof(stub))) {
-        VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    HANDLE thread = ::CreateRemoteThread(process, nullptr, 0,
-                                         reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub.ptr),
-                                         nullptr, 0, nullptr);
+    win::unique_handle thread(::CreateRemoteThread(
+        process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub.ptr),
+        nullptr, 0, nullptr));
     if (!thread) {
-        VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
-    WaitForSingleObject(thread, INFINITE);
-    CloseHandle(thread);
+    WaitForSingleObject(thread.get(), INFINITE);
+    thread.reset();
     remote_stub.Detach();
 #else
     (void)entry;
 #endif
 
+    // Success — the mapped image stays in the target; do not free.
+    void* remote = remote_image.Detach();
+
     if (out_base) {
         *out_base = reinterpret_cast<uint64_t>(remote);
     }
-    CloseHandle(process);
     HDL_LOG_INFO("Manual map inject into pid %u at %p", pid, remote);
     return HDL_OK;
 }

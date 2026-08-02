@@ -1,4 +1,5 @@
 #include "inject/common.hpp"
+#include "win/raii.hpp"
 
 #include <cwctype>
 
@@ -63,22 +64,21 @@ uint64_t FindModuleBaseByPath(DWORD pid, const wchar_t* dll_path) {
     const wchar_t* file = wcsrchr(want.c_str(), L'\\');
     file = file ? file + 1 : want.c_str();
 
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snap == INVALID_HANDLE_VALUE) {
+    win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid));
+    if (!snap) {
         return 0;
     }
     MODULEENTRY32W me{};
     me.dwSize = sizeof(me);
     uint64_t base = 0;
-    if (Module32FirstW(snap, &me)) {
+    if (Module32FirstW(snap.get(), &me)) {
         do {
             if (PathsEqual(me.szExePath, want.c_str()) || PathEndsWithFile(me.szExePath, file)) {
                 base = reinterpret_cast<uint64_t>(me.modBaseAddr);
                 break;
             }
-        } while (Module32NextW(snap, &me));
+        } while (Module32NextW(snap.get(), &me));
     }
-    CloseHandle(snap);
     return base;
 }
 
@@ -95,20 +95,19 @@ FARPROC GetKernel32Proc(const char* name) {
 
 std::vector<DWORD> EnumProcessThreads(DWORD pid) {
     std::vector<DWORD> tids;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap == INVALID_HANDLE_VALUE) {
+    win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
+    if (!snap) {
         return tids;
     }
     THREADENTRY32 te{};
     te.dwSize = sizeof(te);
-    if (Thread32First(snap, &te)) {
+    if (Thread32First(snap.get(), &te)) {
         do {
             if (te.th32OwnerProcessID == pid) {
                 tids.push_back(te.th32ThreadID);
             }
-        } while (Thread32Next(snap, &te));
+        } while (Thread32Next(snap.get(), &te));
     }
-    CloseHandle(snap);
     return tids;
 }
 
@@ -200,7 +199,7 @@ BOOL CALLBACK EnumAnyWindow(HWND hwnd, LPARAM lparam) {
     return TRUE;
 }
 
-}  // namespace
+} // namespace
 
 HWND FindWindowForPid(DWORD pid) {
     EnumWindowCtx ctx{pid, nullptr};
@@ -276,7 +275,7 @@ BOOL CALLBACK EnumMatchWindow(HWND hwnd, LPARAM lparam) {
     return TRUE;
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus FindWindowByTitleClass(DWORD pid, const wchar_t* title_substr_or_null,
                                  const wchar_t* class_name_or_null, HWND* out_hwnd,
@@ -324,9 +323,9 @@ HdlStatus AtomWriteW(HANDLE thread, ATOM atom, void* remote_dest, ULONG cch) {
     if (!nt_q || !get_atom) {
         return HDL_E_NOT_FOUND;
     }
-    const NTSTATUS st =
-        nt_q(thread, reinterpret_cast<PVOID>(get_atom), reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(atom)),
-             remote_dest, reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(cch)));
+    const NTSTATUS st = nt_q(thread, reinterpret_cast<PVOID>(get_atom),
+                             reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(atom)), remote_dest,
+                             reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(cch)));
     return st >= 0 ? HDL_OK : HDL_E_FAILED;
 }
 
@@ -339,9 +338,9 @@ HdlStatus ApcMemsetWrite(HANDLE thread, void* remote_dest, const void* data, siz
     const auto* bytes = static_cast<const uint8_t*>(data);
     auto* dest = static_cast<uint8_t*>(remote_dest);
     for (size_t i = 0; i < size; ++i) {
-        const NTSTATUS st =
-            nt_q(thread, reinterpret_cast<PVOID>(memset_fn), dest + i,
-                 reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(bytes[i])), reinterpret_cast<PVOID>(1));
+        const NTSTATUS st = nt_q(thread, reinterpret_cast<PVOID>(memset_fn), dest + i,
+                                 reinterpret_cast<PVOID>(static_cast<ULONG_PTR>(bytes[i])),
+                                 reinterpret_cast<PVOID>(1));
         if (st < 0) {
             return HDL_E_FAILED;
         }
@@ -381,14 +380,14 @@ HdlStatus AllocLoadLibraryStub(HANDLE process, const wchar_t* dll_path, RemoteAl
 
 void RegisterCfgCallTarget(HANDLE process, void* stub) {
 #ifndef CFG_CALL_TARGET_VALID
-#  define CFG_CALL_TARGET_VALID 0x00000001u
+#define CFG_CALL_TARGET_VALID 0x00000001u
 #endif
     struct CfgCallTargetInfo {
         ULONG_PTR Offset;
         ULONG_PTR Flags;
     };
-    using SetProcessValidCallTargets_t = BOOL(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG,
-                                                       CfgCallTargetInfo*);
+    using SetProcessValidCallTargets_t =
+        BOOL(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, CfgCallTargetInfo*);
 
     auto set_cfg = reinterpret_cast<SetProcessValidCallTargets_t>(
         GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "SetProcessValidCallTargets"));
@@ -409,5 +408,5 @@ void RegisterCfgCallTarget(HANDLE process, void* stub) {
     set_cfg(process, region, page, 1, &info);
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

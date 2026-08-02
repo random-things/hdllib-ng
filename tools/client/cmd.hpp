@@ -1,6 +1,8 @@
 #pragma once
 
+#include "command_result.hpp"
 #include "pipe_client.hpp"
+
 #include "hdllib/hdllib.h"
 
 #include <cstdint>
@@ -23,78 +25,78 @@ struct CmdCtx {
     bool json = false;
 };
 
-using CmdHandler = int (*)(CmdCtx& ctx);
+using CmdHandler = CommandResult (*)(CmdCtx& ctx);
 
 struct CmdEntry {
     const wchar_t* name;
     CmdHandler handler;
 };
 
-int CmdPing(CmdCtx& ctx);
-int CmdLog(CmdCtx& ctx);
-int CmdLogFile(CmdCtx& ctx);
-int CmdHealthVeh(CmdCtx& ctx);
-int CmdModules(CmdCtx& ctx);
-int CmdRegions(CmdCtx& ctx);
-int CmdThreads(CmdCtx& ctx);
-int CmdHealth(CmdCtx& ctx);
-int CmdFingerprint(CmdCtx& ctx);
-int CmdEvents(CmdCtx& ctx);
-int CmdJob(CmdCtx& ctx);
-int CmdRead(CmdCtx& ctx);
-int CmdWrite(CmdCtx& ctx);
-int CmdResolve(CmdCtx& ctx);
-int CmdCall(CmdCtx& ctx);
-int CmdVcall(CmdCtx& ctx);
-int CmdAlloc(CmdCtx& ctx);
-int CmdFree(CmdCtx& ctx);
-int CmdHooktrace(CmdCtx& ctx);
-int CmdHook(CmdCtx& ctx);
-int CmdUnhook(CmdCtx& ctx);
-int CmdHookEnable(CmdCtx& ctx);
-int CmdHookhits(CmdCtx& ctx);
-int CmdHookImport(CmdCtx& ctx);
-int CmdRip(CmdCtx& ctx);
-int CmdPtrchain(CmdCtx& ctx);
-int CmdModbase(CmdCtx& ctx);
-int CmdResolvePattern(CmdCtx& ctx);
-int CmdXrefs(CmdCtx& ctx);
-int CmdPtrscan(CmdCtx& ctx);
-int CmdProbe(CmdCtx& ctx);
-int CmdScan(CmdCtx& ctx);
-int CmdInject(CmdCtx& ctx);
-int CmdUnload(CmdCtx& ctx);
-int CmdShutdown(CmdCtx& ctx);
-int CmdDiscoverCreate(CmdCtx& ctx);
-int CmdDiscoverClose(CmdCtx& ctx);
-int CmdDiscoverAdd(CmdCtx& ctx);
-int CmdDiscoverConstraint(CmdCtx& ctx);
-int CmdDiscoverSynth(CmdCtx& ctx);
-int CmdDiscoverPathscan(CmdCtx& ctx);
-int CmdDiscoverPathValidate(CmdCtx& ctx);
-int CmdDiscoverScan(CmdCtx& ctx);
-int CmdDiscoverMisc(CmdCtx& ctx);
+CommandResult CmdPing(CmdCtx& ctx);
+CommandResult CmdLog(CmdCtx& ctx);
+CommandResult CmdLogFile(CmdCtx& ctx);
+CommandResult CmdHealthVeh(CmdCtx& ctx);
+CommandResult CmdModules(CmdCtx& ctx);
+CommandResult CmdRegions(CmdCtx& ctx);
+CommandResult CmdThreads(CmdCtx& ctx);
+CommandResult CmdHealth(CmdCtx& ctx);
+CommandResult CmdFingerprint(CmdCtx& ctx);
+CommandResult CmdEvents(CmdCtx& ctx);
+CommandResult CmdJob(CmdCtx& ctx);
+CommandResult CmdRead(CmdCtx& ctx);
+CommandResult CmdWrite(CmdCtx& ctx);
+CommandResult CmdResolve(CmdCtx& ctx);
+CommandResult CmdCall(CmdCtx& ctx);
+CommandResult CmdVcall(CmdCtx& ctx);
+CommandResult CmdAlloc(CmdCtx& ctx);
+CommandResult CmdFree(CmdCtx& ctx);
+CommandResult CmdHooktrace(CmdCtx& ctx);
+CommandResult CmdHook(CmdCtx& ctx);
+CommandResult CmdUnhook(CmdCtx& ctx);
+CommandResult CmdHookEnable(CmdCtx& ctx);
+CommandResult CmdHookhits(CmdCtx& ctx);
+CommandResult CmdHookImport(CmdCtx& ctx);
+CommandResult CmdRip(CmdCtx& ctx);
+CommandResult CmdPtrchain(CmdCtx& ctx);
+CommandResult CmdModbase(CmdCtx& ctx);
+CommandResult CmdResolvePattern(CmdCtx& ctx);
+CommandResult CmdXrefs(CmdCtx& ctx);
+CommandResult CmdPtrscan(CmdCtx& ctx);
+CommandResult CmdProbe(CmdCtx& ctx);
+CommandResult CmdScan(CmdCtx& ctx);
+CommandResult CmdInject(CmdCtx& ctx);
+CommandResult CmdUnload(CmdCtx& ctx);
+CommandResult CmdShutdown(CmdCtx& ctx);
+CommandResult CmdDiscoverCreate(CmdCtx& ctx);
+CommandResult CmdDiscoverClose(CmdCtx& ctx);
+CommandResult CmdDiscoverAdd(CmdCtx& ctx);
+CommandResult CmdDiscoverConstraint(CmdCtx& ctx);
+CommandResult CmdDiscoverSynth(CmdCtx& ctx);
+CommandResult CmdDiscoverPathscan(CmdCtx& ctx);
+CommandResult CmdDiscoverPathValidate(CmdCtx& ctx);
+CommandResult CmdDiscoverScan(CmdCtx& ctx);
+CommandResult CmdDiscoverMisc(CmdCtx& ctx);
 
-int CmdCaves(CmdCtx& ctx);
-int CmdAllocNear(CmdCtx& ctx);
-int CmdProtect(CmdCtx& ctx);
-int CmdFlushICache(CmdCtx& ctx);
-int CmdDisasmBackend(CmdCtx& ctx);
-int CmdDisasm(CmdCtx& ctx);
-int CmdInstrLen(CmdCtx& ctx);
-int CmdSections(CmdCtx& ctx);
-int CmdExports(CmdCtx& ctx);
-int CmdImports(CmdCtx& ctx);
-int CmdFunctions(CmdCtx& ctx);
-int CmdXrefsFrom(CmdCtx& ctx);
-int CmdResolveFunction(CmdCtx& ctx);
-int CmdXrefsTo(CmdCtx& ctx);
-int CmdInvalidateFnIndex(CmdCtx& ctx);
-int CmdVtable(CmdCtx& ctx);
-int CmdRtti(CmdCtx& ctx);
-int CmdWatch(CmdCtx& ctx);
-int CmdPatch(CmdCtx& ctx);
-int CmdStub(CmdCtx& ctx);
+CommandResult CmdCaves(CmdCtx& ctx);
+CommandResult CmdAllocNear(CmdCtx& ctx);
+CommandResult CmdProtect(CmdCtx& ctx);
+CommandResult CmdFlushICache(CmdCtx& ctx);
+CommandResult CmdDisasmBackend(CmdCtx& ctx);
+CommandResult CmdDisasm(CmdCtx& ctx);
+CommandResult CmdInstrLen(CmdCtx& ctx);
+CommandResult CmdSections(CmdCtx& ctx);
+CommandResult CmdExports(CmdCtx& ctx);
+CommandResult CmdImports(CmdCtx& ctx);
+CommandResult CmdFunctions(CmdCtx& ctx);
+CommandResult CmdXrefsFrom(CmdCtx& ctx);
+CommandResult CmdResolveFunction(CmdCtx& ctx);
+CommandResult CmdXrefsTo(CmdCtx& ctx);
+CommandResult CmdInvalidateFnIndex(CmdCtx& ctx);
+CommandResult CmdVtable(CmdCtx& ctx);
+CommandResult CmdRtti(CmdCtx& ctx);
+CommandResult CmdWatch(CmdCtx& ctx);
+CommandResult CmdPatch(CmdCtx& ctx);
+CommandResult CmdStub(CmdCtx& ctx);
 
 bool ClientParsePred(const wchar_t* spec, HdlFieldPred* out);
 const CmdEntry* GetCommandTable(size_t* out_count);
