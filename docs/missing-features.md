@@ -208,7 +208,7 @@ structured output and preferably a binding thicker than hand-rolled pipe frames.
 3. Optionally publish a minimal C++/Python helper that wraps `PipeClient`
    framing (even if Python is ctypes over a small shim DLL).
 4. Tie to protocol capabilities (item 1) so automation can feature-detect.
-5. Keep human text as default; never break existing REPL formatting.
+5. Keep human text as default; never break existing CLI formatting.
 6. Expand golden schema fixtures beyond ping/modules/error
    (see [missing-usability.md](missing-usability.md) §1).
 

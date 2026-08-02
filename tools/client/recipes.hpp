@@ -13,9 +13,10 @@ using LogFn = std::function<void(const std::wstring&)>;
 
 struct ControllerState {
     PipeClient* client = nullptr;
+    uint32_t pid = 0;
     uint64_t discover_session = 0;
     InterestStore store;
-    std::wstring store_path = L"hdl_interests.json";
+    std::wstring store_path;
     HdlSynthesizedPattern last_synth{};
     std::vector<HdlCandidate> last_rank;
     uint64_t last_object = 0;
@@ -30,8 +31,15 @@ struct ControllerState {
     HdlPointerPath last_path{};
     bool last_path_valid = false;
     std::string last_path_module;
-    /* Interactive wait (REPL stdin / TUI get_wch). If empty, WaitEnterWide(). */
+    /* Optional wait hook for recipe action (one-shot uses --wait-ms / --signal FILE). */
     std::function<bool()> wait_enter;
+    /* When true, newly created discover sessions are written to the session sidecar. */
+    bool persist_session = true;
+};
+
+struct StabilizeResult {
+    int rc = 1;
+    std::string interest_name;
 };
 
 /* Record a path result for later `store add … path`. */
@@ -39,11 +47,12 @@ void RememberPath(ControllerState* st, const HdlPointerPath& path, const wchar_t
 
 int RevalidateStore(ControllerState& st, LogFn log);
 
-int RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn, LogFn log,
-                 const std::function<bool()>& wait_user);
+StabilizeResult RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn,
+                             LogFn log, const std::function<bool()>& wait_user);
 
-int RecipeConstrain(ControllerState& st, uint32_t object_size, const std::vector<HdlFieldPred>& preds,
-                    uint32_t search_flags, const wchar_t* module, LogFn log);
+int RecipeConstrain(ControllerState& st, uint32_t object_size,
+                    const std::vector<HdlFieldPred>& preds, uint32_t search_flags,
+                    const wchar_t* module, LogFn log);
 
 /* Find/score caves near target; record cave locator (or AllocNear fallback) on interest. */
 int RecipePlace(ControllerState& st, const char* interest_name, uint64_t near_addr,
@@ -59,11 +68,16 @@ int RecipeExpandStruct(ControllerState& st, uint64_t base, uint32_t size, LogFn 
 /* Print fingerprint-driven next-step suggestions (does not auto-run). */
 int RecipeSuggest(ControllerState& st, LogFn log);
 
-int StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* module, LogFn log);
+StabilizeResult StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* module,
+                                   LogFn log);
 
 bool EnsureDiscoverSession(ControllerState& st, LogFn log);
+
+/* Attach a path locator to interest NAME (in-memory). Caller owns load/save. */
+bool StoreAddPathInterest(ControllerState& st, const char* name, const HdlPointerPath& path,
+                          const wchar_t* module_or_null, std::wstring* err);
 
 /* Pick best cave: nearer first, then larger size. */
 size_t ScoreBestCave(const std::vector<HdlCaveInfo>& caves, uint64_t near_addr);
 
-}  // namespace hdlcli
+} // namespace hdlcli

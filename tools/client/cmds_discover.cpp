@@ -2,6 +2,7 @@
 #include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "recipes.hpp"
+#include "session_persist.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -124,6 +125,76 @@ bool ClientParsePred(const wchar_t* spec, HdlFieldPred* out) {
     return true;
 }
 
+static uint64_t SessionOrFallback(CmdCtx& ctx, uint64_t parsed) {
+    if (parsed) {
+        return parsed;
+    }
+    return hdlcli::ResolveSessionId(ctx);
+}
+
+static void JsonBeginWithSession(JsonWriter& w, uint64_t session) {
+    w.BeginObject();
+    w.Key("session");
+    w.HexStr(session);
+}
+
+static std::string SessionDataJson(uint64_t session) {
+    JsonWriter w;
+    JsonBeginWithSession(w, session);
+    w.EndObject();
+    return w.Take();
+}
+
+static const wchar_t* TakeStoreAddName(CmdCtx& ctx) {
+    for (int i = 3; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--store-add") == 0 && i + 1 < ctx.argc) {
+            return ctx.argv[i + 1];
+        }
+    }
+    return nullptr;
+}
+
+static bool ApplyStoreAddPath(CmdCtx& ctx, const HdlPointerPath& path,
+                              const wchar_t* module_or_null, CommandResult* err_out) {
+    const wchar_t* add_name = TakeStoreAddName(ctx);
+    if (!add_name) {
+        return true;
+    }
+    if (!ctx.store_path || !ctx.store_path[0]) {
+        if (err_out) {
+            *err_out = FailArg(ctx, L"--store-add requires --store PATH");
+        }
+        return false;
+    }
+    hdlcli::ControllerState st;
+    st.client = &ctx.client;
+    st.pid = ctx.pid;
+    st.store_path = ctx.store_path;
+    if (GetFileAttributesW(ctx.store_path) != INVALID_FILE_ATTRIBUTES) {
+        if (!st.store.Load(ctx.store_path)) {
+            if (err_out) {
+                *err_out = CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store load failed");
+            }
+            return false;
+        }
+    }
+    std::wstring err;
+    if (!hdlcli::StoreAddPathInterest(st, WideToUtf8(add_name).c_str(), path, module_or_null,
+                                      &err)) {
+        if (err_out) {
+            *err_out = CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, err.c_str());
+        }
+        return false;
+    }
+    if (!st.store.Save(ctx.store_path)) {
+        if (err_out) {
+            *err_out = CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store save failed");
+        }
+        return false;
+    }
+    return true;
+}
+
 CommandResult CmdDiscoverCreate(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
@@ -138,6 +209,11 @@ CommandResult CmdDiscoverCreate(CmdCtx& ctx) {
     uint64_t id = 0;
     if (!r.TakePod(st) || !r.TakePod(id)) {
         return FailBadResp(ctx);
+    }
+    if (st == HDL_OK && id) {
+        if (!hdlcli::PersistSessionId(ctx, id)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"session sidecar write failed");
+        }
     }
     JsonWriter w;
     w.BeginObject();
@@ -158,6 +234,7 @@ CommandResult CmdDiscoverClose(CmdCtx& ctx) {
             id = _wcstoui64(ctx.argv[++i], nullptr, 0);
         }
     }
+    id = SessionOrFallback(ctx, id);
     AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
     AppendPod(req, id);
     if (!ctx.client.Request(req, resp)) {
@@ -166,7 +243,17 @@ CommandResult CmdDiscoverClose(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
-    return CmdStatus(ctx.cmd.c_str(), st, "{}");
+    if (st == HDL_OK) {
+        if (!hdlcli::ClearPersistedSession(ctx.pid, ctx.store_path)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"session sidecar clear failed");
+        }
+    }
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("session");
+    w.HexStr(id);
+    w.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
 }
 
 CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
@@ -196,6 +283,7 @@ CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
             tag = Narrow(ctx.argv[++i]);
         }
     }
+    id = SessionOrFallback(ctx, id);
     AppendPod(req, static_cast<uint32_t>(OpDiscoverAddCandidate));
     AppendPod(req, id);
     AppendPod(req, kind);
@@ -210,7 +298,7 @@ CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
     r.TakePod(st);
     r.TakePod(cand);
     JsonWriter w;
-    w.BeginObject();
+    JsonBeginWithSession(w, id);
     w.Key("cand");
     w.HexStr(cand);
     w.EndObject();
@@ -251,6 +339,7 @@ CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
             tag = Narrow(ctx.argv[++i]);
         }
     }
+    id = SessionOrFallback(ctx, id);
     AppendPod(req, static_cast<uint32_t>(OpDiscoverConstraintScan));
     AppendPod(req, id);
     AppendPod(req, size);
@@ -268,7 +357,7 @@ CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
-    return CmdStatus(ctx.cmd.c_str(), st, "{}");
+    return CmdStatus(ctx.cmd.c_str(), st, SessionDataJson(id));
 }
 
 CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
@@ -296,6 +385,7 @@ CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
             flags |= HDL_SEARCH_MODULE;
         }
     }
+    id = SessionOrFallback(ctx, id);
     AppendPod(req, static_cast<uint32_t>(OpDiscoverSynthesizePattern));
     AppendPod(req, id);
     AppendPod(req, cand);
@@ -313,7 +403,7 @@ CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
         return FailBadResp(ctx);
     }
     JsonWriter w;
-    w.BeginObject();
+    JsonBeginWithSession(w, id);
     w.Key("hits");
     w.Num(out.unique_hits);
     w.Key("match");
@@ -350,6 +440,8 @@ CommandResult CmdDiscoverPathscan(CmdCtx& ctx) {
         } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
             module = ctx.argv[++i];
             flags |= HDL_SEARCH_MODULE;
+        } else if (wcscmp(ctx.argv[i], L"--store-add") == 0 && i + 1 < ctx.argc) {
+            ++i; /* consumed by TakeStoreAddName */
         }
     }
     AppendPod(req, static_cast<uint32_t>(OpDiscoverPathConsensus));
@@ -393,6 +485,19 @@ CommandResult CmdDiscoverPathscan(CmdCtx& ctx) {
         w.EndObject();
     }
     w.EndArray();
+    if (!paths.empty()) {
+        CommandResult store_err;
+        if (!ApplyStoreAddPath(ctx, paths[0], module.empty() ? nullptr : module.c_str(),
+                               &store_err)) {
+            return store_err;
+        }
+        if (TakeStoreAddName(ctx)) {
+            w.Key("store_add");
+            w.Str(TakeStoreAddName(ctx));
+            w.Key("store");
+            w.Str(ctx.store_path ? ctx.store_path : L"");
+        }
+    }
     w.EndObject();
     return CmdStatus(ctx.cmd.c_str(), st, w.Take());
 }
@@ -511,6 +616,7 @@ CommandResult CmdDiscoverScan(CmdCtx& ctx) {
             max_hits = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
+    disc_id = SessionOrFallback(ctx, disc_id);
     if (!disc_id || value_w.empty()) {
         return FailArg(ctx, L"Need --session ID --type T --value V");
     }
@@ -545,7 +651,7 @@ CommandResult CmdDiscoverScan(CmdCtx& ctx) {
         return FailBadResp(ctx);
     }
     JsonWriter w;
-    w.BeginObject();
+    JsonBeginWithSession(w, disc_id);
     w.Key("added");
     w.Num(added);
     w.EndObject();
@@ -622,6 +728,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
             rank_flags = static_cast<uint32_t>(wcstoul(ctx.argv[++i], nullptr, 0));
         }
     }
+    id = SessionOrFallback(ctx, id);
     if (ctx.cmd == L"discover-watch") {
         AppendPod(req, static_cast<uint32_t>(OpDiscoverWatch));
         AppendPod(req, id);
@@ -745,7 +852,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         uint32_t count = 0;
         r.TakePod(count);
         JsonWriter w;
-        w.BeginObject();
+        JsonBeginWithSession(w, id);
         if (!JsonWriteHeatFields(w, r, count)) {
             return FailBadResp(ctx);
         }
@@ -755,7 +862,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         uint32_t count = 0;
         r.TakePod(count);
         JsonWriter w;
-        w.BeginObject();
+        JsonBeginWithSession(w, id);
         w.Key("count");
         w.Num(count);
         if (!JsonWriteCandidates(w, r, count)) {
@@ -772,7 +879,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
                 std::ofstream fout;
                 if (!OpenOutWide(out_path.c_str(), &fout)) {
                     JsonWriter w;
-                    w.BeginObject();
+                    JsonBeginWithSession(w, id);
                     w.Key("bytes");
                     w.Num(json_size);
                     w.Key("out");
@@ -784,7 +891,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
             }
         }
         JsonWriter w;
-        w.BeginObject();
+        JsonBeginWithSession(w, id);
         w.Key("bytes");
         w.Num(json_size);
         w.Key("out");
@@ -795,12 +902,12 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         std::string ev;
         r.TakeString(ev);
         JsonWriter w;
-        w.BeginObject();
+        JsonBeginWithSession(w, id);
         w.Key("evidence");
         w.Str(ev);
         w.EndObject();
         return CmdStatus(ctx.cmd.c_str(), st, w.Take());
     } else {
-        return CmdStatus(ctx.cmd.c_str(), st, "{}");
+        return CmdStatus(ctx.cmd.c_str(), st, SessionDataJson(id));
     }
 }

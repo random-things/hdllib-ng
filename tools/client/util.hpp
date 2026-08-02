@@ -16,13 +16,3 @@ int FailConnect(uint32_t pid);
 /* UTF-8 <-> UTF-16 without fixed-buffer truncation. */
 std::string WideToUtf8(const std::wstring& w);
 std::wstring Utf8ToWide(const std::string& s);
-
-/*
- * Read one line from stdin as UTF-16.
- * Console: ReadConsoleW. Pipe/file: UTF-8 bytes until LF (keeps scripted REPL tests working).
- * Returns false on EOF with no content.
- */
-bool ReadLineWide(std::wstring* out);
-
-/* Wait until the user presses Enter (console or pipe). Returns false on EOF/cancel. */
-bool WaitEnterWide();

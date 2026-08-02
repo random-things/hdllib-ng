@@ -16,9 +16,11 @@ Local inject (no pipe; former hdlinjector):
   hdlclient reload <pid> <dll-path>
 
 Pipe commands (DLL already loaded in <pid>):
-  Global flags (before or after pid): --json  --store PATH  --tui
+  Global flags (before or after pid): --json  --store PATH
   Envelope: { "ok", "status", "cmd", "data", "error": { "code", "name", "hint" }|null }
   Stream verbs emit one aggregated JSON object (not NDJSON).
+  Session: --session ID, else HDL_SESSION, else <store>.session or %%TEMP%%\hdl_session_<pid>.txt
+  Mutating store/recipe/stabilize require --store PATH (load-mutate-save).
 
   hdlclient [--json] <pid> ping
   hdlclient <pid> modules [--stream]
@@ -76,23 +78,19 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> scan --type TYPE --value VAL [--start HEX] [--size HEX] [--max N]
                        [--cmp exact|unknown|greater|less] [--unaligned] [--session ID]
                        [--job ID] [--timeout MS] [--image] [--executable] [--module NAME]
-                       (always streams; --max 0 = unlimited; --unaligned = byte stride)
-  hdlclient <pid> resolve-pattern "AOB" [--module NAME] [--hit N] [--offset N]
-                       [--rip-disp N --rip-len M] [--follow OFF ...] [--image] [--executable]
-  hdlclient <pid> xrefs STRING [--wide] [--absolute] [--rip] [--module NAME] [--image]
-  hdlclient <pid> ptrscan HEX_TARGET [--depth N] [--max-offset N] [--module NAME] [--max N]
+)");
+    wprintf(LR"(  hdlclient <pid> resolve-pattern "AOB" [--module NAME] [--hit N] [--offset N]
+  hdlclient <pid> xrefs HEX_ADDR [--module NAME]
+  hdlclient <pid> ptrscan HEX [--depth N] [--max-offset N] [--max N] [--module NAME] [--store-add NAME]
   hdlclient <pid> probe HEX_ADDR [--size N]
   hdlclient <pid> discover-create
   hdlclient <pid> discover-close --session ID
-  hdlclient <pid> discover-add --session ID --kind address|function|object --addr HEX [--tag T]
-  hdlclient <pid> discover-scan --session ID --type T --value V [--tag T] [--module NAME] [--image]
-  hdlclient <pid> discover-constraint --session ID --size N --pred SPEC [--pred SPEC...]
-                       [--module NAME] [--image] [--max N] [--tag T]
-                       SPEC: eq_i32:OFF:VAL | range_i32:OFF:MIN:MAX | le_i32:OFF:REL |
-                             eq_u64:OFF:HEX | ptr:OFF | vtable:OFF | eq_f32:OFF:FLOAT
+  hdlclient <pid> discover-add --session ID --addr HEX [--kind address|function|object] [--tag T]
+  hdlclient <pid> discover-constraint --session ID --size N --pred SPEC... [--module NAME] [--image] [--max N]
   hdlclient <pid> discover-synth --session ID --cand ID [--before N] [--after N] [--module NAME]
-  hdlclient <pid> discover-pathscan HEX_TARGET [--depth N] [--max-offset N] [--module NAME]
-  hdlclient <pid> discover-pathvalidate HEX_TARGET --base HEX --depth N --offs A,B,...
+  hdlclient <pid> discover-pathscan HEX [--depth N] [--max-offset N] [--max N] [--module NAME] [--store-add NAME]
+  hdlclient <pid> discover-pathvalidate HEX --base HEX --offs A,B,...
+  hdlclient <pid> discover-scan --session ID --type T --value V [--tag T] [--module NAME] [--image] [--max N]
   hdlclient <pid> discover-watch --session ID --addr HEX [--args N]
   hdlclient <pid> discover-unwatch --session ID
   hdlclient <pid> discover-action-begin --session ID --name NAME
@@ -109,10 +107,15 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> discover-diff --session ID --addr A --addr B ... [--size N]
   hdlclient <pid> discover-apply-watch --session ID --addr HEX [--size N]
   hdlclient <pid> discover-evidence --session ID --id CAND_ID
-  hdlclient <pid> [repl] [--store PATH] interactive REPL (default if no subcommand)
-  hdlclient <pid> --tui [--store PATH]  PDCurses full-screen controller
-    REPL/TUI: store load|save|list|add|revalidate; recipe place|suggest|stitch|expand|action|constrain;
-    stabilize; store add --kind function|object|patch … [synth|path|export NAME|cave|stub|patch]
+  hdlclient [--store PATH] <pid> session new|show|close
+  hdlclient --store PATH <pid> store list|revalidate
+  hdlclient --store PATH <pid> store add NAME export EXP [--kind K]
+  hdlclient --store PATH <pid> store add NAME --pattern AOB [--addr HEX] ...
+  hdlclient --store PATH <pid> recipe place|stitch INTEREST ...
+  hdlclient <pid> recipe suggest|constrain|expand|action ...
+    recipe action NAME WATCH --wait-ms N | --signal FILE
+  hdlclient --store PATH <pid> stabilize CAND_ID   (requires resolved --session)
+  Aliases: dcreate dclose dadd dscan … henable rpat
   hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--job ID] [--timeout MS]
   hdlclient <pid> scan --hits --session ID [--max N]
   hdlclient <pid> scan --close|--reset --session ID

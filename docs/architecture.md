@@ -18,7 +18,6 @@ flowchart TB
     Toy["hdl_toy_arena"]
     Zydis["Zydis static dependency"]
     Capstone["Capstone static dependency"]
-    PDCurses["PDCurses static dependency"]
 
     CMake --> MinHook
     CMake --> Inject
@@ -32,16 +31,14 @@ flowchart TB
     MinHook --> DLL
     Zydis --> DLL
     Capstone --> DLL
-    PDCurses --> Client
     DLL --> Tests
     Client --> Tests
 ```
 
 `hdl_inject` is deliberately separate from `hdllib.dll`: the controller needs
 injection before a target-side pipe exists, while the DLL also exposes injection
-through IPC (and inject helpers in `hdl_inject`). MinHook is vendored. Zydis, Capstone, and optionally
-PDCurses are populated by CMake.
-
+through IPC (and inject helpers in `hdl_inject`). MinHook is vendored. Zydis and
+Capstone are populated by CMake.
 ## Runtime boundaries
 
 There are two distinct execution phases:
@@ -269,7 +266,7 @@ the target. Handles and IDs are not durable across unload/reload.
 | Watches and watch-hit queue | [`watch.cpp`](../src/watch.cpp) | Watch mutex; hit mutex/CV | `Unwatch` or `WatchShutdown` |
 | Health/event queue and optional VEH | [`health.cpp`](../src/health.cpp) | Atomics, mutexes, event CV | `HealthShutdown` |
 | Disassembly backends/current backend | [`disasm/registry.cpp`](../src/disasm/registry.cpp) | Registry mutex + atomic current ID | Registry shutdown |
-| Client discover/store/last-result state | [`recipes.hpp`](../tools/client/recipes.hpp) | One controller instance | REPL/TUI process exit; store persists only when saved |
+| Client discover/store/last-result state | [`recipes.hpp`](../tools/client/recipes.hpp) | One controller instance per process | Process exit; store persists via `--store` load–mutate–save |
 
 IPC search and discover IDs are process-global rather than scoped to a pipe
 connection. A client can intentionally use an ID created by another client.
@@ -379,7 +376,7 @@ reapply a patch.
 - MinHook v1.3.3 is vendored in [`third_party/minhook`](../third_party/minhook/).
 - Zydis 4.1.1 and Capstone 5.0.3 are fetched by CMake. Either may be disabled,
   but not both.
-- PDCurses 3.9 is fetched only for the optional TUI.
+- Zydis and Capstone are fetched for the optional disasm backends.
 - The public ABI uses Windows types and native x64 layout. There is no Wow64
   bridge or cross-platform build path.
 

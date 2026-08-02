@@ -9,7 +9,7 @@ provides memory inspection, search and discovery, code placement and patching,
 calls, hooks, watchpoints, PE/code graph inspection, process fingerprinting,
 health events, and further DLL injection. Controllers talk over a multi-client
 named pipe (sole remote control channel). `hdlclient.exe` supplies injection, a
-CLI, REPL/TUI, recipes, and a persistent interest store.
+CLI, recipes, and a persistent interest store.
 
 ## Start here
 
@@ -99,8 +99,8 @@ the enum: `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
 | PE metadata and bounded function/xref graph | `HdlEnumSections/Exports/Imports`, `HdlEnumFunctions`, `HdlResolveFunction`, `HdlXrefs*` | [`pe_meta.cpp`](../src/pe_meta.cpp), [`graph.cpp`](../src/graph.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: PE](capabilities.md#16-pe-metadata), [capabilities: graph](capabilities.md#17-bounded-function--xref-graph) |
 | Vtables and MSVC RTTI | `HdlWalkVtable`, `HdlQueryRttiName` | [`vtable.cpp`](../src/vtable.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), `vtable`/`rtti` in [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: observe](capabilities.md#18-observe-vtable--rtti), local/client/toy tests |
 | Hardware/page watchpoints and hit queue | `HdlWatch*`, `HdlPollWatchHits` | [`watch.cpp`](../src/watch.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), `watch` in [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: watchpoints](capabilities.md#19-watchpoints-hardware--page), local/client/toy tests |
-| CLI, REPL, and TUI | Command registry in [`main.cpp`](../tools/client/main.cpp), syntax in [`usage.cpp`](../tools/client/usage.cpp) | Client-only controller in [`repl.cpp`](../tools/client/repl.cpp), [`tui.cpp`](../tools/client/tui.cpp) | Uses [`PipeClient`](../tools/client/pipe_client.cpp) and command-specific serializers | [client workflows](client.md), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
-| Durable interests and orchestration recipes | JSON v3 types in [`store.hpp`](../tools/client/store.hpp), recipe state in [`recipes.hpp`](../tools/client/recipes.hpp) | [`store.cpp`](../tools/client/store.cpp), [`recipes.cpp`](../tools/client/recipes.cpp) | REPL/TUI only; not an IPC or DLL feature | [client: interest store](client.md#4-interest-store-and-recipes), [`store_test.cpp`](../tests/store_test.cpp), client/toy tests |
+| CLI and controller | Command registry in [`main.cpp`](../tools/client/main.cpp), syntax in [`usage.cpp`](../tools/client/usage.cpp) | Controller in [`cmds_controller.cpp`](../tools/client/cmds_controller.cpp), session persist in [`session_persist.cpp`](../tools/client/session_persist.cpp) | Uses [`PipeClient`](../tools/client/pipe_client.cpp) and command-specific serializers | [client workflows](client.md), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
+| Durable interests and orchestration recipes | JSON v3 types in [`store.hpp`](../tools/client/store.hpp), recipe state in [`recipes.hpp`](../tools/client/recipes.hpp) | [`store.cpp`](../tools/client/store.cpp), [`recipes.cpp`](../tools/client/recipes.cpp) | One-shot controller verbs; not an IPC or DLL feature | [client: interest store](client.md#4-interest-store-and-recipes), [`store_test.cpp`](../tests/store_test.cpp), client/toy tests |
 
 ## Repository map
 
@@ -111,7 +111,7 @@ src/*.cpp             In-target domain implementations
 src/ipc/              Pipe server, framing, opcode dispatch, domain adapters
 src/inject/           One injection technique per file plus selection/common code
 src/disasm/           Pluggable built-in disassembly backends
-tools/client/         Injector, pipe client, CLI, REPL/TUI, store, recipes
+tools/client/         Injector, pipe client, CLI, store, recipes, session persist
 tests/                Domain, live IPC, injection-matrix, and toy tests
 toys/arena/           Deterministic target for higher-level discovery workflows
 third_party/minhook/  Vendored MinHook v1.3.3

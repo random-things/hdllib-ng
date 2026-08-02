@@ -4,7 +4,7 @@
 |--------|------|
 | `hdl_test_target.exe` | Configurable victim (`--window`, `--alertable`, `--integrity low\|medium`, inheritable `--ready-handle` / `--exit-handle`). Also hosts locate/discover ground-truth exports. |
 | `hdl_tests.exe` | In-process domain coverage (links `hdl_domain_obj`, not DLL control exports) + locate/discover inject checks + full injection × target-profile matrix |
-| `hdl_client_tests.exe` | End-to-end `hdlclient` vs `hdl_test_target` (CLI + REPL + store; inject via `hdlclient inject`) |
+| `hdl_client_tests.exe` | End-to-end `hdlclient` vs `hdl_test_target` (CLI + store/recipes; inject via `hdlclient inject`) |
 | `hdl_store_tests.exe` | Interest-store JSON round-trip |
 
 New platform coverage (place/code/PE/graph/watch 54–91, interest store v3, recipes) is exercised in `hdl_tests`, `hdl_client_tests`, `hdl_store_tests`, and `hdl_toy_tests`.

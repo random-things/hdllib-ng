@@ -43,7 +43,6 @@
         "HDL_BUILD_TESTS": "ON",
         "HDL_BUILD_TOOLS": "ON",
         "HDL_BUILD_TOYS": "ON",
-        "HDL_CLIENT_TUI": "ON",
         "HDL_DISASM_ZYDIS": "ON",
         "HDL_DISASM_CAPSTONE": "ON",
         "HDL_WARNINGS_AS_ERRORS": "ON"
@@ -88,14 +87,6 @@
       }
     },
     {
-      "name": "ci-no-tui",
-      "displayName": "CI client without TUI",
-      "inherits": "ci-base",
-      "cacheVariables": {
-        "HDL_CLIENT_TUI": "OFF"
-      }
-    },
-    {
       "name": "ci-msvc-analyze",
       "displayName": "CI MSVC native analysis",
       "inherits": "ci-base",
@@ -129,7 +120,6 @@
         "HDL_BUILD_TESTS": "OFF",
         "HDL_BUILD_TOOLS": "OFF",
         "HDL_BUILD_TOYS": "OFF",
-        "HDL_CLIENT_TUI": "OFF",
         "HDL_ENABLE_CLANG_TIDY": "ON",
         "HDL_WARNINGS_AS_ERRORS": "OFF"
       }
@@ -173,11 +163,6 @@
     {
       "name": "ci-capstone",
       "configurePreset": "ci-capstone",
-      "configuration": "Release"
-    },
-    {
-      "name": "ci-no-tui",
-      "configurePreset": "ci-no-tui",
       "configuration": "Release"
     },
     {
@@ -283,19 +268,6 @@
     {
       "name": "ci-capstone-headless",
       "configurePreset": "ci-capstone",
-      "configuration": "Release",
-      "filter": {
-        "include": {
-          "label": "^headless$"
-        }
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "ci-no-tui-headless",
-      "configurePreset": "ci-no-tui",
       "configuration": "Release",
       "filter": {
         "include": {

@@ -27,9 +27,6 @@ jobs:
           - name: Capstone only
             build: ci-capstone
             test: ci-capstone-headless
-          - name: No TUI
-            build: ci-no-tui
-            test: ci-no-tui-headless
 
     steps:
       - uses: actions/checkout@v7
@@ -152,7 +149,6 @@ jobs:
           "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
           -DHDL_BUILD_TOOLS=OFF
           -DHDL_BUILD_TOYS=OFF
-          -DHDL_CLIENT_TUI=OFF
           -DHDL_WARNINGS_AS_ERRORS=ON
 
       - name: Build

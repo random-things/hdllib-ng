@@ -332,6 +332,74 @@ bool Contains(const std::wstring& hay, const wchar_t* needle) {
     return hay.find(needle) != std::wstring::npos;
 }
 
+/* True when stdout is exactly one top-level JSON object (optional trailing whitespace). */
+bool IsSingleJsonEnvelope(const std::wstring& out) {
+    const std::string n = ToNarrow(out);
+    const size_t a = n.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos || n[a] != '{') {
+        return false;
+    }
+    const size_t b = n.find_last_not_of(" \t\r\n");
+    if (b == std::string::npos || n[b] != '}') {
+        return false;
+    }
+    const std::string body = n.substr(a, b - a + 1);
+    std::vector<std::pair<std::string, std::string>> fields;
+    if (!hdl::json::ParseObjectFields(body, &fields)) {
+        return false;
+    }
+    int depth = 0;
+    bool in_str = false;
+    bool esc = false;
+    size_t end = std::string::npos;
+    for (size_t i = 0; i < body.size(); ++i) {
+        const char ch = body[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (ch == '\\') {
+                esc = true;
+            } else if (ch == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_str = true;
+        } else if (ch == '{') {
+            ++depth;
+        } else if (ch == '}') {
+            --depth;
+            if (depth == 0) {
+                end = i;
+                break;
+            }
+        }
+    }
+    return end != std::string::npos && end + 1 == body.size();
+}
+
+/* True when stdout is one envelope with top-level ok:true. */
+bool JsonEnvelopeOk(const std::wstring& out) {
+    if (!IsSingleJsonEnvelope(out)) {
+        return false;
+    }
+    const std::string n = ToNarrow(out);
+    const size_t a = n.find_first_not_of(" \t\r\n");
+    const size_t b = n.find_last_not_of(" \t\r\n");
+    const std::string body = n.substr(a, b - a + 1);
+    std::vector<std::pair<std::string, std::string>> fields;
+    if (!hdl::json::ParseObjectFields(body, &fields)) {
+        return false;
+    }
+    for (const auto& f : fields) {
+        if (f.first == "ok" && f.second == "true") {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ParseU64After(const std::wstring& text, const wchar_t* key, uint64_t* out) {
     const size_t p = text.find(key);
     if (p == std::wstring::npos) {
@@ -376,12 +444,6 @@ ProcResult Cli(const ClientCtx& ctx, std::vector<std::wstring> args, DWORD timeo
 ProcResult CliInject(const ClientCtx& ctx) {
     ProcResult r;
     RunProcess(ctx.client, {L"inject", std::to_wstring(ctx.pid), ctx.dll}, nullptr, 60000, &r);
-    return r;
-}
-
-ProcResult CliRepl(const ClientCtx& ctx, const std::wstring& script, DWORD timeout_ms = 60000) {
-    ProcResult r;
-    RunProcess(ctx.client, {std::to_wstring(ctx.pid), L"repl"}, &script, timeout_ms, &r);
     return r;
 }
 
@@ -1105,12 +1167,13 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         ExpectOk(c, "client discover-close", Cli(ctx, {L"discover-close", L"--session", sid}));
     }
 
-    /* REPL: aliases + store + recipe constrain/place/stitch */
+    /* One-shot controller parity gate */
     {
         wchar_t store_path[MAX_PATH];
         GetTempPathW(MAX_PATH, store_path);
-        wcscat_s(store_path, L"hdl_client_repl_store.json");
+        wcscat_s(store_path, L"hdl_client_ctrl_store.json");
         DeleteFileW(store_path);
+        DeleteFileW((std::wstring(store_path) + L".session").c_str());
 
         uint64_t stitch_pad = 0;
         {
@@ -1125,61 +1188,310 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             }
         }
 
-        std::wstring script;
-        script += L"help\n";
-        script += L"ping\n";
-        script += L"dcreate\n";
-        script += L"session show\n";
-        if (obj_a) {
-            script += L"recipe constrain 24 eq_i32:8:80 eq_i32:12:100\n";
+        uint64_t session_id = 0;
+        {
+            ProcResult r;
+            RunProcess(
+                ctx.client,
+                {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"session", L"new"},
+                nullptr, 30000, &r);
+            ExpectExit0(c, "client session new exit", r);
+            Report(c, IsSingleJsonEnvelope(r.out), false, "client session new single JSON", "");
+            const std::string j = ToNarrow(r.out);
+            Report(c, hdl::json::ExtractU64(j, "session", &session_id) && session_id != 0, false,
+                   "client session new has session id", "");
         }
-        script += L"store add health --kind field\n";
+        {
+            ProcResult r;
+            RunProcess(
+                ctx.client,
+                {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"session", L"show"},
+                nullptr, 30000, &r);
+            ExpectExit0(c, "client session show cross-process", r);
+            Report(c, IsSingleJsonEnvelope(r.out), false, "client session show single JSON", "");
+            uint64_t shown = 0;
+            Report(c,
+                   hdl::json::ExtractU64(ToNarrow(r.out), "session", &shown) && shown == session_id,
+                   false, "client session show matches", "");
+        }
+        {
+            wchar_t sidbuf[32];
+            swprintf_s(sidbuf, L"0x%llx", static_cast<unsigned long long>(session_id));
+            SetEnvironmentVariableW(L"HDL_SESSION", sidbuf);
+            ProcResult r;
+            RunProcess(ctx.client, {L"--json", std::to_wstring(ctx.pid), L"session", L"show"},
+                       nullptr, 30000, &r);
+            SetEnvironmentVariableW(L"HDL_SESSION", nullptr);
+            ExpectExit0(c, "client HDL_SESSION session show", r);
+            uint64_t shown = 0;
+            Report(c,
+                   hdl::json::ExtractU64(ToNarrow(r.out), "session", &shown) && shown == session_id,
+                   false, "client HDL_SESSION resolves", "");
+        }
+        {
+            auto r = Cli(ctx, {L"dcreate"});
+            ExpectOk(c, "client dcreate alias", r);
+        }
+        {
+            wchar_t a[32];
+            swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(fn ? fn : 1));
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, std::to_wstring(ctx.pid), L"dwatch", L"--addr", a,
+                        L"--args", L"0"},
+                       nullptr, 30000, &r);
+            Report(c, !Contains(r.out, L"Unknown discover command"), false,
+                   "client dwatch alias canonical", "");
+        }
+        {
+            auto r = Cli(ctx, {L"dcands"});
+            Report(c, !Contains(r.out, L"Unknown discover command"), false,
+                   "client dcands alias canonical", "");
+        }
+        {
+            auto r = Cli(ctx, {L"rpat", L"DE AD BE EF"});
+            Report(c,
+                   !Contains(r.out, L"unknown command") &&
+                       r.out.find(L"status=") != std::wstring::npos,
+                   false, "client rpat alias resolves", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                        L"suggest"},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client recipe suggest exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe suggest JSON ok", "");
+        }
+        if (obj_a) {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                        L"constrain", L"24", L"eq_i32:8:80", L"eq_i32:12:100"},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client recipe constrain exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe constrain JSON ok", "");
+            wchar_t base_hex[32];
+            swprintf_s(base_hex, L"0x%llx", static_cast<unsigned long long>(obj_a));
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                        L"expand", base_hex, L"24"},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client recipe expand exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe expand JSON ok", "");
+        }
         if (fn) {
-            wchar_t line[192];
-            swprintf_s(line, L"recipe place placed_fn 0x%llx\n",
-                       static_cast<unsigned long long>(fn));
-            script += line;
+            wchar_t near_hex[32];
+            swprintf_s(near_hex, L"0x%llx", static_cast<unsigned long long>(fn));
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                        L"place", L"placed_fn", near_hex},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client recipe place exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe place JSON ok", "");
         }
         if (stitch_pad) {
-            wchar_t line[256];
-            swprintf_s(line, L"recipe stitch stitched --target 0x%llx --kind mov_rax_jmp\n",
-                       static_cast<unsigned long long>(stitch_pad));
-            script += line;
+            wchar_t tgt[32];
+            swprintf_s(tgt, L"0x%llx", static_cast<unsigned long long>(stitch_pad));
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                        L"stitch", L"stitched", L"--target", tgt, L"--kind", L"mov_rax_jmp"},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client recipe stitch exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe stitch JSON ok", "");
         }
-        script += L"store add export_fn --kind function export HdlTestLocateFn\n";
-        script += L"store save ";
-        script += store_path;
-        script += L"\n";
-        script += L"store list\n";
-        script += L"store revalidate\n";
-        script += L"quit\n";
-
-        ProcResult r;
-        std::vector<std::wstring> args = {L"--store", store_path, std::to_wstring(ctx.pid),
-                                          L"repl"};
-        RunProcess(ctx.client, args, &script, 90000, &r);
-        ExpectExit0(c, "client REPL script exit", r);
-        Report(c, Contains(r.out, L"status=OK") || Contains(r.out, L"remote_pid="), false,
-               "client REPL ping output", "");
-        Report(c, Contains(r.out, L"discover session=") || Contains(r.out, L"session="), false,
-               "client REPL dcreate", "");
-        Report(c, Contains(r.out, L"store saved") || Contains(r.out, L"store add"), false,
-               "client REPL store", "");
-        Report(c,
-               Contains(r.out, L"place cave") || Contains(r.out, L"AllocNear fallback") ||
-                   Contains(r.out, L"store updated interest"),
-               false, "client REPL recipe place", "");
-        Report(c,
-               !stitch_pad || Contains(r.out, L"stub_va=") || Contains(r.out, L"stub+patch") ||
-                   Contains(r.out, L"patch handle="),
-               false, "client REPL recipe stitch", "");
+        if (action) {
+            wchar_t watch_hex[32];
+            swprintf_s(watch_hex, L"0x%llx", static_cast<unsigned long long>(action));
+            /*
+             * No fixed pre-delay: run recipe action on one thread and repeatedly call the
+             * watched exports for its whole lifetime so triggers overlap the open window.
+             */
+            std::atomic<bool> action_done{false};
+            std::atomic<int> ok_calls{0};
+            ProcResult r;
+            std::thread action_thr([&] {
+                RunProcess(ctx.client,
+                           {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
+                            L"action", L"parity_act", watch_hex, L"--wait-ms", L"3000"},
+                           nullptr, 90000, &r);
+                action_done.store(true);
+            });
+            std::thread trigger([&] {
+                while (!action_done.load()) {
+                    ProcResult cr;
+                    if (RunProcess(ctx.client,
+                                   {std::to_wstring(ctx.pid), L"call", L"HdlTestDiscoverAction"},
+                                   nullptr, 30000, &cr) &&
+                        cr.exit_code == 0) {
+                        ok_calls.fetch_add(1);
+                    }
+                    ProcResult dr;
+                    RunProcess(
+                        ctx.client,
+                        {std::to_wstring(ctx.pid), L"call", L"HdlTestDiscoverDamage", L"i64:1"},
+                        nullptr, 30000, &dr);
+                    Sleep(50);
+                }
+            });
+            action_thr.join();
+            trigger.join();
+            Report(c, ok_calls.load() >= 1, false, "client recipe action trigger succeeded", "");
+            ExpectExit0(c, "client recipe action --wait-ms exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client recipe action JSON ok", "");
+            Report(c, !Contains(r.out, L"Press Enter"), false,
+                   "client recipe action no Enter prompt", "");
+            std::string interest;
+            Report(c,
+                   hdl::json::ExtractString(ToNarrow(r.out), "interest", &interest) &&
+                       !interest.empty(),
+                   false, "client recipe action interest field", "");
+            if (!interest.empty()) {
+                hdlcli::InterestStore chk;
+                Report(c, chk.Load(store_path) && chk.Find(interest.c_str()) != nullptr, false,
+                       "client recipe action interest persisted", "");
+            }
+        }
+        if (fn) {
+            wchar_t cand_hex[32];
+            uint64_t cand_id = 0;
+            {
+                wchar_t a[32];
+                swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(fn));
+                ProcResult add;
+                RunProcess(ctx.client,
+                           {L"--store", store_path, L"--json", std::to_wstring(ctx.pid),
+                            L"discover-add", L"--kind", L"function", L"--addr", a, L"--tag",
+                            L"parity_fn"},
+                           nullptr, 30000, &add);
+                ExpectExit0(c, "client discover-add for stabilize", add);
+                Report(c, JsonEnvelopeOk(add.out), false, "client discover-add JSON ok", "");
+                uint64_t sid_out = 0;
+                Report(c,
+                       hdl::json::ExtractU64(ToNarrow(add.out), "session", &sid_out) &&
+                           sid_out != 0,
+                       false, "client discover-add returns session", "");
+                Report(c,
+                       hdl::json::ExtractU64(ToNarrow(add.out), "cand", &cand_id) && cand_id != 0,
+                       false, "client discover-add returns cand", "");
+            }
+            if (cand_id) {
+                swprintf_s(cand_hex, L"0x%llx", static_cast<unsigned long long>(cand_id));
+                ProcResult r;
+                RunProcess(ctx.client,
+                           {L"--store", store_path, L"--json", std::to_wstring(ctx.pid),
+                            L"stabilize", cand_hex},
+                           nullptr, 60000, &r);
+                ExpectExit0(c, "client stabilize exit", r);
+                Report(c, JsonEnvelopeOk(r.out), false, "client stabilize JSON ok", "");
+                Report(c, Contains(r.out, L"interest") || Contains(r.out, L"pattern"), false,
+                       "client stabilize interest/pattern", "");
+            } else {
+                Report(c, false, false, "client stabilize skipped (no cand)", "");
+            }
+        }
+        if (leaf) {
+            wchar_t leaf_hex[32];
+            swprintf_s(leaf_hex, L"0x%llx", static_cast<unsigned long long>(leaf));
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid),
+                        L"discover-pathscan", leaf_hex, L"--depth", L"2", L"--store-add",
+                        L"path_interest"},
+                       nullptr, 90000, &r);
+            ExpectExit0(c, "client pathscan --store-add exit", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client pathscan store-add JSON ok", "");
+            hdlcli::InterestStore chk;
+            Report(c, chk.Load(store_path) && chk.Find("path_interest") != nullptr, false,
+                   "client store-add persisted path interest", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"store",
+                        L"add", L"export_fn", L"--kind", L"function", L"export",
+                        L"HdlTestLocateFn"},
+                       nullptr, 30000, &r);
+            ExpectExit0(c, "client store add export", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client store add JSON ok", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(
+                ctx.client,
+                {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"store", L"list"},
+                nullptr, 30000, &r);
+            ExpectExit0(c, "client store list json", r);
+            Report(c, JsonEnvelopeOk(r.out) && Contains(r.out, L"interests"), false,
+                   "client store list single envelope", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"store",
+                        L"revalidate"},
+                       nullptr, 60000, &r);
+            ExpectExit0(c, "client store revalidate", r);
+            Report(c, JsonEnvelopeOk(r.out), false, "client store revalidate JSON ok", "");
+        }
 
         hdlcli::InterestStore loaded;
-        Report(c, loaded.Load(store_path), false, "client REPL store file load", "");
+        Report(c, loaded.Load(store_path), false, "client store file load", "");
         if (fn) {
             Report(c, loaded.Find("placed_fn") != nullptr, false, "client store has placed_fn", "");
         }
+        Report(c, loaded.Find("export_fn") != nullptr, false, "client store has export_fn", "");
+
+        {
+            ProcResult r;
+            RunProcess(ctx.client, {std::to_wstring(ctx.pid)}, nullptr, 10000, &r);
+            Report(c, r.exit_code != 0, false, "client pid-only prints usage", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client, {std::to_wstring(ctx.pid), L"repl"}, nullptr, 10000, &r);
+            Report(c, r.exit_code != 0 && Contains(r.out, L"REPL/TUI removed"), false,
+                   "client rejects repl", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client, {L"--tui", std::to_wstring(ctx.pid)}, nullptr, 10000, &r);
+            Report(c, r.exit_code != 0 && Contains(r.out, L"REPL/TUI removed"), false,
+                   "client rejects --tui", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client, {std::to_wstring(ctx.pid), L"tui"}, nullptr, 10000, &r);
+            Report(c, r.exit_code != 0 && Contains(r.out, L"REPL/TUI removed"), false,
+                   "client rejects bare tui", "");
+        }
+        {
+            auto r = Cli(ctx, {L"henable", L"0", L"0"});
+            Report(c, r.exit_code != 0 || Contains(r.out, L"status="), false,
+                   "client henable alias resolves", "");
+        }
+
+        {
+            ProcResult r;
+            RunProcess(
+                ctx.client,
+                {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"session", L"close"},
+                nullptr, 30000, &r);
+            ExpectExit0(c, "client session close exit", r);
+            Report(c, IsSingleJsonEnvelope(r.out), false, "client session close single JSON", "");
+        }
+        {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, std::to_wstring(ctx.pid), L"session", L"show"},
+                       nullptr, 30000, &r);
+            Report(c, r.exit_code != 0, false, "client session show fails after close", "");
+        }
         DeleteFileW(store_path);
+        DeleteFileW((std::wstring(store_path) + L".session").c_str());
         if (stitch_pad) {
             wchar_t a[32];
             swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(stitch_pad));
@@ -1231,28 +1543,20 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                false, "client text call --main prints hint", "");
     }
 
-    /* Usage documents new surfaces */
+    /* Usage documents controller surfaces */
     {
         ProcResult r;
         RunProcess(ctx.client, {}, nullptr, 10000, &r);
         Report(c,
                r.out.find(L"discover-scan") != std::wstring::npos &&
                    r.out.find(L"hook-enable") != std::wstring::npos &&
-                   r.out.find(L"--tui") != std::wstring::npos &&
                    r.out.find(L"--json") != std::wstring::npos &&
                    r.out.find(L"write <hex-address>") != std::wstring::npos &&
                    r.out.find(L"discover-pathvalidate") != std::wstring::npos &&
                    r.out.find(L"stub") != std::wstring::npos &&
-                   r.out.find(L"recipe place") != std::wstring::npos,
+                   r.out.find(L"recipe place") != std::wstring::npos &&
+                   r.out.find(L"session new") != std::wstring::npos,
                false, "client usage documents controller", "");
-    }
-
-    /* --tui flag is recognized (do not enter curses — invalid pid before connect fails early) */
-    {
-        ProcResult r;
-        RunProcess(ctx.client, {L"--tui", L"1"}, nullptr, 10000, &r);
-        Report(c, r.exit_code != 0 && !Contains(r.out, L"requires HDL_CLIENT_TUI"), false,
-               "client --tui linked (connect fail on bad pid)", "");
     }
 }
 

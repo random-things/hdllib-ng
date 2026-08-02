@@ -329,6 +329,34 @@ CommandResult CmdPtrscan(CmdCtx& ctx) {
         }
         paths.push_back(path);
     }
+    const wchar_t* store_add = nullptr;
+    for (int i = 4; i < ctx.argc; ++i) {
+        if (wcscmp(ctx.argv[i], L"--store-add") == 0 && i + 1 < ctx.argc) {
+            store_add = ctx.argv[i + 1];
+            break;
+        }
+    }
+    if (store_add && !paths.empty()) {
+        if (!ctx.store_path || !ctx.store_path[0]) {
+            return FailArg(ctx, L"--store-add requires --store PATH");
+        }
+        hdlcli::ControllerState cst;
+        cst.client = &ctx.client;
+        cst.pid = ctx.pid;
+        cst.store_path = ctx.store_path;
+        if (GetFileAttributesW(ctx.store_path) != INVALID_FILE_ATTRIBUTES &&
+            !cst.store.Load(ctx.store_path)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store load failed");
+        }
+        std::wstring err;
+        if (!hdlcli::StoreAddPathInterest(cst, WideToUtf8(store_add).c_str(), paths[0],
+                                          module.empty() ? nullptr : module.c_str(), &err)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, err.c_str());
+        }
+        if (!cst.store.Save(ctx.store_path)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store save failed");
+        }
+    }
     JsonWriter w;
     w.BeginObject();
     w.Key("count");
@@ -350,13 +378,11 @@ CommandResult CmdPtrscan(CmdCtx& ctx) {
         w.EndObject();
     }
     w.EndArray();
-    w.EndObject();
-    for (const auto& path : paths) {
-        for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
-            wchar_t off[32];
-            swprintf_s(off, L"%s0x%x", d ? L"," : L"", path.offsets[d]);
-        }
+    if (store_add) {
+        w.Key("store_add");
+        w.Str(store_add);
     }
+    w.EndObject();
     return CmdStatus(L"ptrscan", st, w.Take());
 }
 

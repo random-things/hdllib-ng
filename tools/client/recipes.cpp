@@ -1,5 +1,6 @@
 #include "recipes.hpp"
 
+#include "session_persist.hpp"
 #include "util.hpp"
 
 #include <algorithm>
@@ -64,7 +65,7 @@ uint64_t ResolveInterestAddr(ControllerState& st, const char* name) {
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 void RememberPath(ControllerState* st, const HdlPointerPath& path, const wchar_t* module_or_null) {
     if (!st) {
@@ -110,6 +111,13 @@ bool EnsureDiscoverSession(ControllerState& st, LogFn log) {
         return false;
     }
     st.discover_session = id;
+    if (st.persist_session && st.pid) {
+        if (!WritePersistedSession(st.pid, st.store_path.empty() ? nullptr : st.store_path.c_str(),
+                                   id)) {
+            Wlog(log, L"session sidecar write failed");
+            return false;
+        }
+    }
     Wlog(log, L"discover session=%llu", static_cast<unsigned long long>(id));
     return true;
 }
@@ -129,8 +137,7 @@ int RevalidateStore(ControllerState& st, LogFn log) {
                 auto s = ResolvePattern(*st.client, loc.pattern.pattern.c_str(), 0,
                                         loc.pattern.pattern_offset, loc.pattern.rip_disp,
                                         loc.pattern.rip_len, {},
-                                        HDL_SEARCH_IMAGE |
-                                            (mod.empty() ? 0u : HDL_SEARCH_MODULE),
+                                        HDL_SEARCH_IMAGE | (mod.empty() ? 0u : HDL_SEARCH_MODULE),
                                         mod.empty() ? nullptr : mod.c_str(), &pr);
                 if (s) {
                     loc.last_addr = pr.resolved_addr;
@@ -308,36 +315,37 @@ int RevalidateStore(ControllerState& st, LogFn log) {
     return ok;
 }
 
-int RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn, LogFn log,
-                 const std::function<bool()>& wait_user) {
+StabilizeResult RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn,
+                             LogFn log, const std::function<bool()>& wait_user) {
+    StabilizeResult fail;
     if (!EnsureDiscoverSession(st, log) || !watch_fn || !action_name) {
-        return 1;
+        return fail;
     }
     auto s = DiscoverWatch(*st.client, st.discover_session, watch_fn, 0);
     if (!s) {
         Wlog(log, L"watch failed status=%ls", StatusName(s.status));
-        return 1;
+        return fail;
     }
     s = DiscoverActionBegin(*st.client, st.discover_session, action_name);
     if (!s) {
         Wlog(log, L"action-begin failed status=%ls", StatusName(s.status));
-        return 1;
+        return fail;
     }
     Wlog(log, L"Action '%hs' open — trigger in target, then continue", action_name);
     if (wait_user && !wait_user()) {
         DiscoverActionEnd(*st.client, st.discover_session);
-        return 1;
+        return fail;
     }
     s = DiscoverActionEnd(*st.client, st.discover_session);
     if (!s) {
         Wlog(log, L"action-end failed status=%ls", StatusName(s.status));
-        return 1;
+        return fail;
     }
     st.last_rank.clear();
     s = DiscoverRank(*st.client, st.discover_session, action_name, &st.last_rank);
     if (!s || st.last_rank.empty()) {
         Wlog(log, L"rank failed or empty status=%ls", StatusName(s.status));
-        return 1;
+        return fail;
     }
     for (size_t i = 0; i < st.last_rank.size() && i < 8; ++i) {
         const auto& c = st.last_rank[i];
@@ -348,8 +356,9 @@ int RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn
     return StabilizeCandidate(st, st.last_rank[0].id, nullptr, log);
 }
 
-int RecipeConstrain(ControllerState& st, uint32_t object_size, const std::vector<HdlFieldPred>& preds,
-                    uint32_t search_flags, const wchar_t* module, LogFn log) {
+int RecipeConstrain(ControllerState& st, uint32_t object_size,
+                    const std::vector<HdlFieldPred>& preds, uint32_t search_flags,
+                    const wchar_t* module, LogFn log) {
     if (!EnsureDiscoverSession(st, log) || preds.empty()) {
         return 1;
     }
@@ -434,8 +443,8 @@ int RecipePlace(ControllerState& st, const char* interest_name, uint64_t near_ad
              static_cast<unsigned long long>(Dist(caves[bi].addr, near_addr)));
     } else {
         uint64_t alloc = 0;
-        auto as = AllocNear(*st.client, near_addr, 0x7FFFFFFFull, 0x1000, PAGE_EXECUTE_READWRITE,
-                            &alloc);
+        auto as =
+            AllocNear(*st.client, near_addr, 0x7FFFFFFFull, 0x1000, PAGE_EXECUTE_READWRITE, &alloc);
         if (!as || !alloc) {
             Wlog(log, L"place: no cave and AllocNear failed status=%ls", StatusName(as.status));
             return 1;
@@ -584,17 +593,19 @@ int RecipeExpandStruct(ControllerState& st, uint64_t base, uint32_t size, LogFn 
     return 0;
 }
 
-int StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* module, LogFn log) {
+StabilizeResult StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* module,
+                                   LogFn log) {
+    StabilizeResult out;
     if (!EnsureDiscoverSession(st, log) || !cand_id) {
-        return 1;
+        return out;
     }
     memset(&st.last_synth, 0, sizeof(st.last_synth));
-    auto s = DiscoverSynth(*st.client, st.discover_session, cand_id, 0, 24,
-                           HDL_SEARCH_IMAGE | (module ? HDL_SEARCH_MODULE : 0), module,
-                           &st.last_synth);
+    auto s =
+        DiscoverSynth(*st.client, st.discover_session, cand_id, 0, 24,
+                      HDL_SEARCH_IMAGE | (module ? HDL_SEARCH_MODULE : 0), module, &st.last_synth);
     if (!s) {
         Wlog(log, L"synth failed status=%ls", StatusName(s.status));
-        return 1;
+        return out;
     }
     Wlog(log, L"synth hits=%u resolved=%016llx\n  %hs", st.last_synth.unique_hits,
          static_cast<unsigned long long>(st.last_synth.resolved_addr), st.last_synth.pattern);
@@ -649,7 +660,9 @@ int StabilizeCandidate(ControllerState& st, uint64_t cand_id, const wchar_t* mod
     in.locators.push_back(std::move(loc));
     st.store.AddOrReplace(std::move(in));
     Wlog(log, L"store add/replace '%hs' from stabilize", name.c_str());
-    return 0;
+    out.rc = 0;
+    out.interest_name = std::move(name);
+    return out;
 }
 
 static const HdlFingerprintTag* PrimaryOf(const std::vector<HdlFingerprintTag>& tags,
@@ -697,7 +710,8 @@ int RecipeSuggest(ControllerState& st, LogFn log) {
     }
     if (ui && (strcmp(ui->id, "wpf") == 0 || strcmp(ui->id, "winforms") == 0 ||
                strcmp(ui->id, "winui") == 0)) {
-        Wlog(log, L"  managed UI: prefer import/watch over native RTTI; JIT heaps make AOB brittle");
+        Wlog(log,
+             L"  managed UI: prefer import/watch over native RTTI; JIT heaps make AOB brittle");
     }
     if (ui && (strcmp(ui->id, "qt5") == 0 || strcmp(ui->id, "qt6") == 0)) {
         Wlog(log, L"  scope scans with --module Qt5Core.dll / Qt6Core.dll (or Gui/Widgets)");
@@ -755,4 +769,4 @@ int RecipeSuggest(ControllerState& st, LogFn log) {
     return 0;
 }
 
-}  // namespace hdlcli
+} // namespace hdlcli

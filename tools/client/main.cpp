@@ -1,8 +1,6 @@
 #include "cmd.hpp"
 #include "json_out.hpp"
 #include "local_inject.hpp"
-#include "repl.hpp"
-#include "tui.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
@@ -37,12 +35,14 @@ static const CmdEntry kCommands[] = {
     {L"unhook", CmdUnhook},
     {L"hook-enable", CmdHookEnable},
     {L"enablehook", CmdHookEnable},
+    {L"henable", CmdHookEnable},
     {L"hookhits", CmdHookhits},
     {L"hook-import", CmdHookImport},
     {L"rip", CmdRip},
     {L"ptrchain", CmdPtrchain},
     {L"modbase", CmdModbase},
     {L"resolve-pattern", CmdResolvePattern},
+    {L"rpat", CmdResolvePattern},
     {L"xrefs", CmdXrefs},
     {L"ptrscan", CmdPtrscan},
     {L"probe", CmdProbe},
@@ -52,22 +52,39 @@ static const CmdEntry kCommands[] = {
     {L"reload", CmdUnload},
     {L"shutdown", CmdShutdown},
     {L"discover-create", CmdDiscoverCreate},
+    {L"dcreate", CmdDiscoverCreate},
     {L"discover-close", CmdDiscoverClose},
+    {L"dclose", CmdDiscoverClose},
     {L"discover-add", CmdDiscoverAdd},
+    {L"dadd", CmdDiscoverAdd},
     {L"discover-constraint", CmdDiscoverConstraint},
+    {L"dconstraint", CmdDiscoverConstraint},
     {L"discover-synth", CmdDiscoverSynth},
+    {L"dsynth", CmdDiscoverSynth},
     {L"discover-pathscan", CmdDiscoverPathscan},
+    {L"dpathscan", CmdDiscoverPathscan},
     {L"discover-pathvalidate", CmdDiscoverPathValidate},
+    {L"dpathvalidate", CmdDiscoverPathValidate},
     {L"discover-scan", CmdDiscoverScan},
+    {L"dscan", CmdDiscoverScan},
     {L"discover-watch", CmdDiscoverMisc},
+    {L"dwatch", CmdDiscoverMisc},
     {L"discover-action-begin", CmdDiscoverMisc},
+    {L"dbegin", CmdDiscoverMisc},
     {L"discover-action-end", CmdDiscoverMisc},
+    {L"dend", CmdDiscoverMisc},
     {L"discover-watch-region", CmdDiscoverMisc},
+    {L"dregion", CmdDiscoverMisc},
     {L"discover-heat", CmdDiscoverMisc},
+    {L"dheat", CmdDiscoverMisc},
     {L"discover-rank", CmdDiscoverMisc},
+    {L"drank", CmdDiscoverMisc},
     {L"discover-cluster", CmdDiscoverMisc},
+    {L"dcluster", CmdDiscoverMisc},
     {L"discover-cands", CmdDiscoverMisc},
+    {L"dcands", CmdDiscoverMisc},
     {L"discover-unwatch", CmdDiscoverMisc},
+    {L"dunwatch", CmdDiscoverMisc},
     {L"discover-watch-import", CmdDiscoverMisc},
     {L"discover-reset-heat", CmdDiscoverMisc},
     {L"discover-export", CmdDiscoverMisc},
@@ -95,6 +112,10 @@ static const CmdEntry kCommands[] = {
     {L"watch", CmdWatch},
     {L"patch", CmdPatch},
     {L"stub", CmdStub},
+    {L"session", CmdSession},
+    {L"store", CmdStore},
+    {L"recipe", CmdRecipe},
+    {L"stabilize", CmdStabilize},
 };
 
 const CmdEntry* GetCommandTable(size_t* out_count) {
@@ -111,6 +132,41 @@ static CmdHandler FindCommand(const wchar_t* name) {
         }
     }
     return nullptr;
+}
+
+/* Map short aliases to the canonical verb name handlers compare against. */
+static const wchar_t* CanonicalCmd(const wchar_t* name) {
+    static const struct {
+        const wchar_t* alias;
+        const wchar_t* canon;
+    } kMap[] = {
+        {L"dcreate", L"discover-create"},
+        {L"dclose", L"discover-close"},
+        {L"dadd", L"discover-add"},
+        {L"dscan", L"discover-scan"},
+        {L"dconstraint", L"discover-constraint"},
+        {L"dsynth", L"discover-synth"},
+        {L"dpathscan", L"discover-pathscan"},
+        {L"dpathvalidate", L"discover-pathvalidate"},
+        {L"dwatch", L"discover-watch"},
+        {L"dunwatch", L"discover-unwatch"},
+        {L"dbegin", L"discover-action-begin"},
+        {L"dend", L"discover-action-end"},
+        {L"dregion", L"discover-watch-region"},
+        {L"dheat", L"discover-heat"},
+        {L"drank", L"discover-rank"},
+        {L"dcluster", L"discover-cluster"},
+        {L"dcands", L"discover-cands"},
+        {L"henable", L"hook-enable"},
+        {L"enablehook", L"hook-enable"},
+        {L"rpat", L"resolve-pattern"},
+    };
+    for (const auto& m : kMap) {
+        if (wcscmp(name, m.alias) == 0) {
+            return m.canon;
+        }
+    }
+    return name;
 }
 
 static bool EqFlag(const wchar_t* a, const wchar_t* b) {
@@ -143,20 +199,13 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     const wchar_t* store_path = nullptr;
-    bool want_tui = false;
-    bool want_repl = false;
     bool want_json = false;
     int argi = 1;
 
-    /* Optional global flags before pid: --store PATH --tui --json */
+    /* Optional global flags before pid: --store PATH --json */
     while (argi < argc) {
         if (EqFlag(argv[argi], L"--store") && argi + 1 < argc) {
             store_path = argv[++argi];
-            ++argi;
-            continue;
-        }
-        if (EqFlag(argv[argi], L"--tui")) {
-            want_tui = true;
             ++argi;
             continue;
         }
@@ -164,6 +213,12 @@ int wmain(int argc, wchar_t** argv) {
             want_json = true;
             ++argi;
             continue;
+        }
+        if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui") ||
+            EqFlag(argv[argi], L"repl")) {
+            wprintf(L"REPL/TUI removed; use one-shot verbs (session/store/recipe/stabilize).\n");
+            PrintUsage();
+            return 1;
         }
         break;
     }
@@ -186,40 +241,23 @@ int wmain(int argc, wchar_t** argv) {
             ++argi;
             continue;
         }
-        if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui")) {
-            want_tui = true;
-            ++argi;
-            continue;
-        }
         if (EqFlag(argv[argi], L"--json")) {
             want_json = true;
             ++argi;
             continue;
         }
-        if (EqFlag(argv[argi], L"repl")) {
-            want_repl = true;
-            ++argi;
-            continue;
+        if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui") ||
+            EqFlag(argv[argi], L"repl")) {
+            wprintf(L"REPL/TUI removed; use one-shot verbs (session/store/recipe/stabilize).\n");
+            PrintUsage();
+            return 1;
         }
         break;
     }
 
-    /* No subcommand → REPL; explicit repl/tui as above */
     if (argi >= argc) {
-        want_repl = true;
-    }
-
-    if (want_tui || want_repl) {
-        PipeClient client(pid);
-        if (!client.Connect()) {
-            return FailConnect(pid);
-        }
-        if (want_tui) {
-            // codeql[cpp/path-injection]
-            return hdlcli::RunTui(pid, client, store_path);
-        }
-        // codeql[cpp/path-injection]
-        return hdlcli::RunRepl(pid, client, store_path);
+        PrintUsage();
+        return 1;
     }
 
     const CmdHandler handler = FindCommand(argv[argi]);
@@ -227,24 +265,23 @@ int wmain(int argc, wchar_t** argv) {
         PrintUsage();
         return 1;
     }
+    const wchar_t* canon = CanonicalCmd(argv[argi]);
 
     PipeClient client(pid);
     if (!client.Connect()) {
         return FailConnect(pid);
     }
 
-    /* Rebuild argv so handlers still see: exe pid cmd args...
-       Original layout already matches when flags were only after pid. */
-    CmdCtx ctx{argc, argv, pid, argv[argi], client};
+    CmdCtx ctx{argc, argv, pid, canon, client};
     ctx.json = want_json;
-    /* If flags appeared before the command, shift so argv[2] is the command name.
-       Handlers use argv[1]=pid and argv[2]=cmd — keep that contract by synthesizing. */
-    if (argi != 2) {
+    ctx.store_path = store_path;
+    if (argi != 2 || canon != argv[argi]) {
         static wchar_t* syn[256];
+        static wchar_t canon_buf[64];
+        wcsncpy_s(canon_buf, canon, _TRUNCATE);
         int n = 0;
         syn[n++] = argv[0];
-        syn[n++] = argv[1]; /* may not be pid if --store preceded; fix below */
-        /* Prefer the numeric pid token we parsed — find it in argv. */
+        syn[n++] = argv[1];
         for (int i = 1; i < argc; ++i) {
             if (static_cast<uint32_t>(_wtoi(argv[i])) == pid && wcslen(argv[i]) > 0 &&
                 iswdigit(argv[i][0])) {
@@ -252,12 +289,13 @@ int wmain(int argc, wchar_t** argv) {
                 break;
             }
         }
-        for (int i = argi; i < argc && n < 255; ++i) {
+        syn[n++] = canon_buf;
+        for (int i = argi + 1; i < argc && n < 255; ++i) {
             syn[n++] = argv[i];
         }
         ctx.argc = n;
         ctx.argv = syn;
-        ctx.cmd = argv[argi];
+        ctx.cmd = canon_buf;
     }
     return Render(ctx, handler(ctx));
 }

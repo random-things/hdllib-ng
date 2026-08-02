@@ -25,7 +25,7 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
    Commands return `CommandResult` with structured `data_json` only; `Render()` in
    `json_out.cpp` formats human text from that payload (or the JSON envelope) at
-   the `main`/`repl` edge. Handlers no longer branch on `ctx.json` or pre-render
+   the `main` edge. Handlers no longer branch on `ctx.json` or pre-render
    prose.
 
 2. Replace the three ad hoc JSON implementations. **Done**
@@ -69,7 +69,7 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
   - PR: build, selection/store unit tests, API-only, client IPC tests.
   - Nightly/manual: full injection matrix and toy workflows.
-  - Build variants: both disassemblers, each backend alone, TUI on/off, Release and ASan.
+  - Build variants: both disassemblers, each backend alone, Release and ASan.
 
 - Split CTest registration into labeled tests such as `unit`, `api`, `ipc`, `lifecycle`, `inject`, and `toy`. The binary already supports modes, but CTest currently exposes only five coarse executables.
 
