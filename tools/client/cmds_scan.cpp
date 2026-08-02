@@ -1,10 +1,11 @@
 #include "cmd.hpp"
+#include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
-#include "protocol.hpp"
 #include "hdllib/hdllib.h"
+#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -14,33 +15,9 @@
 #include <string>
 #include <vector>
 
-static int FailIpc(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-    }
-    return 1;
-}
-
-static int FailBadResp(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-    } else {
-        wprintf(L"Bad response\n");
-    }
-    return 1;
-}
-
-static int FailArg(CmdCtx& ctx, const wchar_t* hint) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), hint);
-    } else {
-        wprintf(L"%ls\n", hint);
-    }
-    return 1;
-}
-
-static void EmitHitsJson(CmdCtx& ctx, int32_t st, uint64_t session, bool have_session,
-                         uint32_t total, const std::vector<uint64_t>& hits) {
+static std::string BuildHitsJson(int32_t /*st*/, uint64_t session, bool have_session,
+                                 uint32_t total, const std::vector<uint64_t>& hits,
+                                 const wchar_t* /*cmd*/) {
     JsonWriter w;
     w.BeginObject();
     if (have_session) {
@@ -56,11 +33,12 @@ static void EmitHitsJson(CmdCtx& ctx, int32_t st, uint64_t session, bool have_se
     }
     w.EndArray();
     w.EndObject();
-    EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
+    return w.Take();
 }
 
 bool ParseValueType(const wchar_t* s, int32_t* out) {
-    if (!s || !out) return false;
+    if (!s || !out)
+        return false;
     if (_wcsicmp(s, L"bytes") == 0 || _wcsicmp(s, L"aob") == 0) {
         *out = HDL_VALUE_BYTES;
     } else if (_wcsicmp(s, L"i8") == 0) {
@@ -94,7 +72,8 @@ bool ParseValueType(const wchar_t* s, int32_t* out) {
 }
 
 bool ParseCmp(const wchar_t* s, int32_t* out) {
-    if (!s || !out) return false;
+    if (!s || !out)
+        return false;
     if (_wcsicmp(s, L"exact") == 0) {
         *out = HDL_CMP_EXACT;
     } else if (_wcsicmp(s, L"unknown") == 0) {
@@ -158,8 +137,7 @@ bool EncodeTypedValue(int32_t type, const wchar_t* text, std::vector<uint8_t>& o
     }
     if (type == HDL_VALUE_STRING) {
         char buf[1024];
-        const int n =
-            WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf), nullptr, nullptr);
+        const int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf), nullptr, nullptr);
         if (n <= 1) {
             return false;
         }
@@ -181,49 +159,44 @@ bool EncodeTypedValue(int32_t type, const wchar_t* text, std::vector<uint8_t>& o
     wchar_t* end = nullptr;
     if (type == HDL_VALUE_F32) {
         const float v = static_cast<float>(wcstod(text, &end));
-        if (end == text) return false;
+        if (end == text)
+            return false;
         memcpy(out.data(), &v, 4);
         return true;
     }
     if (type == HDL_VALUE_F64) {
         const double v = wcstod(text, &end);
-        if (end == text) return false;
+        if (end == text)
+            return false;
         memcpy(out.data(), &v, 8);
         return true;
     }
     if (type == HDL_VALUE_I8 || type == HDL_VALUE_I16 || type == HDL_VALUE_I32 ||
         type == HDL_VALUE_I64) {
         const int64_t v = _wcstoi64(text, &end, 0);
-        if (end == text) return false;
+        if (end == text)
+            return false;
         memcpy(out.data(), &v, width);
         return true;
     }
     const uint64_t v = _wcstoui64(text, &end, 0);
-    if (end == text) return false;
+    if (end == text)
+        return false;
     memcpy(out.data(), &v, width);
     return true;
 }
 
-bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
+static bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
     AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
     if (!ctx.client.Request(req, resp)) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-        }
         return false;
     }
     Reader r(resp);
     int32_t st = 0;
     if (!r.TakePod(st) || !r.TakePod(*out_id) || st != HDL_OK) {
-        if (ctx.json) {
-            EmitError(ctx, st != HDL_OK ? st : HDL_E_FAILED, ctx.cmd.c_str(), nullptr);
-        } else {
-            wprintf(L"scan-create status=%ls\n", StatusName(st));
-            PrintStatusHint(ctx.cmd, st);
-        }
         return false;
     }
     return true;
@@ -231,8 +204,7 @@ bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
 
 /* Growable collector for search frames: total, count, u64[count] (no offset). */
 bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
-                         uint32_t* out_total, std::vector<uint64_t>* out_hits,
-                         bool* out_bad_resp) {
+                         uint32_t* out_total, std::vector<uint64_t>* out_hits, bool* out_bad_resp) {
     using namespace hdl::proto;
     if (!out_st || !out_total || !out_hits) {
         return false;
@@ -244,54 +216,44 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
         *out_bad_resp = false;
     }
     bool bad_resp = false;
-    bool ok = client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
-        Reader r(p, n);
-        uint32_t total = 0;
-        uint32_t count = 0;
-        if (!r.TakePod(total) || !r.TakePod(count)) {
-            bad_resp = true;
-            return false;
-        }
-        const size_t need = out_hits->size() + count;
-        if (out_hits->capacity() < need) {
-            size_t cap = out_hits->capacity() ? out_hits->capacity() : 256;
-            while (cap < need) {
-                cap *= 2;
-            }
-            out_hits->reserve(cap);
-        }
-        for (uint32_t i = 0; i < count; ++i) {
-            uint64_t hit = 0;
-            if (!r.TakePod(hit)) {
+    bool ok =
+        client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
+            Reader r(p, n);
+            uint32_t total = 0;
+            uint32_t count = 0;
+            if (!r.TakePod(total) || !r.TakePod(count)) {
                 bad_resp = true;
                 return false;
             }
-            out_hits->push_back(hit);
-        }
-        if ((flags & HDL_IPC_MORE) == 0) {
-            *out_st = st;
-            *out_total = total ? total : static_cast<uint32_t>(out_hits->size());
-        }
-        return true;
-    });
+            const size_t need = out_hits->size() + count;
+            if (out_hits->capacity() < need) {
+                size_t cap = out_hits->capacity() ? out_hits->capacity() : 256;
+                while (cap < need) {
+                    cap *= 2;
+                }
+                out_hits->reserve(cap);
+            }
+            for (uint32_t i = 0; i < count; ++i) {
+                uint64_t hit = 0;
+                if (!r.TakePod(hit)) {
+                    bad_resp = true;
+                    return false;
+                }
+                out_hits->push_back(hit);
+            }
+            if ((flags & HDL_IPC_MORE) == 0) {
+                *out_st = st;
+                *out_total = total ? total : static_cast<uint32_t>(out_hits->size());
+            }
+            return true;
+        });
     if (out_bad_resp) {
         *out_bad_resp = bad_resp;
     }
     return ok;
 }
 
-void PrintHitList(const std::vector<uint64_t>& hits, uint32_t max_print) {
-    const uint32_t n =
-        (max_print && max_print < hits.size()) ? max_print : static_cast<uint32_t>(hits.size());
-    for (uint32_t i = 0; i < n; ++i) {
-        wprintf(L"  %016llx\n", static_cast<unsigned long long>(hits[i]));
-    }
-    if (max_print && hits.size() > max_print) {
-        wprintf(L"  ... (%zu more)\n", hits.size() - max_print);
-    }
-}
-
-int PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
+static CommandResult PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     AppendPod(req, static_cast<uint32_t>(OpSearchGetHits));
@@ -299,7 +261,7 @@ int PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
     AppendPod(req, max_hits);
     AppendPod(req, static_cast<uint64_t>(0));
     AppendPod(req, static_cast<uint32_t>(0));
-    AppendPod(req, static_cast<uint32_t>(HDL_IPC_REQ_STREAM)); /* always streamed */
+    AppendPod(req, static_cast<uint32_t>(HDL_IPC_REQ_STREAM));
 
     int32_t st = 0;
     uint32_t total = 0;
@@ -308,18 +270,11 @@ int PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
     if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
         return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
-    if (ctx.json) {
-        EmitHitsJson(ctx, st, session, true, total, hits);
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls total=%u session=%llu\n", StatusName(st), total,
-            static_cast<unsigned long long>(session));
-    PrintHitList(hits, 0);
-    PrintStatusHint(ctx.cmd, st);
-    return st == HDL_OK ? 0 : 1;
+    std::string data_json = BuildHitsJson(st, session, true, total, hits, ctx.cmd.c_str());
+    return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
 }
 
-int CmdScan(CmdCtx& ctx) {
+CommandResult CmdScan(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -399,8 +354,8 @@ int CmdScan(CmdCtx& ctx) {
     };
 
     // Legacy one-shot AOB path (no session) — always streamed with backpressure.
-    if (pattern && !do_next && !do_hits && !do_close && !do_reset && value_type == HDL_VALUE_BYTES &&
-        !have_session && !have_cmp) {
+    if (pattern && !do_next && !do_hits && !do_close && !do_reset &&
+        value_type == HDL_VALUE_BYTES && !have_session && !have_cmp) {
         AppendPod(req, static_cast<uint32_t>(OpSearchMemory));
         AppendPod(req, start);
         AppendPod(req, size);
@@ -414,14 +369,8 @@ int CmdScan(CmdCtx& ctx) {
         if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
-        if (ctx.json) {
-            EmitHitsJson(ctx, st, 0, false, total, hits);
-            return st == HDL_OK ? 0 : 1;
-        }
-        wprintf(L"status=%ls hits=%u\n", StatusName(st), total);
-        PrintHitList(hits, 0);
-        PrintStatusHint(ctx.cmd, st);
-        return st == HDL_OK ? 0 : 1;
+        std::string data_json = BuildHitsJson(st, 0, false, total, hits, ctx.cmd.c_str());
+        return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
     }
 
     if (do_hits || do_close || do_reset || do_next) {
@@ -442,26 +391,17 @@ int CmdScan(CmdCtx& ctx) {
         Reader r(resp);
         int32_t st = 0;
         r.TakePod(st);
-        if (ctx.json) {
-            JsonWriter w;
-            w.BeginObject();
-            w.Key("session");
-            w.HexStr(session);
-            w.EndObject();
-            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
-            return st == HDL_OK ? 0 : 1;
-        }
-        wprintf(L"status=%ls session=%llu\n", StatusName(st),
-                static_cast<unsigned long long>(session));
-        PrintStatusHint(ctx.cmd, st);
-        return st == HDL_OK ? 0 : 1;
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("session");
+        w.HexStr(session);
+        w.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
     }
 
     if (do_next) {
         std::vector<uint8_t> encoded;
         if (have_value) {
-            // Type is unknown on the ctx.client for next; encode as raw for bytes pattern
-            // or require --type when value is supplied.
             if (value_type < 0) {
                 return FailArg(ctx, L"--type required with --value on --next");
             }
@@ -484,32 +424,19 @@ int CmdScan(CmdCtx& ctx) {
         int32_t st = 0;
         uint32_t count = 0;
         if (!r.TakePod(st) || !r.TakePod(count)) {
-            if (ctx.json) {
-                EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-            }
-            return 1;
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"Bad response");
         }
-        if (ctx.json) {
-            if (st == HDL_OK) {
-                return PrintScanHits(ctx, session, max_hits);
-            }
-            JsonWriter w;
-            w.BeginObject();
-            w.Key("session");
-            w.HexStr(session);
-            w.Key("hits");
-            w.Num(count);
-            w.EndObject();
-            EmitEnvelope(ctx, st, ctx.cmd.c_str(), w.Take());
-            return 1;
-        }
-        wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), count,
-                static_cast<unsigned long long>(session));
         if (st == HDL_OK) {
             return PrintScanHits(ctx, session, max_hits);
         }
-        PrintStatusHint(ctx.cmd, st);
-        return 1;
+        JsonWriter w;
+        w.BeginObject();
+        w.Key("session");
+        w.HexStr(session);
+        w.Key("hits");
+        w.Num(count);
+        w.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
     }
 
     // First typed / session scan.
@@ -528,7 +455,6 @@ int CmdScan(CmdCtx& ctx) {
         const wchar_t* src = have_value ? value_text.c_str() : nullptr;
         std::wstring tmp;
         if (pattern && !have_value) {
-            // pattern already narrow; re-widen for EncodeTypedValue path via storage
             wchar_t wbuf[1024];
             MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wbuf, 1024);
             tmp = wbuf;
@@ -547,7 +473,7 @@ int CmdScan(CmdCtx& ctx) {
 
     if (!have_session) {
         if (!IpcCreateSession(ctx, &session)) {
-            return ctx.json ? 1 : 1;
+            return FailIpc(ctx);
         }
         have_session = true;
     }
@@ -586,14 +512,6 @@ int CmdScan(CmdCtx& ctx) {
     if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
         return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
-    if (ctx.json) {
-        EmitHitsJson(ctx, st, session, true, total, hits);
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls hits=%u session=%llu\n", StatusName(st), total,
-            static_cast<unsigned long long>(session));
-    PrintHitList(hits, 0);
-    PrintStatusHint(ctx.cmd, st);
-    return st == HDL_OK ? 0 : 1;
+    std::string data_json = BuildHitsJson(st, session, true, total, hits, ctx.cmd.c_str());
+    return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
 }
-

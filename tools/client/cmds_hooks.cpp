@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "usage.hpp"
 #include "util.hpp"
@@ -15,32 +16,7 @@
 #include <string>
 #include <vector>
 
-static int FailUsage(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
-    } else {
-        PrintUsage();
-    }
-    return 1;
-}
-
-static int FailIpc(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-    }
-    return 1;
-}
-
-static int FailBadResp(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-    } else {
-        wprintf(L"Bad response\n");
-    }
-    return 1;
-}
-
-int CmdHooktrace(CmdCtx& ctx) {
+CommandResult CmdHooktrace(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -67,22 +43,15 @@ int CmdHooktrace(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(handle)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("handle");
-        w.HexStr(handle);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"hooktrace", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls handle=%016llx\n", StatusName(st),
-            static_cast<unsigned long long>(handle));
-    PrintStatusHint(L"hooktrace", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("handle");
+    w.HexStr(handle);
+    w.EndObject();
+    return CmdStatus(L"hooktrace", st, w.Take());
 }
 
-int CmdHook(CmdCtx& ctx) {
+CommandResult CmdHook(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -115,24 +84,17 @@ int CmdHook(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(handle) || !r.TakePod(trampoline)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("handle");
-        w.HexStr(handle);
-        w.Key("trampoline");
-        w.HexStr(trampoline);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"hook", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls handle=%016llx trampoline=%016llx\n", StatusName(st),
-            static_cast<unsigned long long>(handle), static_cast<unsigned long long>(trampoline));
-    PrintStatusHint(L"hook", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("handle");
+    w.HexStr(handle);
+    w.Key("trampoline");
+    w.HexStr(trampoline);
+    w.EndObject();
+    return CmdStatus(L"hook", st, w.Take());
 }
 
-int CmdUnhook(CmdCtx& ctx) {
+CommandResult CmdUnhook(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -149,19 +111,10 @@ int CmdUnhook(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"unhook", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls\n", StatusName(st));
-    PrintStatusHint(L"unhook", st);
-    return st == HDL_OK ? 0 : 1;
+    return CmdStatus(L"unhook", st, "{}");
 }
 
-int CmdHookEnable(CmdCtx& ctx) {
+CommandResult CmdHookEnable(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -180,19 +133,10 @@ int CmdHookEnable(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"hook-enable", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls\n", StatusName(st));
-    PrintStatusHint(L"hook-enable", st);
-    return st == HDL_OK ? 0 : 1;
+    return CmdStatus(L"hook-enable", st, "{}");
 }
 
-int CmdHookhits(CmdCtx& ctx) {
+CommandResult CmdHookhits(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -229,48 +173,38 @@ int CmdHookhits(CmdCtx& ctx) {
         hits.push_back(hit);
     }
 
-    if (ctx.json) {
-        JsonWriter w;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("count");
+    w.Num(count);
+    w.Key("hits");
+    w.BeginArray();
+    for (const auto& hit : hits) {
         w.BeginObject();
-        w.Key("count");
-        w.Num(count);
-        w.Key("hits");
+        w.Key("hook_id");
+        w.HexStr(hit.hook_id);
+        w.Key("return_value");
+        w.HexStr(hit.return_value);
+        w.Key("caller");
+        w.HexStr(hit.caller);
+        w.Key("args");
         w.BeginArray();
-        for (const auto& hit : hits) {
-            w.BeginObject();
-            w.Key("hook_id");
-            w.HexStr(hit.hook_id);
-            w.Key("return_value");
-            w.HexStr(hit.return_value);
-            w.Key("caller");
-            w.HexStr(hit.caller);
-            w.Key("args");
-            w.BeginArray();
-            for (uint32_t a = 0; a < hit.arg_count && a < 8; ++a) {
-                w.HexStr(hit.args[a]);
-            }
-            w.EndArray();
-            w.EndObject();
+        for (uint32_t a = 0; a < hit.arg_count && a < 8; ++a) {
+            w.HexStr(hit.args[a]);
         }
         w.EndArray();
         w.EndObject();
-        EmitEnvelope(ctx, st, L"hookhits", w.Take());
-        return st == HDL_OK ? 0 : 1;
     }
+    w.EndArray();
+    w.EndObject();
 
-    wprintf(L"status=%ls count=%u\n", StatusName(st), count);
     for (const auto& hit : hits) {
-        wprintf(L"  hook=%016llx ret=%016llx caller=%016llx args=%u",
-                static_cast<unsigned long long>(hit.hook_id),
-                static_cast<unsigned long long>(hit.return_value),
-                static_cast<unsigned long long>(hit.caller), hit.arg_count);
         for (uint32_t a = 0; a < hit.arg_count && a < 8; ++a) {
-            wprintf(L" a%u=%llx", a, static_cast<unsigned long long>(hit.args[a]));
+            wchar_t arg[64];
+            swprintf_s(arg, L" a%u=%llx", a, static_cast<unsigned long long>(hit.args[a]));
         }
-        wprintf(L"\n");
     }
-    PrintStatusHint(L"hookhits", st);
-    return st == HDL_OK ? 0 : 1;
+    return CmdStatus(L"hookhits", st, w.Take());
 }
 
 static std::string NarrowHook(const wchar_t* w) {
@@ -279,7 +213,7 @@ static std::string NarrowHook(const wchar_t* w) {
     return buf;
 }
 
-int CmdHookImport(CmdCtx& ctx) {
+CommandResult CmdHookImport(CmdCtx& ctx) {
     using namespace hdl::proto;
     if (ctx.argc < 4) {
         return FailUsage(ctx);
@@ -294,12 +228,7 @@ int CmdHookImport(CmdCtx& ctx) {
         wcsncpy_s(buf, ctx.argv[3], _TRUNCATE);
         wchar_t* b = wcschr(buf, L'!');
         if (!b) {
-            if (ctx.json) {
-                EmitError(ctx, HDL_E_INVALID_ARG, L"hook-import", L"bad DLL!Name");
-            } else {
-                wprintf(L"Bad DLL!Name\n");
-            }
-            return 1;
+            return CmdFail(L"hook-import", HDL_E_INVALID_ARG, L"bad DLL!Name");
         }
         *b = 0;
         dll = NarrowHook(buf);
@@ -318,13 +247,8 @@ int CmdHookImport(CmdCtx& ctx) {
         }
     }
     if (dll.empty() || import_name.empty()) {
-        if (ctx.json) {
-            EmitError(ctx, HDL_E_INVALID_ARG, L"hook-import",
-                      L"need hook-import DLL!Name or --dll X --import Y");
-        } else {
-            wprintf(L"Need hook-import DLL!Name or --dll X --import Y\n");
-        }
-        return 1;
+        return CmdFail(L"hook-import", HDL_E_INVALID_ARG,
+                       L"need hook-import DLL!Name or --dll X --import Y");
     }
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -342,17 +266,10 @@ int CmdHookImport(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(handle)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("handle");
-        w.HexStr(handle);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"hook-import", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls handle=%016llx\n", StatusName(st),
-            static_cast<unsigned long long>(handle));
-    PrintStatusHint(L"hook-import", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("handle");
+    w.HexStr(handle);
+    w.EndObject();
+    return CmdStatus(L"hook-import", st, w.Take());
 }

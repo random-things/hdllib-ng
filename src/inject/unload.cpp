@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
@@ -51,34 +52,32 @@ bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
 /* Ask the in-target helper to restore instrumentation before FreeLibrary (hdllib only). */
 bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
     bool is_helper = false;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snap != INVALID_HANDLE_VALUE) {
+    win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid));
+    if (snap) {
         MODULEENTRY32W me{};
         me.dwSize = sizeof(me);
-        if (Module32FirstW(snap, &me)) {
+        if (Module32FirstW(snap.get(), &me)) {
             do {
                 if (reinterpret_cast<uint64_t>(me.modBaseAddr) == module_base) {
-                    HMODULE probe =
-                        LoadLibraryExW(me.szExePath, nullptr, DONT_RESOLVE_DLL_REFERENCES);
+                    win::unique_hmodule probe(
+                        LoadLibraryExW(me.szExePath, nullptr, DONT_RESOLVE_DLL_REFERENCES));
                     if (probe) {
-                        if (GetProcAddress(probe, "HdlShutdown") ||
-                            GetProcAddress(probe, "HdlShutdownEx")) {
+                        if (GetProcAddress(probe.get(), "HdlShutdown") ||
+                            GetProcAddress(probe.get(), "HdlShutdownEx")) {
                             is_helper = true;
                         }
-                        FreeLibrary(probe);
                     }
                     break;
                 }
-            } while (Module32NextW(snap, &me));
+            } while (Module32NextW(snap.get(), &me));
         }
-        CloseHandle(snap);
     }
     if (!is_helper) {
         return false;
     }
 
-    HANDLE pipe = HdlOpenLocalPipe(pid);
-    if (pipe == INVALID_HANDLE_VALUE) {
+    win::unique_handle pipe(HdlOpenLocalPipe(pid));
+    if (!pipe) {
         return false;
     }
 
@@ -86,23 +85,20 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
     proto::AppendPod(req, static_cast<uint32_t>(proto::OpShutdown));
     proto::AppendPod(req, flags);
     const uint32_t size = static_cast<uint32_t>(req.size());
-    if (!PipeWriteExact(pipe, &size, sizeof(size)) ||
-        !PipeWriteExact(pipe, req.data(), size)) {
-        CloseHandle(pipe);
+    if (!PipeWriteExact(pipe.get(), &size, sizeof(size)) ||
+        !PipeWriteExact(pipe.get(), req.data(), size)) {
         return false;
     }
 
     uint32_t rsize = 0;
-    if (!PipeReadExact(pipe, &rsize, sizeof(rsize)) || rsize < sizeof(int32_t)) {
-        CloseHandle(pipe);
+    if (!PipeReadExact(pipe.get(), &rsize, sizeof(rsize)) || rsize < sizeof(int32_t)) {
         return false;
     }
     std::vector<uint8_t> resp(rsize);
-    if (!PipeReadExact(pipe, resp.data(), rsize)) {
-        CloseHandle(pipe);
+    if (!PipeReadExact(pipe.get(), resp.data(), rsize)) {
         return false;
     }
-    CloseHandle(pipe);
+    pipe.reset();
 
     int32_t status = HDL_E_FAILED;
     memcpy(&status, resp.data(), sizeof(status));
@@ -112,14 +108,12 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
     }
     /* Wait until the pipe is gone so ServeClient has left the DLL. */
     for (int i = 0; i < 150; ++i) {
-        HANDLE probe = HdlOpenLocalPipe(pid);
-        if (probe == INVALID_HANDLE_VALUE) {
+        win::unique_handle probe(HdlOpenLocalPipe(pid));
+        if (!probe) {
             const DWORD err = GetLastError();
             if (err == ERROR_FILE_NOT_FOUND) {
                 break;
             }
-        } else {
-            CloseHandle(probe);
         }
         Sleep(20);
     }
@@ -142,14 +136,13 @@ HdlStatus FreeLibraryUntilGone(DWORD pid, const wchar_t* dll_path, HMODULE mod, 
         }
 
         if (remote) {
-            HANDLE thread =
-                ::CreateRemoteThread(process, nullptr, 0, free_library, mod, 0, nullptr);
+            win::unique_handle thread(
+                ::CreateRemoteThread(process, nullptr, 0, free_library, mod, 0, nullptr));
             if (!thread) {
                 HDL_LOG_ERROR("CreateRemoteThread(FreeLibrary) failed: %lu", GetLastError());
                 return HDL_E_FAILED;
             }
-            WaitForSingleObject(thread, INFINITE);
-            CloseHandle(thread);
+            WaitForSingleObject(thread.get(), INFINITE);
         } else {
             if (!::FreeLibrary(mod)) {
                 HDL_LOG_ERROR("FreeLibrary failed: %lu", GetLastError());
@@ -163,7 +156,7 @@ HdlStatus FreeLibraryUntilGone(DWORD pid, const wchar_t* dll_path, HMODULE mod, 
     return PollForModuleGone(pid, dll_path);
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus UnloadLocal(const wchar_t* dll_path, int reload, uint64_t* out_base) {
     if (out_base) {
@@ -214,15 +207,14 @@ HdlStatus UnloadRemoteEx(uint32_t pid, const wchar_t* dll_path, int reload, uint
         HDL_LOG_INFO("Prepare shutdown skipped or failed for pid %u (continuing unload)", pid);
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         HDL_LOG_ERROR("OpenProcess(%u) failed: %lu", pid, GetLastError());
         return HDL_E_ACCESS;
     }
 
     HMODULE mod = reinterpret_cast<HMODULE>(static_cast<uintptr_t>(base));
-    const HdlStatus st = FreeLibraryUntilGone(pid, dll_path, mod, true, process);
-    CloseHandle(process);
+    const HdlStatus st = FreeLibraryUntilGone(pid, dll_path, mod, true, process.get());
     if (st != HDL_OK) {
         return st;
     }
@@ -237,5 +229,5 @@ HdlStatus UnloadRemoteEx(uint32_t pid, const wchar_t* dll_path, int reload, uint
     return CreateRemoteThreadMethod(pid, dll_path, out_base);
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

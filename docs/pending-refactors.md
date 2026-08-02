@@ -21,38 +21,47 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
 ## Practical refactors
 
-1. Separate CLI execution from presentation.
+1. Separate CLI execution from presentation. **Done**
 
-   The latest JSON work added 128 `ctx.json` branches across command handlers. Commands should return a typed `CommandResult`; independent human and JSON renderers should format it. This would shrink files such as [`cmds_place.cpp`](/C:/Users/Me/Documents/GitHub/hdllib/tools/client/cmds_place.cpp:61), centralize error handling, and make JSON schema tests straightforward.
+   Commands return `CommandResult` with structured `data_json` only; `Render()` in
+   `json_out.cpp` formats human text from that payload (or the JSON envelope) at
+   the `main`/`repl` edge. Handlers no longer branch on `ctx.json` or pre-render
+   prose.
 
-2. Replace the three ad hoc JSON implementations.
+2. Replace the three ad hoc JSON implementations. **Done**
 
-   JSON parsing/writing is duplicated in [`store.cpp`](/C:/Users/Me/Documents/GitHub/hdllib/tools/client/store.cpp:43), [`discover.cpp`](/C:/Users/Me/Documents/GitHub/hdllib/src/discover.cpp:406), and `JsonWriter`. Use a vetted parser or one shared, strictly tested module. Also write UTF-8 bytes directly: the current JSON path converts UTF-8 back to wide text and calls `fputws` ([json_out.cpp](/C:/Users/Me/Documents/GitHub/hdllib/tools/client/json_out.cpp:179)), making redirected output encoding locale-dependent.
+   Shared first-party module in [`src/json/`](../src/json/); `JsonWriter` / store /
+   discover / CLI text rendering consume it. Helpers are minimal extractors (not a
+   full-document JSON validator); see the contract comment in `json.hpp`. Redirected
+   UTF-8 via `fwrite` remains.
 
-3. Split the largest translation units by responsibility.
+3. Split the largest translation units by responsibility. **Done**
 
-   - `discover.cpp` (1,554 lines): session state, scanning, path/pattern analysis, action evidence, persistence.
-   - `memory.cpp` (1,281 lines): safe access, region/module enumeration, scan engine, search-session state.
-   - `cmds_place.cpp` (1,488 lines): placement, disassembly, PE metadata, graph, watches, patches, stubs.
-   - `test_main.cpp` (2,155 lines): lifecycle, memory, code, hooks, discovery, IPC, injection.
+   - `cmds_place.cpp` → `cmds_place_mem.cpp`, `cmds_disasm.cpp`, `cmds_pe_meta.cpp`, `cmds_typeinfo.cpp`, `cmds_watch.cpp`, `cmds_patch.cpp` (shared helpers in `cmds_place_internal.hpp`).
+   - `test_main.cpp` → `test_local_api.cpp`, `test_locate.cpp`, `test_discover_target.cpp`, `test_lifecycle.cpp`, `test_inject_matrix.cpp` (shared fixtures in `test_fixtures.cpp`/`test_runners.hpp`).
+   - `memory.cpp` → `memory_rw.cpp`, `memory_aob.cpp`, `memory_search.cpp` (shared state in `memory_internal.hpp`).
+   - `discover.cpp` → `discover_type.cpp`, `discover_session.cpp`, `discover_scan.cpp`, `discover_path.cpp`, `discover_watch.cpp`, `discover_serde.cpp` (shared state in `discover_internal.hpp`).
 
-   Preserve the current public facades while moving implementation into focused files.
+   Public facades `discover.hpp`, `memory.hpp`, `cmd.hpp` are preserved.
 
-4. Introduce Win32 RAII primitives.
+4. Introduce Win32 RAII primitives. **Done**
 
-   There are many manually balanced `HANDLE`, remote allocation, mapping, protection, and thread cleanup paths. Add `unique_handle`, `unique_hmodule`, `remote_allocation`, and scope-exit helpers. Apply them first to injection techniques and IPC server ownership.
+   `src/win/raii.hpp` provides `unique_handle`, `unique_hmodule`, and `scope_exit`. Applied across injection techniques (`create_remote_thread`, `queue_user_apc`, `rtl_create_user_thread`, `nt_create_thread_ex`, `thread_hijack`, `rtl_remote_call`, `early_bird_apc`, `section_map`, `manual_map`) and IPC server ownership.
 
-5. Make operations declarative.
+5. Make operations declarative. **Done**
 
-   A single operation manifest could define opcode, handler, capability group, and name. Generate or derive the opcode table, dispatch table, capability response, and documentation checks from it. This prevents drift across `protocol.hpp`, `handlers.hpp`, `dispatch.cpp`, client commands, and capability documentation.
+   `src/ipc/ops_manifest.inc` defines every opcode, handler symbol, and capability bit in one
+   X-macro table. `protocol.hpp` derives `enum Op`, `dispatch.cpp` generates its switch, and
+   `tests/ops_manifest_test.cpp` validates uniqueness and capability-bit sanity at build time.
 
-6. Split the public header without breaking consumers.
+6. Split the public header without breaking consumers. **Done**
 
-   Keep `hdllib/hdllib.h` as the umbrella header, but move declarations into versioned subsystem headers such as `types.h`, `memory.h`, `discover.h`, and `hooks.h`. Add ABI `static_assert`s and an exported-symbol snapshot test.
+   `hdllib/hdllib.h` is now an umbrella that includes subsystem headers (`types.h`, `memory.h`, `locate.h`, `discover.h`, `health.h`, `place.h`, `call.h`, `hooks.h`, `code.h`, `pe.h`, `graph.h`, `vtable.h`, `watch.h`). ABI `static_assert`s and an exported-symbol golden-file snapshot test are in `hdl_abi_tests`.
 
-7. Correct documentation drift.
+7. Correct documentation drift. **Done**
 
-   Both [`missing-usability.md`](/C:/Users/Me/Documents/GitHub/hdllib/docs/missing-usability.md:21) and [`missing-features.md`](/C:/Users/Me/Documents/GitHub/hdllib/docs/missing-features.md:249) still claim that `--json` does not exist, although it was implemented in the same current commit.
+   `missing-usability.md` and `missing-features.md` now describe the implemented `--json`
+   envelope and remaining gaps (broader goldens, optional bindings).
 
 ## Testing and tooling recommendations
 

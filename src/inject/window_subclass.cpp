@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -106,17 +107,16 @@ FARPROC GetUser32Proc(const char* name) {
 }
 
 HdlStatus RunRemote(HANDLE process, void* stub, void* args, DWORD timeout_ms = 8000) {
-    HANDLE t = ::CreateRemoteThread(process, nullptr, 0,
-                                    reinterpret_cast<LPTHREAD_START_ROUTINE>(stub), args, 0, nullptr);
+    win::unique_handle t(::CreateRemoteThread(
+        process, nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(stub), args, 0, nullptr));
     if (!t) {
         return HDL_E_FAILED;
     }
-    const DWORD wr = WaitForSingleObject(t, timeout_ms);
-    CloseHandle(t);
+    const DWORD wr = WaitForSingleObject(t.get(), timeout_ms);
     return wr == WAIT_OBJECT_0 ? HDL_OK : HDL_E_FAILED;
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     HWND hwnd = FindWindowForPid(pid);
@@ -134,7 +134,7 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
         return HDL_E_NOT_FOUND;
     }
 
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
@@ -146,16 +146,14 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     }
 
     RemoteAlloc path_mem;
-    HdlStatus st = WriteRemotePath(process, dll_path, path_mem);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, path_mem);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     RemoteAlloc flag_mem;
     uint8_t zero = 0;
-    if (!flag_mem.Alloc(process, 1) || !flag_mem.Write(&zero, 1)) {
-        CloseHandle(process);
+    if (!flag_mem.Alloc(process.get(), 1) || !flag_mem.Write(&zero, 1)) {
         return HDL_E_NO_MEM;
     }
 
@@ -168,18 +166,16 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     wnd.jnz_call[1] = 30;
 
     RemoteAlloc stub_mem;
-    if (!stub_mem.Alloc(process, sizeof(wnd), PAGE_EXECUTE_READWRITE) ||
+    if (!stub_mem.Alloc(process.get(), sizeof(wnd), PAGE_EXECUTE_READWRITE) ||
         !stub_mem.Write(&wnd, sizeof(wnd))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
-    RegisterCfgCallTarget(process, stub_mem.ptr);
+    RegisterCfgCallTarget(process.get(), stub_mem.ptr);
 
     SetWndProcStub set_stub{};
     RemoteAlloc set_stub_mem;
-    if (!set_stub_mem.Alloc(process, sizeof(set_stub), PAGE_EXECUTE_READWRITE) ||
+    if (!set_stub_mem.Alloc(process.get(), sizeof(set_stub), PAGE_EXECUTE_READWRITE) ||
         !set_stub_mem.Write(&set_stub, sizeof(set_stub))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
@@ -189,24 +185,21 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     set_args.index = GWLP_WNDPROC;
     set_args.new_proc = reinterpret_cast<uint64_t>(stub_mem.ptr);
     RemoteAlloc set_args_mem;
-    if (!set_args_mem.Alloc(process, sizeof(set_args)) ||
+    if (!set_args_mem.Alloc(process.get(), sizeof(set_args)) ||
         !set_args_mem.Write(&set_args, sizeof(set_args))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
 
-    if (RunRemote(process, set_stub_mem.ptr, set_args_mem.ptr) != HDL_OK) {
+    if (RunRemote(process.get(), set_stub_mem.ptr, set_args_mem.ptr) != HDL_OK) {
         HDL_LOG_ERROR("WindowSubclass: remote SetWindowLongPtrW failed");
-        CloseHandle(process);
         return HDL_E_FAILED;
     }
 
     // PostMessage does not wait on the UI thread (avoids SendMessage deadlocks).
     PostMsgStub post_stub{};
     RemoteAlloc post_stub_mem;
-    if (!post_stub_mem.Alloc(process, sizeof(post_stub), PAGE_EXECUTE_READWRITE) ||
+    if (!post_stub_mem.Alloc(process.get(), sizeof(post_stub), PAGE_EXECUTE_READWRITE) ||
         !post_stub_mem.Write(&post_stub, sizeof(post_stub))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
     PostMsgArgs post_args{};
@@ -214,19 +207,18 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     post_args.hwnd = reinterpret_cast<uint64_t>(hwnd);
     post_args.msg = WM_NULL;
     RemoteAlloc post_args_mem;
-    if (!post_args_mem.Alloc(process, sizeof(post_args)) ||
+    if (!post_args_mem.Alloc(process.get(), sizeof(post_args)) ||
         !post_args_mem.Write(&post_args, sizeof(post_args))) {
-        CloseHandle(process);
         return HDL_E_NO_MEM;
     }
-    RunRemote(process, post_stub_mem.ptr, post_args_mem.ptr);
+    RunRemote(process.get(), post_stub_mem.ptr, post_args_mem.ptr);
     PostMessageW(hwnd, WM_NULL, 0, 0);
 
     st = PollForModule(pid, dll_path, out_base);
 
     set_args.new_proc = static_cast<uint64_t>(original);
     set_args_mem.Write(&set_args, sizeof(set_args));
-    RunRemote(process, set_stub_mem.ptr, set_args_mem.ptr);
+    RunRemote(process.get(), set_stub_mem.ptr, set_args_mem.ptr);
 
     path_mem.Detach();
     flag_mem.Detach();
@@ -235,7 +227,6 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     set_args_mem.Detach();
     post_stub_mem.Detach();
     post_args_mem.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("WindowSubclass inject into pid %u ok", pid);
@@ -245,5 +236,5 @@ HdlStatus WindowSubclassMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* 
     return st;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

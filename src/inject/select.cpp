@@ -1,4 +1,5 @@
 #include "inject/select.hpp"
+#include "win/raii.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -9,66 +10,526 @@ namespace inject {
 namespace {
 
 const MethodRequirement kCatalog[] = {
-    {HDL_INJECT_CREATE_REMOTE_THREAD, "create_remote_thread", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 0, 5},
-    {HDL_INJECT_NT_CREATE_THREAD_EX, "nt_create_thread_ex", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     true, false, false, false, false, false, false, false, false, false, 0, 4},
-    {HDL_INJECT_RTL_CREATE_USER_THREAD, "rtl_create_user_thread", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, true, false, false, false, false, false, false, false, false, 0, 3},
-    {HDL_INJECT_QUEUE_USER_APC, "queue_user_apc", AttachMode::AttachPid,
-     true, true, false, false, false, true, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 5, 0},
-    {HDL_INJECT_SET_WINDOWS_HOOK_EX, "set_windows_hook_ex", AttachMode::AttachPid,
-     false, false, false, true, false, false, false, false, false, false, DllExportKind::HookProc,
-     false, false, false, false, false, false, false, false, false, false, 4, 2},
-    {HDL_INJECT_THREAD_HIJACK, "thread_hijack", AttachMode::AttachPid,
-     true, false, true, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 6, 1},
-    {HDL_INJECT_MANUAL_MAP, "manual_map", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 12, 1},
-    {HDL_INJECT_EARLY_BIRD_APC, "early_bird_apc", AttachMode::SpawnExe,
-     false, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 2, 0},
-    {HDL_INJECT_ATOM_BOMBING, "atom_bombing", AttachMode::AttachPid,
-     true, true, false, false, false, true, false, false, false, false, DllExportKind::None,
-     false, false, true, false, false, false, false, false, false, false, 8, 0},
-    {HDL_INJECT_MODULE_STOMP, "module_stomp", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, true, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 10, 1},
-    {HDL_INJECT_SECTION_MAP, "section_map", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, true, false, false, 1, 2},
-    {HDL_INJECT_WINDOW_SUBCLASS, "window_subclass", AttachMode::AttachPid,
-     true, false, false, true, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 4, 1},
-    {HDL_INJECT_INSTRUMENTATION_CALLBACK, "instrumentation_callback", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, true, 3, -2},
-    {HDL_INJECT_KERNEL_CALLBACK_TABLE, "kernel_callback_table", AttachMode::AttachPid,
-     true, false, false, true, false, false, false, true, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 7, 0},
-    {HDL_INJECT_VEH, "veh", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, false, false, true, false, 1, 1},
-    {HDL_INJECT_SET_WIN_EVENT_HOOK, "set_win_event_hook", AttachMode::AttachPid,
-     false, false, false, false, true, false, false, false, false, false, DllExportKind::WinEventProc,
-     false, false, false, false, false, false, false, false, false, false, 3, 1},
-    {HDL_INJECT_RTL_REMOTE_CALL, "rtl_remote_call", AttachMode::AttachPid,
-     true, false, true, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, true, false, false, false, false, false, 3, 0},
-    {HDL_INJECT_SPECIAL_USER_APC, "special_user_apc", AttachMode::AttachPid,
-     true, true, false, false, false, false, false, false, false, true, DllExportKind::None,
-     false, false, false, false, false, false, false, false, false, false, 6, 2},
-    {HDL_INJECT_THREAD_POOL, "thread_pool", AttachMode::AttachPid,
-     true, false, false, false, false, false, false, false, false, false, DllExportKind::None,
-     false, false, false, false, false, true, false, false, false, false, 5, 2},
-    {HDL_INJECT_ETW_CALLBACK, "etw_callback", AttachMode::AttachPid,
-     true, false, false, false, false, false, true, false, false, false, DllExportKind::None,
-     false, false, false, false, false, false, true, false, false, false, 3, -1},
+    {HDL_INJECT_CREATE_REMOTE_THREAD,
+     "create_remote_thread",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     0,
+     5},
+    {HDL_INJECT_NT_CREATE_THREAD_EX,
+     "nt_create_thread_ex",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     0,
+     4},
+    {HDL_INJECT_RTL_CREATE_USER_THREAD,
+     "rtl_create_user_thread",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     0,
+     3},
+    {HDL_INJECT_QUEUE_USER_APC,
+     "queue_user_apc",
+     AttachMode::AttachPid,
+     true,
+     true,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     5,
+     0},
+    {HDL_INJECT_SET_WINDOWS_HOOK_EX,
+     "set_windows_hook_ex",
+     AttachMode::AttachPid,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::HookProc,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     4,
+     2},
+    {HDL_INJECT_THREAD_HIJACK,
+     "thread_hijack",
+     AttachMode::AttachPid,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     6,
+     1},
+    {HDL_INJECT_MANUAL_MAP,
+     "manual_map",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     12,
+     1},
+    {HDL_INJECT_EARLY_BIRD_APC,
+     "early_bird_apc",
+     AttachMode::SpawnExe,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     2,
+     0},
+    {HDL_INJECT_ATOM_BOMBING,
+     "atom_bombing",
+     AttachMode::AttachPid,
+     true,
+     true,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     8,
+     0},
+    {HDL_INJECT_MODULE_STOMP,
+     "module_stomp",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     10,
+     1},
+    {HDL_INJECT_SECTION_MAP,
+     "section_map",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     1,
+     2},
+    {HDL_INJECT_WINDOW_SUBCLASS,
+     "window_subclass",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     4,
+     1},
+    {HDL_INJECT_INSTRUMENTATION_CALLBACK,
+     "instrumentation_callback",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     3,
+     -2},
+    {HDL_INJECT_KERNEL_CALLBACK_TABLE,
+     "kernel_callback_table",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     7,
+     0},
+    {HDL_INJECT_VEH,
+     "veh",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     1,
+     1},
+    {HDL_INJECT_SET_WIN_EVENT_HOOK,
+     "set_win_event_hook",
+     AttachMode::AttachPid,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::WinEventProc,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     3,
+     1},
+    {HDL_INJECT_RTL_REMOTE_CALL,
+     "rtl_remote_call",
+     AttachMode::AttachPid,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     3,
+     0},
+    {HDL_INJECT_SPECIAL_USER_APC,
+     "special_user_apc",
+     AttachMode::AttachPid,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     6,
+     2},
+    {HDL_INJECT_THREAD_POOL,
+     "thread_pool",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     5,
+     2},
+    {HDL_INJECT_ETW_CALLBACK,
+     "etw_callback",
+     AttachMode::AttachPid,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     DllExportKind::None,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     3,
+     -1},
 };
 
 void AppendReason(char* buf, size_t cap, const char* tag) {
@@ -90,34 +551,33 @@ void AppendReason(char* buf, size_t cap, const char* tag) {
 }
 
 bool IsElevated() {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    HANDLE raw_token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token)) {
         return false;
     }
+    win::unique_handle token(raw_token);
     TOKEN_ELEVATION elev{};
     DWORD got = 0;
-    const BOOL ok = GetTokenInformation(token, TokenElevation, &elev, sizeof(elev), &got);
-    CloseHandle(token);
+    const BOOL ok = GetTokenInformation(token.get(), TokenElevation, &elev, sizeof(elev), &got);
     return ok && elev.TokenIsElevated != 0;
 }
 
 bool ModulePresent(DWORD pid, const wchar_t* file) {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snap == INVALID_HANDLE_VALUE) {
+    win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid));
+    if (!snap) {
         return false;
     }
     MODULEENTRY32W me{};
     me.dwSize = sizeof(me);
     bool found = false;
-    if (Module32FirstW(snap, &me)) {
+    if (Module32FirstW(snap.get(), &me)) {
         do {
             if (_wcsicmp(me.szModule, file) == 0) {
                 found = true;
                 break;
             }
-        } while (Module32NextW(snap, &me));
+        } while (Module32NextW(snap.get(), &me));
     }
-    CloseHandle(snap);
     return found;
 }
 
@@ -153,16 +613,14 @@ bool CheckDllExport(const wchar_t* dll_path, const char* export_name) {
     if (!dll_path || !dll_path[0] || !export_name || !export_name[0]) {
         return false;
     }
-    HMODULE mod = LoadLibraryExW(dll_path, nullptr, DONT_RESOLVE_DLL_REFERENCES);
+    win::unique_hmodule mod(LoadLibraryExW(dll_path, nullptr, DONT_RESOLVE_DLL_REFERENCES));
     if (!mod) {
-        mod = LoadLibraryW(dll_path);
+        mod.reset(LoadLibraryW(dll_path));
     }
     if (!mod) {
         return false;
     }
-    const bool ok = GetProcAddress(mod, export_name) != nullptr;
-    FreeLibrary(mod);
-    return ok;
+    return GetProcAddress(mod.get(), export_name) != nullptr;
 }
 
 FARPROC NtdllProc(const char* name) {
@@ -178,22 +636,18 @@ void ProbeLocalApis(TargetProfile& p) {
     p.api_rtl_remote_call = NtdllProc("RtlRemoteCall") != nullptr;
     p.api_tp = NtdllProc("TpAllocWork") != nullptr && NtdllProc("TpPostWork") != nullptr;
     p.api_etw = NtdllProc("EtwEventRegister") != nullptr;
-    p.api_nt_create_section = NtdllProc("NtCreateSection") != nullptr &&
-                              NtdllProc("NtMapViewOfSection") != nullptr;
+    p.api_nt_create_section =
+        NtdllProc("NtCreateSection") != nullptr && NtdllProc("NtMapViewOfSection") != nullptr;
     p.api_rtl_add_veh = NtdllProc("RtlAddVectoredExceptionHandler") != nullptr;
     p.api_nt_set_info_process = NtdllProc("NtSetInformationProcess") != nullptr;
 }
 
 bool ThreadOpenable(DWORD pid, DWORD access) {
-    HANDLE t = OpenApcThread(pid, access);
-    if (!t) {
-        return false;
-    }
-    CloseHandle(t);
-    return true;
+    win::unique_handle t(OpenApcThread(pid, access));
+    return !!t;
 }
 
-}  // namespace
+} // namespace
 
 const MethodRequirement* MethodCatalog(size_t* out_count) {
     if (out_count) {
@@ -235,9 +689,9 @@ HdlStatus ResolveTarget(const HdlTargetSpec* spec, uint32_t* out_pid, HWND* out_
             HWND hwnd = nullptr;
             uint32_t matched_pid = 0;
             uint32_t count = 0;
-            const HdlStatus st = FindWindowByTitleClass(spec->pid, spec->window_title_or_null,
-                                                       spec->window_class_or_null, &hwnd,
-                                                       &matched_pid, &count);
+            const HdlStatus st =
+                FindWindowByTitleClass(spec->pid, spec->window_title_or_null,
+                                       spec->window_class_or_null, &hwnd, &matched_pid, &count);
             if (st == HDL_E_BUSY) {
                 return HDL_E_BUSY;
             }
@@ -264,7 +718,7 @@ HdlStatus ResolveTarget(const HdlTargetSpec* spec, uint32_t* out_pid, HWND* out_
     uint32_t pid = 0;
     uint32_t count = 0;
     const HdlStatus st = FindWindowByTitleClass(0, spec->window_title_or_null,
-                                               spec->window_class_or_null, &hwnd, &pid, &count);
+                                                spec->window_class_or_null, &hwnd, &pid, &count);
     if (st != HDL_OK) {
         return st;
     }
@@ -288,31 +742,29 @@ TargetProfile BuildTargetProfile(uint32_t pid, HWND hwnd_hint, const wchar_t* dl
         return p;
     }
 
-    HANDLE probe = OpenTargetProcess(pid);
+    win::unique_handle probe(OpenTargetProcess(pid));
     if (probe) {
         p.process_openable = true;
         BOOL wow = FALSE;
-        if (IsWow64Process(probe, &wow)) {
+        if (IsWow64Process(probe.get(), &wow)) {
             p.wow64_target = wow != FALSE;
         }
-        p.kct_nonzero = ProbeKct(probe);
-        CloseHandle(probe);
+        p.kct_nonzero = ProbeKct(probe.get());
     } else {
         p.process_openable = false;
-        HANDLE limited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        win::unique_handle limited(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
         if (limited) {
             BOOL wow = FALSE;
-            if (IsWow64Process(limited, &wow)) {
+            if (IsWow64Process(limited.get(), &wow)) {
                 p.wow64_target = wow != FALSE;
             }
-            CloseHandle(limited);
         }
     }
 
-    p.threads_openable =
-        ThreadOpenable(pid, THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION);
-    p.suspend_context_openable = ThreadOpenable(
-        pid, THREAD_SET_CONTEXT | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION);
+    p.threads_openable = ThreadOpenable(pid, THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION);
+    p.suspend_context_openable =
+        ThreadOpenable(pid, THREAD_SET_CONTEXT | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME |
+                                THREAD_QUERY_INFORMATION);
 
     HWND hwnd = hwnd_hint;
     if (!hwnd) {
@@ -412,7 +864,8 @@ void ScoreMethod(const MethodRequirement& req, const TargetProfile& profile,
                  "missing_api:NtCreateThreadEx") ||
         api_fail(req.need_api_rtl_create_user_thread, profile.api_rtl_create_user_thread,
                  "missing_api:RtlCreateUserThread") ||
-        api_fail(req.need_api_nt_queue_apc, profile.api_nt_queue_apc, "missing_api:NtQueueApcThread") ||
+        api_fail(req.need_api_nt_queue_apc, profile.api_nt_queue_apc,
+                 "missing_api:NtQueueApcThread") ||
         api_fail(req.need_api_rtl_remote_call, profile.api_rtl_remote_call,
                  "missing_api:RtlRemoteCall") ||
         api_fail(req.need_api_tp, profile.api_tp, "missing_api:Tp*") ||
@@ -556,19 +1009,20 @@ void ScoreAllMethods(const TargetProfile& profile, HdlInjectCandidate* out, uint
         ScoreMethod(catalog[i], profile, &tmp[i]);
     }
 
-    std::sort(tmp.begin(), tmp.end(), [&](const HdlInjectCandidate& a, const HdlInjectCandidate& b) {
-        if (a.confidence != b.confidence) {
-            return a.confidence > b.confidence;
-        }
-        const MethodRequirement* ra = FindMethodRequirement(a.method);
-        const MethodRequirement* rb = FindMethodRequirement(b.method);
-        const int sa = ra ? ra->stability_bias : 0;
-        const int sb = rb ? rb->stability_bias : 0;
-        if (sa != sb) {
-            return sa > sb;
-        }
-        return a.method < b.method;
-    });
+    std::sort(tmp.begin(), tmp.end(),
+              [&](const HdlInjectCandidate& a, const HdlInjectCandidate& b) {
+                  if (a.confidence != b.confidence) {
+                      return a.confidence > b.confidence;
+                  }
+                  const MethodRequirement* ra = FindMethodRequirement(a.method);
+                  const MethodRequirement* rb = FindMethodRequirement(b.method);
+                  const int sa = ra ? ra->stability_bias : 0;
+                  const int sb = rb ? rb->stability_bias : 0;
+                  if (sa != sb) {
+                      return sa > sb;
+                  }
+                  return a.method < b.method;
+              });
 
     for (size_t i = 0; i < catalog_n; ++i) {
         out[i] = tmp[i];
@@ -596,12 +1050,11 @@ int PickBestMethod(const TargetProfile& profile, int min_confidence) {
         }
     }
 
-    if ((cands[0].flags & HDL_INJECT_CAND_ELIGIBLE) == 0 ||
-        cands[0].confidence < min_confidence) {
+    if ((cands[0].flags & HDL_INJECT_CAND_ELIGIBLE) == 0 || cands[0].confidence < min_confidence) {
         return -1;
     }
     return cands[0].method;
 }
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

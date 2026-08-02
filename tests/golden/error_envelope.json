@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "status": "*",
+  "cmd": "call",
+  "data": {},
+  "error": {
+    "code": "*",
+    "name": "*",
+    "hint": "*"
+  }
+}

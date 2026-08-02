@@ -160,7 +160,9 @@ target_link_libraries(hdl_inject PUBLIC Psapi Advapi32)
 set(HDL_DOMAIN_SOURCES
   src/core.cpp
   src/loaded_modules.cpp
-  src/memory.cpp
+  src/memory_rw.cpp
+  src/memory_aob.cpp
+  src/memory_search.cpp
   src/hooks.cpp
   src/hooks_trace.asm
   src/ipc_server.cpp
@@ -185,7 +187,13 @@ set(HDL_DOMAIN_SOURCES
   src/alloc.cpp
   src/resolve.cpp
   src/locate.cpp
-  src/discover.cpp
+  src/discover_session.cpp
+  src/discover_scan.cpp
+  src/discover_path.cpp
+  src/discover_watch.cpp
+  src/discover_type.cpp
+  src/discover_serde.cpp
+  src/json/json.cpp
   src/place.cpp
   src/code.cpp
   src/pe_meta.cpp
@@ -301,12 +309,18 @@ if(HDL_BUILD_TOOLS)
     tools/client/cmds_scan.cpp
     tools/client/cmds_discover.cpp
     tools/client/cmds_ipc_inject.cpp
-    tools/client/cmds_place.cpp
+    tools/client/cmds_place_mem.cpp
+    tools/client/cmds_disasm.cpp
+    tools/client/cmds_pe_meta.cpp
+    tools/client/cmds_typeinfo.cpp
+    tools/client/cmds_watch.cpp
+    tools/client/cmds_patch.cpp
     tools/client/ipc_ops.cpp
     tools/client/store.cpp
     tools/client/recipes.cpp
     tools/client/repl.cpp
     tools/client/tui.cpp
+    src/json/json.cpp
   )
   target_include_directories(hdlclient PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -332,6 +346,12 @@ if(HDL_BUILD_TESTS)
 
   add_executable(hdl_tests
     tests/test_main.cpp
+    tests/test_fixtures.cpp
+    tests/test_local_api.cpp
+    tests/test_locate.cpp
+    tests/test_discover_target.cpp
+    tests/test_lifecycle.cpp
+    tests/test_inject_matrix.cpp
     $<TARGET_OBJECTS:hdl_domain_obj>
   )
   target_include_directories(hdl_tests PRIVATE
@@ -421,9 +441,10 @@ if(HDL_BUILD_TESTS)
     TIMEOUT 60
     LABELS "headless;unit")
 
-  add_executable(hdl_store_tests tests/store_test.cpp tools/client/store.cpp)
+  add_executable(hdl_store_tests tests/store_test.cpp tools/client/store.cpp src/json/json.cpp)
   target_include_directories(hdl_store_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
   )
   target_compile_definitions(hdl_store_tests PRIVATE UNICODE _UNICODE)
@@ -449,11 +470,59 @@ if(HDL_BUILD_TESTS)
     TIMEOUT 30
     LABELS "headless;unit")
 
+  add_executable(hdl_json_tests tests/json_test.cpp src/json/json.cpp)
+  target_include_directories(hdl_json_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_definitions(hdl_json_tests PRIVATE UNICODE _UNICODE)
+  hdl_configure_target(hdl_json_tests)
+  add_test(NAME hdl_json_tests COMMAND hdl_json_tests)
+  set_tests_properties(hdl_json_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
+
+  add_executable(hdl_ops_manifest_tests tests/ops_manifest_test.cpp)
+  target_include_directories(hdl_ops_manifest_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  string(REPLACE "\\" "/" _hdl_handlers_hpp "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc/handlers.hpp")
+  target_compile_definitions(hdl_ops_manifest_tests PRIVATE
+    UNICODE _UNICODE
+    "HDL_HANDLERS_HPP=\"${_hdl_handlers_hpp}\"")
+  hdl_configure_target(hdl_ops_manifest_tests)
+  add_test(NAME hdl_ops_manifest_tests COMMAND hdl_ops_manifest_tests)
+  set_tests_properties(hdl_ops_manifest_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
+
+  add_executable(hdl_abi_tests tests/abi_layout_test.cpp)
+  target_include_directories(hdl_abi_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_compile_definitions(hdl_abi_tests PRIVATE UNICODE _UNICODE)
+  hdl_configure_target(hdl_abi_tests)
+  add_dependencies(hdl_abi_tests hdllib)
+  add_custom_command(TARGET hdl_abi_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:hdllib> $<TARGET_FILE_DIR:hdl_abi_tests>
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden
+      $<TARGET_FILE_DIR:hdl_abi_tests>/golden
+    COMMENT "Copy hdllib.dll and golden test data beside hdl_abi_tests"
+  )
+  add_test(NAME hdl_abi_tests
+    COMMAND hdl_abi_tests
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:hdl_abi_tests>)
+  set_tests_properties(hdl_abi_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;abi;unit")
+
   if(HDL_BUILD_TOOLS)
     add_executable(hdl_client_tests
       tests/client_test_main.cpp
       tools/client/store.cpp
       tools/client/pipe_client.cpp
+      src/json/json.cpp
     )
     target_include_directories(hdl_client_tests PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -472,7 +541,10 @@ if(HDL_BUILD_TESTS)
         $<TARGET_FILE:hdl_test_target> $<TARGET_FILE_DIR:hdl_client_tests>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:hdlclient> $<TARGET_FILE_DIR:hdl_client_tests>
-      COMMENT "Copy hdllib, hdl_test_target, hdlclient beside hdl_client_tests"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden
+        $<TARGET_FILE_DIR:hdl_client_tests>/golden
+      COMMENT "Copy hdllib, hdl_test_target, hdlclient, golden beside hdl_client_tests"
     )
     add_test(NAME hdl_client_tests
       COMMAND hdl_client_tests

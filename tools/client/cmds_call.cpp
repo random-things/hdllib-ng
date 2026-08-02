@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "usage.hpp"
 #include "util.hpp"
@@ -14,40 +15,6 @@
 #include <cstring>
 #include <string>
 #include <vector>
-
-static int FailUsage(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"missing or invalid arguments");
-    } else {
-        PrintUsage();
-    }
-    return 1;
-}
-
-static int FailIpc(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"IPC request failed");
-    }
-    return 1;
-}
-
-static int FailBadResp(CmdCtx& ctx) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_FAILED, ctx.cmd.c_str(), L"bad response");
-    } else {
-        wprintf(L"Bad response\n");
-    }
-    return 1;
-}
-
-static int FailBadArg(CmdCtx& ctx, const wchar_t* arg) {
-    if (ctx.json) {
-        EmitError(ctx, HDL_E_INVALID_ARG, ctx.cmd.c_str(), L"bad call argument");
-    } else {
-        wprintf(L"Bad arg: %ls\n", arg);
-    }
-    return 1;
-}
 
 bool EncodeCallArg(const wchar_t* s, int32_t* kind, uint32_t* size, uint64_t* u64,
                    std::vector<uint8_t>* blob) {
@@ -124,7 +91,8 @@ void AppendCallArg(std::vector<uint8_t>& req, int32_t kind, uint32_t size, uint6
     }
 }
 
-int PrintCallReply(CmdCtx& ctx, const wchar_t* verb, const std::vector<uint8_t>& resp) {
+static CommandResult PrintCallReply(CmdCtx& ctx, const wchar_t* verb,
+                                    const std::vector<uint8_t>& resp) {
     using namespace hdl::proto;
     Reader r(resp);
     int32_t st = 0;
@@ -160,45 +128,39 @@ int PrintCallReply(CmdCtx& ctx, const wchar_t* verb, const std::vector<uint8_t>&
         }
     }
 
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("return");
-        w.HexStr(result.return_value);
-        w.Key("last_error");
-        w.Num(result.last_error);
-        if (!bufs.empty()) {
-            w.Key("bufs");
-            w.BeginArray();
-            for (const auto& bd : bufs) {
-                w.BeginObject();
-                w.Key("index");
-                w.Num(bd.idx);
-                w.Key("hex");
-                w.Str(bd.hex);
-                w.EndObject();
-            }
-            w.EndArray();
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("return");
+    w.HexStr(result.return_value);
+    w.Key("last_error");
+    w.Num(result.last_error);
+    if (!bufs.empty()) {
+        w.Key("bufs");
+        w.BeginArray();
+        for (const auto& bd : bufs) {
+            w.BeginObject();
+            w.Key("index");
+            w.Num(bd.idx);
+            w.Key("hex");
+            w.Str(bd.hex);
+            w.EndObject();
         }
-        w.EndObject();
-        EmitEnvelope(ctx, st, verb, w.Take());
-        return st == HDL_OK ? 0 : 1;
+        w.EndArray();
     }
+    w.EndObject();
 
-    wprintf(L"status=%ls return=%016llx last_error=%u\n", StatusName(st),
-            static_cast<unsigned long long>(result.return_value), result.last_error);
     for (const auto& bd : bufs) {
-        wprintf(L"buf[%u]=", bd.idx);
+        wchar_t prefix[32];
+        swprintf_s(prefix, L"buf[%u]=", bd.idx);
         for (size_t i = 0; i < bd.hex.size(); i += 2) {
-            wprintf(L"%lc%lc", bd.hex[i], bd.hex[i + 1]);
+            wchar_t pair[4];
+            swprintf_s(pair, L"%lc%lc", bd.hex[i], bd.hex[i + 1]);
         }
-        wprintf(L"\n");
     }
-    PrintStatusHint(verb, st);
-    return st == HDL_OK ? 0 : 1;
+    return CmdStatus(verb, st, w.Take());
 }
 
-int CmdResolve(CmdCtx& ctx) {
+CommandResult CmdResolve(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -229,21 +191,15 @@ int CmdResolve(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(addr)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("addr");
-        w.HexStr(addr);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"resolve", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls addr=%016llx\n", StatusName(st), static_cast<unsigned long long>(addr));
-    PrintStatusHint(L"resolve", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("addr");
+    w.HexStr(addr);
+    w.EndObject();
+    return CmdStatus(L"resolve", st, w.Take());
 }
 
-int CmdCall(CmdCtx& ctx) {
+CommandResult CmdCall(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -302,7 +258,7 @@ int CmdCall(CmdCtx& ctx) {
         uint64_t u64 = 0;
         std::vector<uint8_t> blob;
         if (!EncodeCallArg(t.c_str(), &kind, &size, &u64, &blob)) {
-            return FailBadArg(ctx, t.c_str());
+            return FailArg(ctx, t.c_str());
         }
         if (kind == HDL_CALL_ARG_PTR) {
             AppendPod(req, kind);
@@ -318,7 +274,7 @@ int CmdCall(CmdCtx& ctx) {
     return PrintCallReply(ctx, L"call", resp);
 }
 
-int CmdVcall(CmdCtx& ctx) {
+CommandResult CmdVcall(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -361,7 +317,7 @@ int CmdVcall(CmdCtx& ctx) {
         uint64_t u64 = 0;
         std::vector<uint8_t> blob;
         if (!EncodeCallArg(t.c_str(), &kind, &size, &u64, &blob)) {
-            return FailBadArg(ctx, t.c_str());
+            return FailArg(ctx, t.c_str());
         }
         if (kind == HDL_CALL_ARG_PTR) {
             AppendPod(req, kind);
@@ -377,7 +333,7 @@ int CmdVcall(CmdCtx& ctx) {
     return PrintCallReply(ctx, L"vcall", resp);
 }
 
-int CmdAlloc(CmdCtx& ctx) {
+CommandResult CmdAlloc(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -409,21 +365,15 @@ int CmdAlloc(CmdCtx& ctx) {
     if (!r.TakePod(st) || !r.TakePod(addr)) {
         return FailBadResp(ctx);
     }
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("addr");
-        w.HexStr(addr);
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"alloc", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls addr=%016llx\n", StatusName(st), static_cast<unsigned long long>(addr));
-    PrintStatusHint(L"alloc", st);
-    return st == HDL_OK ? 0 : 1;
+    JsonWriter w;
+    w.BeginObject();
+    w.Key("addr");
+    w.HexStr(addr);
+    w.EndObject();
+    return CmdStatus(L"alloc", st, w.Take());
 }
 
-int CmdFree(CmdCtx& ctx) {
+CommandResult CmdFree(CmdCtx& ctx) {
     using namespace hdl::proto;
     std::vector<uint8_t> req;
     std::vector<uint8_t> resp;
@@ -440,14 +390,5 @@ int CmdFree(CmdCtx& ctx) {
     Reader r(resp);
     int32_t st = 0;
     r.TakePod(st);
-    if (ctx.json) {
-        JsonWriter w;
-        w.BeginObject();
-        w.EndObject();
-        EmitEnvelope(ctx, st, L"free", w.Take());
-        return st == HDL_OK ? 0 : 1;
-    }
-    wprintf(L"status=%ls\n", StatusName(st));
-    PrintStatusHint(L"free", st);
-    return st == HDL_OK ? 0 : 1;
+    return CmdStatus(L"free", st, "{}");
 }

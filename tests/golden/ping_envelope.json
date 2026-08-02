@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "status": 0,
+  "cmd": "ping",
+  "data": {
+    "remote_pid": "*"
+  },
+  "error": null
+}

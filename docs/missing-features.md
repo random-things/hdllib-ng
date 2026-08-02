@@ -195,26 +195,27 @@ action workflows can continue without manually re-entering every watch.
 
 **Why it matters:** Agents, CI, and long scripted investigations need stable
 structured output and preferably a binding thicker than hand-rolled pipe frames.
-Human text from `hdlclient` is not a contract.
 
-**Current state:** No `--json` (or NDJSON) flag anywhere under `tools/client/`.
-Public surfaces are `hdllib.h` and the raw opcode protocol. Overlaps with
-[missing-usability.md](missing-usability.md) item on `--json`; this entry is the
-product-level requirement including non-CLI consumers.
+**Current state:** CLI `--json` is implemented (envelope via
+[`EmitEnvelope`](../tools/client/json_out.cpp); see [client.md](client.md) and
+[missing-usability.md](missing-usability.md) §1). Public surfaces remain
+`hdllib.h` and the raw opcode protocol; there is no thicker SDK/binding yet.
 
 **What needs to be done:**
 
-1. Define a JSON (or CBOR) envelope for CLI results: `status`, `op`, `data`,
-   optional `error` with code + hint.
-2. Implement `--json` on high-traffic verbs first (`ping`, `modules`, `scan`,
-   `discover-cands`, `hookhits`, `watch hits`, `fingerprint`).
+1. ~~Define a JSON envelope for CLI results~~ (done: `ok`/`status`/`cmd`/`data`/`error`).
+2. ~~Implement `--json` on high-traffic verbs~~ (done across `cmds_*.cpp`).
 3. Optionally publish a minimal C++/Python helper that wraps `PipeClient`
    framing (even if Python is ctypes over a small shim DLL).
 4. Tie to protocol capabilities (item 1) so automation can feature-detect.
 5. Keep human text as default; never break existing REPL formatting.
+6. Expand golden schema fixtures beyond ping/modules/error
+   (see [missing-usability.md](missing-usability.md) §1).
 
-**Acceptance:** A script can inject, scan, and drain hook hits without regexing
-console output; status codes remain aligned with `HdlStatus`.
+**Acceptance (CLI half done):** A script can inject, scan, and drain hook hits
+without regexing console output; status codes remain aligned with `HdlStatus`.
+Handlers return structured `data_json`; `Render()` owns JSON vs text. Remaining
+acceptance is the optional PipeClient helper / bindings.
 
 ---
 

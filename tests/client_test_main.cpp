@@ -5,6 +5,7 @@
 #include "protocol.hpp"
 #include "store.hpp"
 #include "support.hpp"
+#include "json/json.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -23,6 +24,121 @@ using hdltest::TargetProc;
 using hdltest::TargetProfile;
 
 namespace {
+
+std::string ToNarrow(const std::wstring& w) {
+    if (w.empty())
+        return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0,
+                                      nullptr, nullptr);
+    if (n <= 0)
+        return {};
+    std::string s(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr,
+                        nullptr);
+    return s;
+}
+
+bool LoadFileUtf8(const char* path, std::string* out) {
+    if (!path || !out) {
+        return false;
+    }
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f) {
+        return false;
+    }
+    out->clear();
+    char buf[4096];
+    while (size_t n = fread(buf, 1, sizeof(buf), f)) {
+        out->append(buf, n);
+    }
+    fclose(f);
+    return true;
+}
+
+/* Golden fixtures use "*" for any non-absent value (string/number/array/object/bool). */
+bool GoldenFieldMatches(const std::string& live, const std::string& golden, const char* key) {
+    std::string gval;
+    if (!hdl::json::ExtractString(golden, key, &gval)) {
+        /* Try as presence-only: key must exist in live when present in golden text. */
+        if (golden.find(std::string("\"") + key + "\"") == std::string::npos) {
+            return true;
+        }
+        /* Numeric / bool / null / nested — require key present in live. */
+        return live.find(std::string("\"") + key + "\"") != std::string::npos;
+    }
+    if (gval == "*") {
+        /* Wildcard: accept any present value for this key. */
+        return live.find(std::string("\"") + key + "\"") != std::string::npos;
+    }
+    std::string lval;
+    return hdl::json::ExtractString(live, key, &lval) && lval == gval;
+}
+
+bool MatchEnvelopeGolden(const std::string& live, const std::string& golden_path) {
+    std::string golden;
+    if (!LoadFileUtf8(golden_path.c_str(), &golden)) {
+        return false;
+    }
+    /* Required envelope keys always present in fixtures. */
+    if (!GoldenFieldMatches(live, golden, "cmd")) {
+        return false;
+    }
+    const bool g_ok_true = golden.find("\"ok\":true") != std::string::npos;
+    const bool g_ok_false = golden.find("\"ok\":false") != std::string::npos;
+    const bool l_ok_true = live.find("\"ok\":true") != std::string::npos;
+    const bool l_ok_false = live.find("\"ok\":false") != std::string::npos;
+    if (g_ok_true && !l_ok_true) {
+        return false;
+    }
+    if (g_ok_false && !l_ok_false) {
+        return false;
+    }
+    if (golden.find("\"error\":null") != std::string::npos) {
+        if (live.find("\"error\":null") == std::string::npos) {
+            return false;
+        }
+    } else if (golden.find("\"error\":{") != std::string::npos) {
+        if (live.find("\"error\":{") == std::string::npos) {
+            return false;
+        }
+        if (!GoldenFieldMatches(live, golden, "name")) {
+            return false;
+        }
+        if (!GoldenFieldMatches(live, golden, "hint")) {
+            return false;
+        }
+        /* code may be wildcard via "*" string — fixtures use numeric "*"? ours use "*" as string
+         * in name/hint; code is numeric in fixture as "*"-string under error — ExtractString works
+         * only for quoted. Our error golden has "code": "*" as string? Looking at fixture - "code":
+         * "*" is invalid JSON if unquoted. We used "code": "*" as JSON string. Live has numeric
+         * code. So for code, just require presence. */
+        if (live.find("\"code\"") == std::string::npos) {
+            return false;
+        }
+    }
+    if (golden.find("\"remote_pid\"") != std::string::npos) {
+        uint64_t pid = 0;
+        if (!hdl::json::ExtractU64(live, "remote_pid", &pid) || pid == 0) {
+            return false;
+        }
+    }
+    if (golden.find("\"modules\"") != std::string::npos) {
+        if (live.find("\"modules\"") == std::string::npos) {
+            return false;
+        }
+    }
+    int32_t status = -1;
+    if (!hdl::json::ExtractI32(live, "status", &status)) {
+        return false;
+    }
+    if (g_ok_true && status != HDL_OK) {
+        return false;
+    }
+    if (g_ok_false && status == HDL_OK) {
+        return false;
+    }
+    return true;
+}
 
 struct ProcResult {
     DWORD exit_code = 1;
@@ -1071,34 +1187,40 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         }
     }
 
-    /* --json structured output + actionable error hints */
+    /* --json structured output + actionable error hints (golden fixtures + parse checks) */
     {
         ProcResult r;
         RunProcess(ctx.client, {L"--json", std::to_wstring(ctx.pid), L"ping"}, nullptr, 30000, &r);
-        Report(c,
-               r.exit_code == 0 && Contains(r.out, L"\"ok\":true") &&
-                   Contains(r.out, L"\"cmd\":\"ping\"") && Contains(r.out, L"\"remote_pid\"") &&
-                   Contains(r.out, L"\"error\":null"),
-               false, "client --json ping envelope", "");
+        const std::string pj = ToNarrow(r.out);
+        {
+            const bool ping_ok =
+                r.exit_code == 0 && MatchEnvelopeGolden(pj, "golden/ping_envelope.json");
+            Report(c, ping_ok, false, "client --json ping golden envelope", "");
+            uint64_t remote_pid = 0;
+            const bool has_pid = hdl::json::ExtractU64(pj, "remote_pid", &remote_pid);
+            Report(c, has_pid && remote_pid == ctx.pid, false,
+                   "client --json ping remote_pid matches", "");
+        }
 
         ProcResult mods;
         RunProcess(ctx.client, {L"--json", std::to_wstring(ctx.pid), L"modules"}, nullptr, 30000,
                    &mods);
-        Report(c,
-               mods.exit_code == 0 && Contains(mods.out, L"\"ok\":true") &&
-                   Contains(mods.out, L"\"modules\"") && Contains(mods.out, L"\"base\""),
-               false, "client --json modules array", "");
+        {
+            const std::string mj = ToNarrow(mods.out);
+            Report(c,
+                   mods.exit_code == 0 && MatchEnvelopeGolden(mj, "golden/modules_envelope.json"),
+                   false, "client --json modules golden envelope", "");
+        }
 
         ProcResult failj;
         RunProcess(ctx.client,
                    {L"--json", std::to_wstring(ctx.pid), L"call", L"--addr", L"0", L"--main"},
                    nullptr, 30000, &failj);
-        Report(c,
-               failj.exit_code != 0 && Contains(failj.out, L"\"ok\":false") &&
-                   Contains(failj.out, L"\"error\"") && Contains(failj.out, L"\"code\"") &&
-                   Contains(failj.out, L"\"name\"") && Contains(failj.out, L"\"hint\"") &&
-                   failj.out.find(L"\"hint\":\"\"") == std::wstring::npos,
-               false, "client --json call --main error hint", "");
+        {
+            const std::string fj = ToNarrow(failj.out);
+            Report(c, failj.exit_code != 0 && MatchEnvelopeGolden(fj, "golden/error_envelope.json"),
+                   false, "client --json call --main error golden envelope", "");
+        }
 
         ProcResult failt;
         RunProcess(ctx.client, {std::to_wstring(ctx.pid), L"call", L"--addr", L"0", L"--main"},

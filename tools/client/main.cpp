@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "json_out.hpp"
 #include "local_inject.hpp"
 #include "repl.hpp"
 #include "tui.hpp"
@@ -118,8 +119,8 @@ static bool EqFlag(const wchar_t* a, const wchar_t* b) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc >= 2 && _wcsicmp(argv[1], L"inject") == 0) {
-        if (argc >= 3 && (EqFlag(argv[2], L"--help") || EqFlag(argv[2], L"-h") ||
-                          wcscmp(argv[2], L"/?") == 0)) {
+        if (argc >= 3 &&
+            (EqFlag(argv[2], L"--help") || EqFlag(argv[2], L"-h") || wcscmp(argv[2], L"/?") == 0)) {
             PrintLocalInjectUsage();
             return 0;
         }
@@ -128,8 +129,8 @@ int wmain(int argc, wchar_t** argv) {
 
     if (argc >= 2 && (_wcsicmp(argv[1], L"unload") == 0 || _wcsicmp(argv[1], L"reload") == 0)) {
         const int reload_default = _wcsicmp(argv[1], L"reload") == 0 ? 1 : 0;
-        if (argc >= 3 && (EqFlag(argv[2], L"--help") || EqFlag(argv[2], L"-h") ||
-                          wcscmp(argv[2], L"/?") == 0)) {
+        if (argc >= 3 &&
+            (EqFlag(argv[2], L"--help") || EqFlag(argv[2], L"-h") || wcscmp(argv[2], L"/?") == 0)) {
             PrintLocalUnloadUsage();
             return 0;
         }
@@ -258,5 +259,5 @@ int wmain(int argc, wchar_t** argv) {
         ctx.argv = syn;
         ctx.cmd = argv[argi];
     }
-    return handler(ctx);
+    return Render(ctx, handler(ctx));
 }

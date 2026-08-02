@@ -1,5 +1,6 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "win/raii.hpp"
 
 namespace hdl {
 namespace inject {
@@ -23,47 +24,43 @@ struct HijackStub {
 };
 #pragma pack(pop)
 
-}  // namespace
+} // namespace
 
 HdlStatus ThreadHijackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    HANDLE process = OpenTargetProcess(pid);
+    win::unique_handle process(OpenTargetProcess(pid));
     if (!process) {
         return HDL_E_ACCESS;
     }
 
     RemoteAlloc remote_path;
-    HdlStatus st = WriteRemotePath(process, dll_path, remote_path);
+    HdlStatus st = WriteRemotePath(process.get(), dll_path, remote_path);
     if (st != HDL_OK) {
-        CloseHandle(process);
         return st;
     }
 
     const auto tids = EnumProcessThreads(pid);
-    HANDLE thread = nullptr;
+    win::unique_handle thread;
     DWORD chosen_tid = 0;
     CONTEXT ctx{};
     for (DWORD tid : tids) {
-        HANDLE t = OpenThread(THREAD_ALL_ACCESS, FALSE, tid);
+        win::unique_handle t(OpenThread(THREAD_ALL_ACCESS, FALSE, tid));
         if (!t) {
             continue;
         }
-        if (SuspendThread(t) == static_cast<DWORD>(-1)) {
-            CloseHandle(t);
+        if (SuspendThread(t.get()) == static_cast<DWORD>(-1)) {
             continue;
         }
         CONTEXT try_ctx{};
         try_ctx.ContextFlags = CONTEXT_FULL;
-        if (GetThreadContext(t, &try_ctx)) {
-            thread = t;
+        if (GetThreadContext(t.get(), &try_ctx)) {
+            thread = std::move(t);
             chosen_tid = tid;
             ctx = try_ctx;
             break;
         }
-        ResumeThread(t);
-        CloseHandle(t);
+        ResumeThread(t.get());
     }
     if (!thread) {
-        CloseHandle(process);
         return HDL_E_NOT_FOUND;
     }
 
@@ -73,31 +70,26 @@ HdlStatus ThreadHijackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* ou
     stub.rip_imm = ctx.Rip;
 
     RemoteAlloc remote_stub;
-    if (!remote_stub.Alloc(process, sizeof(stub), PAGE_EXECUTE_READWRITE) ||
+    if (!remote_stub.Alloc(process.get(), sizeof(stub), PAGE_EXECUTE_READWRITE) ||
         !remote_stub.Write(&stub, sizeof(stub))) {
-        ResumeThread(thread);
-        CloseHandle(thread);
-        CloseHandle(process);
+        ResumeThread(thread.get());
         return HDL_E_NO_MEM;
     }
 
     ctx.Rip = reinterpret_cast<DWORD64>(remote_stub.ptr);
-    if (!SetThreadContext(thread, &ctx)) {
-        ResumeThread(thread);
-        CloseHandle(thread);
-        CloseHandle(process);
+    if (!SetThreadContext(thread.get(), &ctx)) {
+        ResumeThread(thread.get());
         return HDL_E_FAILED;
     }
 
-    ResumeThread(thread);
-    CloseHandle(thread);
+    ResumeThread(thread.get());
+    thread.reset();
 
     st = PollForModule(pid, dll_path, out_base);
 
     // Keep stub + path alive; freeing while a thread may still execute is unsafe.
     remote_path.Detach();
     remote_stub.Detach();
-    CloseHandle(process);
 
     if (st == HDL_OK) {
         HDL_LOG_INFO("Thread hijack inject into pid %u (tid=%lu) ok", pid, chosen_tid);
@@ -113,5 +105,5 @@ HdlStatus ThreadHijackMethod(uint32_t, const wchar_t*, uint64_t*) {
 
 #endif
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl
