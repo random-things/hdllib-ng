@@ -13,7 +13,6 @@ The root [`CMakeLists.txt`](../CMakeLists.txt) is authoritative.
 | `HDL_BUILD_TOOLS` | `ON` | Build `hdlclient.exe` |
 | `HDL_BUILD_TESTS` | `ON` | Build local/API, selection, store, and live client tests |
 | `HDL_BUILD_TOYS` | `ON` | Build `hdl_toy_arena.exe` and, with tools, `hdl_toy_tests.exe` |
-| `HDL_CLIENT_TUI` | `ON` | Fetch/build PDCurses and enable `hdlclient --tui` |
 | `HDL_DISASM_ZYDIS` | `ON` | Fetch and register Zydis |
 | `HDL_DISASM_CAPSTONE` | `ON` | Fetch and register Capstone |
 | `HDL_WARNINGS_AS_ERRORS` | `OFF` | Promote warnings on first-party targets; enabled by CI presets |
@@ -143,7 +142,7 @@ For a new locator type:
    [`store.cpp`](../tools/client/store.cpp), including old schema compatibility.
 3. Update `RevalidateStore` and decide whether revalidation is read-only,
    allocates runtime state, or mutates the target.
-4. Add REPL parsing/help and a TUI tag if applicable.
+4. Wire one-shot argv parsing and usage text for any new verbs/flags.
 5. Add round-trip/migration coverage in
    [`tests/store_test.cpp`](../tests/store_test.cpp) and a live recipe case in
    client or toy tests.
@@ -226,7 +225,7 @@ Test binary roles and target profiles are documented in
 |---|---|
 | [`tests/test_select.cpp`](../tests/test_select.cpp) | Pure target-profile scoring, hard/soft gates, stealth preference, Wow64 rejection |
 | [`tests/test_main.cpp`](../tests/test_main.cpp) | Local exported API, place/code/watch/graph, locate/discover fixtures, live injection matrix |
-| [`tests/client_test_main.cpp`](../tests/client_test_main.cpp) | End-to-end executable commands, framing, REPL scripts, store/recipes against a target |
+| [`tests/client_test_main.cpp`](../tests/client_test_main.cpp) | End-to-end executable commands, framing, one-shot store/recipes against a target |
 | [`tests/store_test.cpp`](../tests/store_test.cpp) | Interest JSON v1/v2 migration and v3 round trips |
 | [`tests/toy_test_main.cpp`](../tests/toy_test_main.cpp) | Higher-level locate/discover/path/heat/vcall/watch/place/stitch workflows |
 | [`tests/target/main.cpp`](../tests/target/main.cpp) | Configurable injection victim and exported ground truth |
@@ -245,7 +244,7 @@ Read these files together before editing:
 | Hook-hit layout or capture assembly | `hdllib.h`, `hooks_trace.asm`, `hooks.cpp`, discover action ranking, hook handlers/client/tests |
 | Watch/event behavior | `watch.cpp`, `health.cpp`, discover region/apply-watch paths, handler/client polling, teardown order |
 | Session ownership | `memory.cpp` or `discover.cpp`, `ipc/common.cpp`, relevant handlers, `ipc/server.cpp`, `core.cpp` |
-| Interest JSON | `store.hpp`, all parsing/writing in `store.cpp`, recipes/revalidation, store migrations and REPL tests |
+| Interest JSON | `store.hpp`, all parsing/writing in `store.cpp`, recipes/revalidation, store migrations and controller tests |
 
 ## Documentation maintenance
 

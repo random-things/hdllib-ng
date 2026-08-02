@@ -6,7 +6,7 @@ Capability reference (opcodes **1…100** from `protocol.hpp`, wire formats, pla
 
 ## Build
 
-Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.3 is vendored under `third_party/minhook`. With `HDL_CLIENT_TUI=ON` (default), CMake FetchContent pulls PDCurses 3.9 for `hdlclient --tui`. Zydis and Capstone are fetched for the disasm backends.
+Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.3 is vendored under `third_party/minhook`. Zydis and Capstone are fetched for the disasm backends.
 
 ```bat
 cmake --preset x64-windows-vs2022
@@ -16,7 +16,7 @@ cmake --build --preset x64-windows-vs2022 --config Release
 Artifacts land under `build/x64-windows-vs2022/Release/`:
 
 - `hdllib.dll` — inject this
-- `hdlclient.exe` — inject + IPC CLI / REPL / optional TUI
+- `hdlclient.exe` — inject + IPC CLI (store/recipes/session)
 
 Ninja preset (`x64-windows`) works the same if `ninja` is on `PATH` after `vcvars64`.
 Windows CI, including the required interactive GUI runner, is documented in
@@ -51,18 +51,18 @@ hdlclient <pid> patch enable 1
 hdlclient <pid> watch hw 0x7FF6ABCD3000 --size 8 --access write
 hdlclient <pid> watch page 0x7FF6ABCD3000 4096 --mode guard
 hdlclient <pid> sections
-hdlclient <pid>                       REM interactive REPL (default)
-hdlclient <pid> repl --store interests.json
-hdlclient <pid> --tui --store interests.json
+hdlclient --store interests.json <pid> session new
+hdlclient --store interests.json <pid> recipe place my_fn 0x7FF6ABCD1000
+hdlclient --store interests.json <pid> store list
 ```
 
 Typed scan `--type` values: `bytes`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `f32`/`float`, `f64`/`double`, `string`, `wstring`. Comparison modes (`--cmp`): `exact`, `unknown`, `changed`, `unchanged`, `increased`, `decreased`, `increased_by`, `decreased_by`, `greater`, `less`. First scan creates a session id (printed); `--next` / `--hits` / `--close` reuse it.
 
 Stub kinds: `abs_jmp`, `rel_jmp32`, `mov_rax_jmp`, `raw` (DLL templates — no text assembler).
 
-### Interactive controller (REPL / TUI)
+### Controller (one-shot)
 
-`hdlclient <pid>` (or `repl`) opens a line REPL over the pipe. All one-shot pipe verbs work; extras include `store`, `recipe`, `stabilize`, and `session`. `--tui` is a PDCurses full-screen UI (log + interests panes; recipe prefills on `a`/`c`/`p`/`t`/`x`). Build with `HDL_CLIENT_TUI=ON` (default).
+`session`, `store`, `recipe`, and `stabilize` are first-class one-shot verbs. Discover session IDs resolve from `--session`, else `HDL_SESSION`, else a sidecar next to `--store` (or `%TEMP%\hdl_session_<pid>.txt`). Mutating store/recipe/stabilize commands require `--store PATH` and load–mutate–save. `recipe action` needs `--wait-ms N` or `--signal FILE` (wait until the file exists; no interactive Enter).
 
 Workflows for CLI groups, `discover-*` pipelines, and recipes: **[docs/client.md](docs/client.md)**.
 
@@ -128,7 +128,7 @@ The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Adm
 
 `OpUnloadDll` payload: `pid`, `reload`, `dll_path`. Reply: `status`, `base` (set when reloading).
 
-`hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, REPL/`--tui`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
+`hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, `session`/`store`/`recipe`/`stabilize`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
 
 Discover / recipe workflows: [docs/client.md](docs/client.md). Built-in disasm backends (Zydis/Capstone) are selected over the pipe; there is no remote custom-backend registration.
 

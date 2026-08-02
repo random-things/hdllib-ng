@@ -26,7 +26,7 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 | Layer | Role |
 |-------|------|
 | `hdllib.dll` | Loaded in-target; runs IPC server, memory/search/call/hook/place/code/discover logic |
-| `hdlclient.exe` | CLI: local multi-technique inject + pipe protocol + REPL/TUI interest store & recipes |
+| `hdlclient.exe` | CLI: local multi-technique inject + pipe protocol + interest store & recipes |
 | `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
 | `protocol.hpp` | Opcode enum + POD/string encode helpers used by server and client |
 
@@ -271,7 +271,7 @@ Jobs bind to long ops (search, call, pattern resolve, …) so one client can can
 
 `HdlClassifyFingerprint` classifies caller-provided module basenames + import pairs (tests / offline dumps; no process walk). Active probes (`HDL_FP_ACTIVE`) are reserved.
 
-CLI: `hdlclient <pid> fingerprint`; REPL: `recipe suggest` prints next-step watch/call hints from primaries.
+CLI: `hdlclient <pid> fingerprint`; `hdlclient --store PATH <pid> recipe suggest` prints next-step watch/call hints from primaries.
 
 ---
 
@@ -627,8 +627,8 @@ Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [do
 | `hooktrace`, `hook-import`, `hook-enable`/`enablehook`, `unhook`, `hookhits` | HookTrace, HookImport, EnableHook, Unhook, PollHookHits |
 | `resolve-pattern`, `xrefs`, `ptrscan`, `probe` | Locate ops |
 | `discover-*` (incl. `discover-pathvalidate`, `discover-scan`, `discover-watch-import`, `discover-reset-heat`, `discover-export`/`import`, `discover-diff`, `discover-apply-watch`, `discover-evidence`) | Discover ops 38–53 + 84, 86–91 (+ scan compose) |
-| `hdlclient <pid>` / `repl` / `--tui` | Interactive controller (all pipe cmds + store/recipes) |
-| `store` / `recipe` / `stabilize` (REPL/TUI) | Interest JSON + discover recipes |
+| `hdlclient <pid> <verb>` / `session` / `store` / `recipe` / `stabilize` | One-shot controller (all pipe cmds + store/recipes) |
+| `store` / `recipe` / `stabilize` | Interest JSON + discover recipes (`--store` required for mutators) |
 
 Call arg prefixes: `u64:`, `i64:`, `f32:`, `f64:`, `cstr:`, `wstr:`, `buf:HEX`, `ptr:HEX`. Scan scope: `--image`, `--executable`, `--module NAME`.
 
@@ -638,9 +638,9 @@ Call arg prefixes: `u64:`, `i64:`, `f32:`, `f64:`, `cstr:`, `wstr:`, `buf:HEX`, 
 
 **Locator types:** `pattern`, `path`, `export`, `import`, `cave`, `stub`, `patch` — revalidate via ResolvePattern / FollowPointers / ResolveExport / EnumImports / FindCaves / BuildStub / address-only for patches.
 
-**Recipes** (REPL / TUI): `place`, `stitch`, `expand`, `action`, `constrain`, plus `stabilize <cand_id>`.
+**Recipes:** `place`, `stitch`, `expand`, `action` (`--wait-ms`/`--signal FILE`), `constrain`, plus `stabilize <cand_id>`.
 
-Full workflows, predicate syntax, end-to-end examples, and TUI keys: **[client.md § Interest store and recipes](client.md#4-interest-store-and-recipes)**.
+Full workflows, predicate syntax, and end-to-end examples: **[client.md § Interest store and recipes](client.md#4-interest-store-and-recipes)**.
 
 Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` / `mov_rax_jmp` / `raw`.
 
@@ -677,7 +677,7 @@ Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` 
 | [`include/hdllib/pipe_name.h`](../include/hdllib/pipe_name.h) | Pipe naming |
 | [`tools/client/main.cpp`](../tools/client/main.cpp) | CLI entry + command dispatch table |
 | [`tools/client/cmds_*.cpp`](../tools/client/) | Pipe command handlers by domain |
-| [`tools/client/repl.cpp`](../tools/client/repl.cpp) / [`tui.cpp`](../tools/client/tui.cpp) | Interactive REPL / PDCurses TUI |
+| [`tools/client/cmds_controller.cpp`](../tools/client/cmds_controller.cpp) | session/store/recipe/stabilize |
 | [`tools/client/store.cpp`](../tools/client/store.cpp) / [`recipes.cpp`](../tools/client/recipes.cpp) | Interest JSON + discovery recipes |
 | [`tools/client/local_inject.cpp`](../tools/client/local_inject.cpp) | Local inject / recommend / early-bird |
 | [`README.md`](../README.md) | Build, inject quickstart, API summary |

@@ -72,9 +72,8 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> cmdline(cmd.begin(), cmd.end());
     cmdline.push_back(0);
-    const BOOL ok =
-        CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                       nullptr, &si, &pi);
+    const BOOL ok = CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(out_w);
     if (stdin_text) {
         CloseHandle(in_r);
@@ -327,8 +326,9 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
         auto r = Cli(ctx, {L"ptrscan", a, L"--depth", L"2", L"--module", L"hdl_toy_arena.exe",
                            L"--max", L"64"});
         ExpectOk(c, "ptrscan bag", r);
-        Report(c, Contains(r.out, L"count=") && !Contains(r.out, L"count=0\n") &&
-                      !Contains(r.out, L"count=0\r"),
+        Report(c,
+               Contains(r.out, L"count=") && !Contains(r.out, L"count=0\n") &&
+                   !Contains(r.out, L"count=0\r"),
                false, "ptrscan bag nonempty", "");
         wchar_t root_hex[32];
         Hex(root_hex, 32, bag_root);
@@ -372,13 +372,11 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
         /* Deep enough to cross internal branch/prologue-like candidates in the
            Release build; +0x40 also lands inside the subtract instruction. */
         Hex(mid, 32, dmg_fn + 0x40);
-        auto resolved =
-            Cli(ctx, {L"resolve-function", mid, L"--module", L"hdl_toy_arena.exe"});
+        auto resolved = Cli(ctx, {L"resolve-function", mid, L"--module", L"hdl_toy_arena.exe"});
         ExpectOk(c, "toy resolve-function deep interior", resolved);
         uint64_t resolved_start = 0;
         ParseHexAfter(resolved.out, L"start=", &resolved_start);
-        Report(c, resolved_start == dmg_fn, false,
-               "toy deep interior aligns to Damage entry", "");
+        Report(c, resolved_start == dmg_fn, false, "toy deep interior aligns to Damage entry", "");
         auto xr = Cli(ctx, {L"xrefs-to", fa, L"--module", L"hdl_toy_arena.exe"});
         ExpectOk(c, "toy xrefs-to Damage", xr);
         Report(c, Contains(xr.out, L"count=") && !Contains(xr.out, L"count=0\n"), true,
@@ -448,9 +446,9 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
         Hex(seed, 32, hero);
 
         /* Heap scan (no --image): shared vtable cluster across instances. */
-        ExpectOk(c, "discover-cluster",
-                 Cli(ctx, {L"discover-cluster", L"--session", sid, L"--seed", seed, L"--size",
-                           L"56"}));
+        ExpectOk(
+            c, "discover-cluster",
+            Cli(ctx, {L"discover-cluster", L"--session", sid, L"--seed", seed, L"--size", L"56"}));
         {
             auto r = Cli(ctx, {L"discover-cands", L"--session", sid});
             ExpectOk(c, "discover-cands after cluster", r);
@@ -526,11 +524,12 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
             wchar_t fa[32], ha[32];
             Hex(fa, 32, dmg_fn);
             Hex(ha, 32, hero);
-            ExpectOk(c, "discover-watch Damage",
-                     Cli(ctx, {L"discover-watch", L"--session", sid, L"--addr", fa, L"--args", L"2"}));
+            ExpectOk(
+                c, "discover-watch Damage",
+                Cli(ctx, {L"discover-watch", L"--session", sid, L"--addr", fa, L"--args", L"2"}));
             ExpectOk(c, "discover-watch-region",
-                     Cli(ctx, {L"discover-watch-region", L"--session", sid, L"--addr", ha, L"--size",
-                               L"56"}));
+                     Cli(ctx, {L"discover-watch-region", L"--session", sid, L"--addr", ha,
+                               L"--size", L"56"}));
             ExpectOk(c, "action-begin",
                      Cli(ctx, {L"discover-action-begin", L"--session", sid, L"--name", L"hit"}));
             ExpectOk(c, "call Damage", Cli(ctx, {L"call", L"HdlToyDamage", L"u64:0", L"i64:11"}));
@@ -540,8 +539,9 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
             {
                 auto r = Cli(ctx, {L"discover-heat", L"--session", sid, L"--addr", ha});
                 ExpectOk(c, "discover-heat", r);
-                Report(c, Contains(r.out, L"+0x8") || Contains(r.out, L"offset=8") ||
-                              Contains(r.out, L"+8"),
+                Report(c,
+                       Contains(r.out, L"+0x8") || Contains(r.out, L"offset=8") ||
+                           Contains(r.out, L"+8"),
                        false, "heat marks health@+8", "");
             }
             ExpectOk(c, "discover-unwatch", Cli(ctx, {L"discover-unwatch", L"--session", sid}));
@@ -551,8 +551,8 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
     }
 
     {
-        auto r = Cli(ctx, {L"xrefs", L"HDL_TOY_ARENA_v1", L"--absolute", L"--module",
-                           L"hdl_toy_arena.exe"});
+        auto r = Cli(
+            ctx, {L"xrefs", L"HDL_TOY_ARENA_v1", L"--absolute", L"--module", L"hdl_toy_arena.exe"});
         ExpectOk(c, "xrefs absolute", r);
     }
     {
@@ -608,7 +608,8 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
             ExpectOk(c, "toy write pad", Cli(ctx, {L"write", a, L"11 22 33 44 55"}));
             uint64_t ph = 0;
             {
-                auto r = Cli(ctx, {L"patch", L"create", a, L"90 90 90 90 90", L"--name", L"toy_nop"});
+                auto r =
+                    Cli(ctx, {L"patch", L"create", a, L"90 90 90 90 90", L"--name", L"toy_nop"});
                 ExpectOk(c, "toy patch create", r);
                 ParseU64After(r.out, L"handle=", &ph);
             }
@@ -666,27 +667,42 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
         }
         std::wstring script;
         wchar_t line[256];
-        swprintf_s(line, L"recipe place toy_place 0x%llx\n",
-                   static_cast<unsigned long long>(dmg_fn));
-        script += line;
-        if (stitch_pad) {
-            swprintf_s(line, L"recipe stitch toy_stitch --target 0x%llx --kind mov_rax_jmp\n",
-                       static_cast<unsigned long long>(stitch_pad));
-            script += line;
+        swprintf_s(line, L"0x%llx", static_cast<unsigned long long>(dmg_fn));
+        {
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, std::to_wstring(ctx.pid), L"recipe", L"place",
+                        L"toy_place", line},
+                       nullptr, 90000, &r);
+            ExpectExit0(c, "toy recipe place exit", r);
+            Report(c,
+                   Contains(r.out, L"place cave") || Contains(r.out, L"AllocNear fallback") ||
+                       Contains(r.out, L"cave_addr=") || Contains(r.out, L"store updated"),
+                   false, "toy recipe place", "");
         }
-        script += L"store save ";
-        script += store_path;
-        script += L"\nquit\n";
-        ProcResult r;
-        std::vector<std::wstring> args = {L"--store", store_path, std::to_wstring(ctx.pid), L"repl"};
-        RunProcess(ctx.client, args, &script, 90000, &r);
-        ExpectExit0(c, "toy REPL place/stitch exit", r);
-        Report(c, Contains(r.out, L"place cave") || Contains(r.out, L"AllocNear fallback") ||
-                      Contains(r.out, L"store updated interest"),
-               false, "toy recipe place", "");
-        Report(c, !stitch_pad || Contains(r.out, L"stub_va=") || Contains(r.out, L"stub+patch") ||
-                      Contains(r.out, L"patch handle="),
-               false, "toy recipe stitch", "");
+        if (stitch_pad) {
+            wchar_t tgt[32];
+            swprintf_s(tgt, L"0x%llx", static_cast<unsigned long long>(stitch_pad));
+            ProcResult r;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, std::to_wstring(ctx.pid), L"recipe", L"stitch",
+                        L"toy_stitch", L"--target", tgt, L"--kind", L"mov_rax_jmp"},
+                       nullptr, 90000, &r);
+            ExpectExit0(c, "toy recipe stitch exit", r);
+            Report(c,
+                   Contains(r.out, L"stub_va=") || Contains(r.out, L"stub+patch") ||
+                       Contains(r.out, L"patch_handle="),
+                   false, "toy recipe stitch", "");
+        }
+        {
+            ProcResult list;
+            RunProcess(ctx.client,
+                       {L"--store", store_path, std::to_wstring(ctx.pid), L"store", L"list"},
+                       nullptr, 30000, &list);
+            ExpectExit0(c, "toy store list", list);
+            Report(c, Contains(list.out, L"toy_place") || Contains(list.out, L"name=toy_place"),
+                   false, "toy store persisted place", "");
+        }
         DeleteFileW(store_path);
         if (stitch_pad) {
             wchar_t a[32];
@@ -700,7 +716,7 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
     CloseHandle(tpi.hProcess);
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     (void)argc;

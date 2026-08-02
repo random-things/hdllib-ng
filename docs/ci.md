@@ -13,7 +13,7 @@ suites. It does not need to be a rented server.
 |---|---|---|---|
 | `Windows CI / hosted-build` | `windows-2022` | pull request, `main`, manual | Release build, changed-file formatting, `headless` CTest label |
 | `Windows CI / gui-tests` | Self-hosted Windows x64 | Push or manual dispatch of `main` | Partitioned GUI, API, injection, IPC, and toy tests |
-| `Windows Nightly / backend-matrix` | `windows-2022` | Nightly, manual | Zydis-only, Capstone-only, and no-TUI configurations |
+| `Windows Nightly / backend-matrix` | `windows-2022` | Nightly, manual | Zydis-only and Capstone-only configurations |
 | `Windows Nightly / address-sanitizer` | `windows-2022` | Nightly, manual | MSVC ASan build and headless tests |
 | `Windows Nightly / *-analysis` | `windows-2022` | Nightly, manual | MSVC `/analyze` and clang-tidy; initially advisory |
 | `Windows Nightly / windows-canary` | `windows-2025` | Nightly, manual | Non-blocking newest-image compatibility signal |

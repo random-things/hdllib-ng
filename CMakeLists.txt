@@ -14,7 +14,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(HDL_BUILD_TOOLS "Build hdlclient" ON)
 option(HDL_BUILD_TESTS "Build hdl_tests / hdl_test_target" ON)
 option(HDL_BUILD_TOYS "Build toy targets for higher-level hdllib exercise" ON)
-option(HDL_CLIENT_TUI "Build hdlclient --tui with PDCurses" ON)
 option(HDL_DISASM_ZYDIS "Enable Zydis disasm backend" ON)
 option(HDL_DISASM_CAPSTONE "Enable Capstone disasm backend" ON)
 option(HDL_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" OFF)
@@ -259,46 +258,12 @@ if(HDL_DISASM_CAPSTONE)
 endif()
 
 if(HDL_BUILD_TOOLS)
-  set(HDL_PDCURSES_OK FALSE)
-  if(HDL_CLIENT_TUI)
-    include(FetchContent)
-    FetchContent_Declare(pdcurses
-      GIT_REPOSITORY https://github.com/wmcbrine/PDCurses.git
-      GIT_TAG 3.9
-    )
-    FetchContent_GetProperties(pdcurses)
-    if(NOT pdcurses_POPULATED)
-      FetchContent_Populate(pdcurses)
-    endif()
-    set(PDC_ROOT ${pdcurses_SOURCE_DIR})
-    file(GLOB PDC_CORE_SOURCES CONFIGURE_DEPENDS "${PDC_ROOT}/pdcurses/*.c")
-    set(PDC_WIN_SOURCES
-      ${PDC_ROOT}/wincon/pdcclip.c
-      ${PDC_ROOT}/wincon/pdcdisp.c
-      ${PDC_ROOT}/wincon/pdcgetsc.c
-      ${PDC_ROOT}/wincon/pdckbd.c
-      ${PDC_ROOT}/wincon/pdcscrn.c
-      ${PDC_ROOT}/wincon/pdcsetsc.c
-      ${PDC_ROOT}/wincon/pdcutil.c
-    )
-    if(PDC_CORE_SOURCES AND EXISTS "${PDC_ROOT}/curses.h")
-      add_library(pdcurses STATIC ${PDC_CORE_SOURCES} ${PDC_WIN_SOURCES})
-      target_include_directories(pdcurses PUBLIC ${PDC_ROOT} ${PDC_ROOT}/wincon)
-      target_compile_definitions(pdcurses PUBLIC PDC_WIDE UNICODE _UNICODE)
-      if(MSVC)
-        target_compile_options(pdcurses PRIVATE /W3)
-      endif()
-      set(HDL_PDCURSES_OK TRUE)
-    else()
-      message(WARNING "PDCurses sources not found; building hdlclient without --tui")
-    endif()
-  endif()
-
   add_executable(hdlclient
     tools/client/main.cpp
     tools/client/pipe_client.cpp
     tools/client/local_inject.cpp
     tools/client/session_modules.cpp
+    tools/client/session_persist.cpp
     tools/client/usage.cpp
     tools/client/util.cpp
     tools/client/json_out.cpp
@@ -308,6 +273,7 @@ if(HDL_BUILD_TOOLS)
     tools/client/cmds_locate.cpp
     tools/client/cmds_scan.cpp
     tools/client/cmds_discover.cpp
+    tools/client/cmds_controller.cpp
     tools/client/cmds_ipc_inject.cpp
     tools/client/cmds_place_mem.cpp
     tools/client/cmds_disasm.cpp
@@ -318,8 +284,6 @@ if(HDL_BUILD_TOOLS)
     tools/client/ipc_ops.cpp
     tools/client/store.cpp
     tools/client/recipes.cpp
-    tools/client/repl.cpp
-    tools/client/tui.cpp
     src/json/json.cpp
   )
   target_include_directories(hdlclient PRIVATE
@@ -329,11 +293,7 @@ if(HDL_BUILD_TOOLS)
   )
   target_compile_definitions(hdlclient PRIVATE UNICODE _UNICODE)
   hdl_configure_target(hdlclient)
-  target_link_libraries(hdlclient PRIVATE hdl_inject)
-  if(HDL_PDCURSES_OK)
-    target_compile_definitions(hdlclient PRIVATE HDL_HAS_TUI)
-    target_link_libraries(hdlclient PRIVATE pdcurses user32 advapi32)
-  endif()
+  target_link_libraries(hdlclient PRIVATE hdl_inject user32 advapi32)
 endif()
 
 if(HDL_BUILD_TESTS)

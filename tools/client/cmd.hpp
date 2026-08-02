@@ -19,10 +19,12 @@ struct CmdCtx {
     uint32_t pid = 0;
     std::wstring cmd;
     PipeClient& client;
-    /* Non-null when invoked from REPL/TUI DispatchLine (interest store / last_*). */
+    /* Optional interest-store / last_* state for controller and --store-add paths. */
     hdlcli::ControllerState* controller = nullptr;
     /* Global --json: structured envelope on stdout instead of human text. */
     bool json = false;
+    /* Global --store PATH (may be null). */
+    const wchar_t* store_path = nullptr;
 };
 
 using CmdHandler = CommandResult (*)(CmdCtx& ctx);
@@ -97,6 +99,11 @@ CommandResult CmdRtti(CmdCtx& ctx);
 CommandResult CmdWatch(CmdCtx& ctx);
 CommandResult CmdPatch(CmdCtx& ctx);
 CommandResult CmdStub(CmdCtx& ctx);
+
+CommandResult CmdSession(CmdCtx& ctx);
+CommandResult CmdStore(CmdCtx& ctx);
+CommandResult CmdRecipe(CmdCtx& ctx);
+CommandResult CmdStabilize(CmdCtx& ctx);
 
 bool ClientParsePred(const wchar_t* spec, HdlFieldPred* out);
 const CmdEntry* GetCommandTable(size_t* out_count);

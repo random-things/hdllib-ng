@@ -114,12 +114,12 @@ hdlclient <pid> health
 hdlclient <pid> events --timeout 0 --max 64
 ```
 
-For exploratory work, enter the REPL with an interest-store path and ask for
+For exploratory work, open a discover session with an interest-store path and ask for
 suggestions:
 
 ```bat
-hdlclient --store interests.json <pid> repl
-recipe suggest
+hdlclient --store interests.json <pid> session new
+hdlclient --store interests.json <pid> recipe suggest
 ```
 
 `recipe suggest` turns fingerprint facts into copy-and-paste ideas. It does
@@ -200,15 +200,13 @@ from mutable heap state to a stable module-relative root.
 Store the selected locator and validate it after both a representative state
 change and a fresh process launch:
 
-```text
-store add player_state --kind object path
-store list
-store save
-store revalidate
+```bat
+hdlclient --store interests.json <pid> discover-pathscan 0xTARGET --store-add player_state
+hdlclient --store interests.json <pid> store list
+hdlclient --store interests.json <pid> store revalidate
 ```
 
-The exact `store add` arguments depend on the path or candidate currently held
-by the REPL. See [Interest store and recipes](client.md#4-interest-store-and-recipes)
+See [Interest store and recipes](client.md#4-interest-store-and-recipes)
 for the live syntax.
 
 **Implementation trail**
@@ -246,14 +244,14 @@ sequenceDiagram
     Operator->>Client: Repeat, disassemble, xref, or stabilize
 ```
 
-In the REPL, the direct-function version can be automated:
+One-shot automation of the direct-function version:
 
-```text
-recipe action jump 0x<known-function>
+```bat
+hdlclient --store interests.json <pid> recipe action jump 0x<known-function> --wait-ms 5000
 ```
 
 The recipe ensures a discovery session exists, registers the function watch,
-begins an action window, waits for you to trigger the action, ends the window,
+begins an action window, waits `--wait-ms` (or `--signal FILE`), ends the window,
 ranks functions, and tries to stabilize the top candidate. The direct recipe
 is not a substitute for an import watch when the best anchor is an imported
 API.

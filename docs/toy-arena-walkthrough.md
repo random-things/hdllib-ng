@@ -626,14 +626,9 @@ object:
 
 ```powershell
 $Store = Join-Path $PWD "toy-interests.json"
-$ReplInput = @"
-ptrscan $BagHex --depth 2 --module hdl_toy_arena.exe --max 64
-store add hero_bag --kind object path
-store save
-store list
-quit
-"@
-$ReplInput | & $Client --store $Store $ToyPid repl
+& $Client --store $Store $ToyPid ptrscan $BagHex --depth 2 `
+    --module hdl_toy_arena.exe --max 64 --store-add hero_bag
+& $Client --store $Store $ToyPid store list
 ```
 
 Captured result:
@@ -642,15 +637,14 @@ Captured result:
 status=OK count=2
   base=00007ff652b77118 depth=1 offs=0x0
   base=00007ff652b749f8 depth=2 offs=0xf0,0x0
-store add ok
-store saved
   hero_bag kind=object locators=1
 ```
 
 `ptrscan` found two paths. The first is the direct
 `HdlToyHeroBagRoot +0` path; the second reaches the bag through another
-image-rooted relationship. In the REPL, `store add ... path` remembers the
-first pointer-scan result, so inspect the ordering before saving.
+image-rooted relationship. `--store-add` persists the **first** pointer-scan
+result into the interest store in the same process, so inspect the printed
+order before relying on the saved path.
 
 The saved file is the important part:
 
@@ -714,15 +708,11 @@ $ExpectedBag = Invoke-HdlHex `
 $ExpectedBagHex = "0x{0:x}" -f $ExpectedBag
 ```
 
-Load and revalidate the store in one short REPL run:
+Revalidate the store with one-shot controller verbs:
 
 ```powershell
-$RevalidateInput = @"
-store revalidate
-store list
-quit
-"@
-$RevalidateInput | & $Client --store $Store $ToyPid repl
+& $Client --store $Store $ToyPid store revalidate
+& $Client --store $Store $ToyPid store list
 ```
 
 Captured second-run result:
@@ -1037,7 +1027,7 @@ more than one observation:
 | Initial scan does not return two hits | `$Hero` came from an older process, health is no longer `100`, or `--size` is not `0x38`. Restart the toy. |
 | Health watch returns `count=0` | Trigger `damage` in Terminal A so the write occurs on the already-watched console thread. If relevant threads were created after installation, run `watch refresh` and retry. |
 | `resolve-function` returns an internal block | The injected DLL is older than the client or target. Rebuild HDLLib, reinject it, and retry; current x64 builds prefer compiler-authored unwind ranges before heuristic fallback. |
-| `store add ... path` saves an unexpected path | It stores the first REPL pointer-scan result. Inspect the printed order; any saved path must have an image root in `hdl_toy_arena.exe`. |
+| `ptrscan … --store-add` saves an unexpected path | It stores the first pointer-scan result from that invocation. Inspect the printed order; any saved path must have an image root in `hdl_toy_arena.exe`. |
 | Bag address does not change after `bag 0` | The heap allocator may reuse an address. A full process restart is stronger; validate the path and object contents, not inequality alone. |
 | Module base is identical after restart | Windows may reuse an ASLR base during one boot. Inspect the store: module + RVA, not an absolute root, is the ASLR-safe property. |
 | No cave is returned | Compiler/linker output changed. Use `alloc-near`, or rebuild the verified configuration; never reuse the sample cave address. |
@@ -1059,7 +1049,8 @@ more than one observation:
   [`tools/client/cmds_locate.cpp`](../tools/client/cmds_locate.cpp)
 - interest-store path persistence:
   [`tools/client/store.cpp`](../tools/client/store.cpp),
-  [`tools/client/repl.cpp`](../tools/client/repl.cpp), and
+  [`tools/client/cmds_controller.cpp`](../tools/client/cmds_controller.cpp),
+  [`tools/client/cmds_locate.cpp`](../tools/client/cmds_locate.cpp), and
   [`tools/client/recipes.cpp`](../tools/client/recipes.cpp)
 - disassembly and xrefs:
   [`src/disasm/`](../src/disasm/), [`src/graph.cpp`](../src/graph.cpp), and

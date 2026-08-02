@@ -1,19 +1,18 @@
 # hdlclient workflows
 
-How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, interactive REPL/TUI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Full opcode / wire reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
+How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Full opcode / wire reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
 
 ## Modes
 
 | Mode | Invocation | Best for |
 |------|------------|----------|
 | Local inject | `hdlclient inject …` | Load the DLL (no pipe yet) |
-| One-shot pipe | `hdlclient <pid> <verb> …` | Scripted ops; each process exits |
-| REPL | `hdlclient <pid>` or `… repl [--store PATH]` | Iterative work + store/recipes |
-| TUI | `hdlclient <pid> --tui [--store PATH]` | Same controller, full-screen panes |
+| One-shot pipe | `hdlclient <pid> <verb> …` | All pipe ops; each process exits |
+| Controller | `hdlclient --store PATH <pid> session\|store\|recipe\|stabilize …` | Interests + recipes across processes |
 
 Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>`. Override with env `HDL_PIPE`.
 
-In REPL/TUI, every pipe verb works. Discover verbs also have short aliases (`dcreate`, `dwatch`, `drank`, … — see `help` / `repl.cpp`).
+Discover session IDs resolve from `--session`, else `HDL_SESSION`, else `<store>.session` / `%TEMP%\hdl_session_<pid>.txt`. Short aliases (`dcreate`, `dwatch`, `drank`, `henable`, `rpat`, …) are registered in `main.cpp`.
 
 ### Structured output (`--json`)
 
@@ -22,6 +21,7 @@ Global flag before or after the pid (not on local `inject`/`unload`):
 ```bat
 hdlclient --json <pid> ping
 hdlclient <pid> --json modules
+hdlclient --store interests.json --json <pid> session new
 ```
 
 Stdout is one line of UTF-8 JSON:
@@ -30,7 +30,17 @@ Stdout is one line of UTF-8 JSON:
 { "ok": true, "status": 0, "cmd": "ping", "data": { "remote_pid": 1234 }, "error": null }
 ```
 
-On failure, `ok` is false and `error` is `{ "code", "name", "hint" }` with an actionable one-line hint. Stream verbs (`modules --stream`, scan hits, …) still emit **one aggregated** envelope (not NDJSON). Text mode remains the default; failing text lines may also print `hint: …`.
+On failure, `ok` is false and `error` is `{ "code", "name", "hint" }` with an actionable one-line hint. Stream verbs (`modules --stream`, scan hits, …) still emit **one aggregated** envelope (not NDJSON). Controller verbs (`session`/`store`/`recipe`/`stabilize`) always return a single envelope under `--json` (no preceding human lines). Text mode remains the default; failing text lines may also print `hint: …`.
+
+**Controller `data` shapes (representative):**
+
+| Verb | Typical `data` fields |
+|------|------------------------|
+| `session` | `session`, `pid`, `store` |
+| `store list` | `store`, `interests[]` (`name`, `kind`, `locators`) |
+| `store add` / `revalidate` | `store`, mutation summary / `ok` count |
+| `recipe *` | `session`, `interest` / `cave_addr` / `stub_va`, `lines[]` |
+| `stabilize` | `session`, `cand_id`, `interest`, `pattern`, `resolved` |
 
 ---
 
@@ -49,7 +59,7 @@ hdlclient <pid> fingerprint
 hdlclient <pid> health
 ```
 
-Typical first checks after inject: `ping`, then `modules` / `fingerprint` for bases and stack hints, then either a one-shot scan or `hdlclient <pid> --store interests.json` for a controller session. In REPL, `recipe suggest` turns fingerprint primaries into concrete watch/call next steps.
+Typical first checks after inject: `ping`, then `modules` / `fingerprint` for bases and stack hints, then either a one-shot scan or `hdlclient --store interests.json <pid> session new` for a controller session. `recipe suggest` turns fingerprint primaries into concrete watch/call next steps.
 
 Quiet defaults after inject (log off, health VEH off). Raise logging with `hdlclient <pid> log 2` when debugging.
 
@@ -160,7 +170,7 @@ Stub kinds: `abs_jmp`, `rel_jmp32`, `mov_rax_jmp`, `raw` (templates only — no 
 
 ## 3. Discover sessions (`discover-*`)
 
-Discover is a **server-side session** that accumulates candidates, action evidence, heat, and patterns. One-shot CLI always passes `--session ID`. REPL/TUI keep a current session (`session new|show|close`; recipes auto-create one).
+Discover is a **server-side session** that accumulates candidates, action evidence, heat, and patterns. Pass `--session ID`, or rely on `HDL_SESSION` / the store sidecar written by `session new` / `discover-create`.
 
 ### Command map
 
@@ -218,14 +228,14 @@ hdlclient <pid> discover-evidence --session 1 --id <cand_id>
 hdlclient <pid> discover-synth --session 1 --cand <cand_id> --module game.exe
 ```
 
-**REPL shortcut (recipe):**
+**Recipe shortcut:**
 
-```text
-session new
-recipe action fire 0xKNOWN_FN
+```bat
+hdlclient --store interests.json <pid> session new
+hdlclient --store interests.json <pid> recipe action fire 0xKNOWN_FN --wait-ms 5000
 ```
 
-That watches, opens the action, waits for Enter, ends, ranks, and runs `stabilize` on the top hit (synth + store write).
+That watches, opens the action, waits `--wait-ms` (or `--signal FILE` until the file exists), ends, ranks, and runs `stabilize` on the top hit (synth + store write).
 
 ### Pipeline B — find object instances via constraints
 
@@ -244,7 +254,7 @@ hdlclient <pid> discover-scan --session 1 --type i32 --value 100 --tag hp
 hdlclient <pid> discover-add --session 1 --kind object --addr 0xGUESSED_BASE --tag player
 ```
 
-**REPL:** `recipe constrain 128 vtable:0 eq_i32:16:100` — constraint scan, list objects, cluster the first.
+**Recipe:** `hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100` — constraint scan, list objects, cluster the first.
 
 ### Pipeline C — layout / fields via heat and watches
 
@@ -261,7 +271,7 @@ hdlclient <pid> discover-diff --session 1 --addr 0xA --addr 0xB --addr 0xC --siz
 hdlclient <pid> discover-reset-heat --session 1 --addr 0xOBJ
 ```
 
-**REPL:** `recipe expand 0xOBJ 256` registers the watch-region and prints the next manual steps (`action-begin` → trigger → `action-end` → `discover-heat`).
+**Recipe:** `hdlclient <pid> recipe expand 0xOBJ 256` registers the watch-region and prints the next manual steps (`action-begin` → trigger → `action-end` → `discover-heat`). Session ID is persisted to the sidecar.
 
 Heat **accumulates** across actions until you reset or re-register the region.
 
@@ -276,7 +286,7 @@ hdlclient <pid> discover-pathscan 0xTARGET --depth 3 --max-offset 0x1000 --modul
 hdlclient <pid> discover-pathvalidate 0xTARGET --base 0xSTATIC --depth 2 --offs 0x10,0x20
 ```
 
-In REPL, a successful pathscan/pathvalidate is remembered for `store add <name> path`. `stabilize <cand_id>` runs synth and writes a **pattern** locator interest.
+Attach a path locator in the same process that found it: `discover-pathscan 0xTARGET --store PATH --store-add NAME` (also `ptrscan`). `stabilize <cand_id> --session ID --store PATH` runs synth and writes a **pattern** locator interest.
 
 ### Persist / resume a discover session
 
@@ -291,89 +301,70 @@ Export is UTF-8 JSON (candidates, evidence, heat, action names). Import is best-
 
 ## 4. Interest store and recipes
 
-Client-only. JSON file (`--store PATH`, default `hdl_interests.json`), schema **v3**. Locators survive ASLR when revalidated against the live process.
+Client-only. JSON file via `--store PATH`, schema **v3**. Locators survive ASLR when revalidated against the live process. Mutating verbs require `--store` and perform load–mutate–save.
 
-### Store verbs (REPL / TUI)
+### Store verbs
 
 | Verb | Purpose |
 |------|---------|
-| `store load [PATH]` / `store save [PATH]` | Load / save JSON |
-| `store list` | Interests + locator counts |
-| `store revalidate` | Resolve every locator now; update `last_addr` |
-| `store add <name> [--kind K] synth\|path\|export N\|cave\|stub\|patch` | Attach last synth / path / cave / stub / patch |
+| `store list` | Load `--store` and list interests + locator counts |
+| `store revalidate` | Resolve every locator now; save on success |
+| `store add <name> export N [--kind K]` | Export locator (stateless) |
+| `store add <name> --pattern AOB …` | Explicit pattern / cave / stub / patch flags |
+| `discover-pathscan` / `ptrscan … --store-add NAME` | Attach path locator in the producing process |
 
 **Locator types and revalidate:**
 
-| Type | Tag (TUI) | Revalidate does |
-|------|-----------|-----------------|
-| `pattern` | P | `ResolvePattern` |
-| `path` | A | `ModBase` + `FollowPointers` |
-| `export` | E | `ResolveExport` |
-| `import` | I | Match `EnumImports` bound VA |
-| `cave` | C | `FindCaves` + nearer/larger score |
-| `stub` | S | `BuildStub` (alloc RX) |
-| `patch` | X | Resolve target address only (does **not** re-apply) |
+| Type | Revalidate does |
+|------|-----------------|
+| `pattern` | `ResolvePattern` |
+| `path` | `ModBase` + `FollowPointers` |
+| `export` | `ResolveExport` |
+| `import` | Match `EnumImports` bound VA |
+| `cave` | `FindCaves` + nearer/larger score |
+| `stub` | `BuildStub` (alloc RX) |
+| `patch` | Resolve target address only (does **not** re-apply) |
 
 Optional interest fields: `kind` (`function` / `object` / `field` / `patch` / …), `evidence`, `struct_fields[]`.
 
 ### Recipes
 
-Recipes orchestrate pipe ops and write the store. Use them from REPL/TUI (not as top-level one-shot argv).
+Recipes are top-level one-shot verbs. Place/stitch require `--store`; action requires `--wait-ms` or `--signal FILE`.
 
 | Recipe | What it does |
 |--------|----------------|
 | `recipe suggest` | Fingerprint process; print primary tags + suggested watch/call/module commands |
-| `recipe action <name> <watch_hex>` | Watch → action window → wait → end → rank → **stabilize** top candidate |
+| `recipe action <name> <watch_hex> --wait-ms N\|--signal FILE` | Watch → action window → wait → end → rank → **stabilize** top candidate |
 | `recipe constrain <size> <pred>…` | Constraint scan → list objects → cluster first object |
 | `recipe place <interest> <near_hex>` | Best cave near VA (or `AllocNear` fallback) → cave locator on interest |
 | `recipe stitch <interest> --target HEX [--kind …] [--steal-min N]` | BuildStub + patch jmp at target → stub + patch locators |
 | `recipe expand <base> <size>` | `discover-watch-region` + printed next steps for heat |
-| `stabilize <cand_id>` | Synth AOB for candidate → `AddOrReplace` pattern interest |
+| `stabilize <cand_id>` | Synth AOB → pattern interest (needs `--session` + `--store`) |
 
 **End-to-end: discover a function, then place a cave and stitch a stub**
 
-```text
-session new
-store load interests.json
-
-recipe action fire 0xKNOWN_ENTRY
-store list
-store revalidate
-
-recipe place my_hook 0xRESOLVED_FN
-recipe stitch my_hook --target 0xRESOLVED_FN --kind mov_rax_jmp --steal-min 5
-
-store save
+```bat
+hdlclient --store interests.json <pid> session new
+hdlclient --store interests.json <pid> recipe action fire 0xKNOWN_ENTRY --wait-ms 3000
+hdlclient --store interests.json <pid> store list
+hdlclient --store interests.json <pid> store revalidate
+hdlclient --store interests.json <pid> recipe place my_hook 0xRESOLVED_FN
+hdlclient --store interests.json <pid> recipe stitch my_hook --target 0xRESOLVED_FN --kind mov_rax_jmp --steal-min 5
 ```
 
 **End-to-end: objects → fields → pattern**
 
-```text
-session new
-recipe constrain 128 vtable:0 eq_i32:16:100
-recipe expand 0xOBJ 256
-discover-action-begin --session <id> --name bump
+```bat
+hdlclient --store interests.json <pid> session new
+hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100
+hdlclient <pid> recipe expand 0xOBJ 256
+hdlclient <pid> discover-action-begin --name bump
 rem trigger writes …
-discover-action-end --session <id>
-discover-heat --session <id> --addr 0xOBJ
-discover-cands --session <id>
-stabilize <field_or_fn_cand>
-store save
+hdlclient <pid> discover-action-end
+hdlclient <pid> discover-heat --addr 0xOBJ
+hdlclient <pid> discover-cands
+hdlclient --store interests.json <pid> stabilize <field_or_fn_cand>
 ```
-
-### TUI keys
-
-| Key | Prefill / action |
-|-----|------------------|
-| `q` | Quit |
-| `s` / `L` | Save / load store |
-| `r` | Revalidate |
-| `a` / `c` / `p` / `t` / `x` | Prefill `recipe action` / `constrain` / `place` / `stitch` / `expand` |
-| `z` | Prefill `stabilize` |
-| `n` | Prefill `session` |
-| Enter | Run the wide-string command line |
-
-Interests pane shows locator tags `P`/`A`/`E`/`I`/`C`/`S`/`X`.
 
 ---
 
@@ -383,10 +374,10 @@ Interests pane shows locator tags `P`/`A`/`E`/`I`/`C`/`S`/`X`.
 |------|--------|
 | Quick AOB / CE scan | One-shot `scan` / `resolve-pattern` |
 | Scripted R/W, call, hook | One-shot pipe verbs |
-| Find code tied to a UI/game action | `discover-watch` + action + rank, or `recipe action` |
+| Find code tied to a UI/game action | `discover-watch` + action + rank, or `recipe action --wait-ms` |
 | Find typed objects in heap/image | `discover-constraint` / `recipe constrain` |
 | Map which fields change | `recipe expand` + heat / `discover-diff` / `discover-apply-watch` |
-| Durable relocatable addresses | Interest store + `stabilize` / `store add … path` |
+| Durable relocatable addresses | Interest store + `stabilize` / `--store-add` |
 | Cave + trampoline near a target | `recipe place` then `recipe stitch` |
 | Practice without a real game | [toys/arena](../toys/arena/README.md) (`hdl_toy_arena.exe`) |
 
@@ -397,9 +388,8 @@ Interests pane shows locator tags `P`/`A`/`E`/`I`/`C`/`S`/`X`.
 | Path | Contents |
 |------|----------|
 | [`tools/client/usage.cpp`](../tools/client/usage.cpp) | Full CLI synopsis |
-| [`tools/client/cmds_*.cpp`](../tools/client/) | One-shot command handlers |
-| [`tools/client/cmds_discover.cpp`](../tools/client/cmds_discover.cpp) | All `discover-*` verbs |
-| [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) | Recipe implementations |
-| [`tools/client/store.cpp`](../tools/client/store.cpp) | Interest JSON v3 |
-| [`tools/client/repl.cpp`](../tools/client/repl.cpp) / [`tui.cpp`](../tools/client/tui.cpp) | Controller |
-| [`docs/capabilities.md`](capabilities.md) | Opcodes, wire formats, limits |
+| [`tools/client/main.cpp`](../tools/client/main.cpp) | Command registry + aliases |
+| [`tools/client/cmds_controller.cpp`](../tools/client/cmds_controller.cpp) | session/store/recipe/stabilize |
+| [`tools/client/session_persist.cpp`](../tools/client/session_persist.cpp) | Session sidecar / env resolution |
+| [`tools/client/store.cpp`](../tools/client/store.cpp) / [`recipes.cpp`](../tools/client/recipes.cpp) | Interest JSON + recipes |
+| [`docs/capabilities.md`](capabilities.md) | Opcodes and wire |
