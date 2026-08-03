@@ -226,8 +226,6 @@ static PMEMORY_BLOCK GetMemoryBlock(LPVOID pOrigin)
     if (pBlock != NULL)
     {
         // Build a linked list of all the slots.
-        // Slot freelist overlays MEMORY_BLOCK; intentional layout (not type confusion).
-        // codeql[cpp/suspicious-pointer-scaling] codeql[cpp/type-confusion]
         PMEMORY_SLOT pSlot = (PMEMORY_SLOT)pBlock + 1;
         pBlock->pFree = NULL;
         pBlock->usedCount = 0;
@@ -278,7 +276,7 @@ VOID FreeBuffer(LPVOID pBuffer)
             PMEMORY_SLOT pSlot = (PMEMORY_SLOT)pBuffer;
 #ifdef _DEBUG
             // Clear the released slot for debugging.
-            memset(pSlot, 0x00, sizeof(*pSlot));
+            memset(pSlot, 0x00, sizeof(MEMORY_SLOT));
 #endif
             // Restore the released slot to the list.
             pSlot->pNext = pBlock->pFree;
