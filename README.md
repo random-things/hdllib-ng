@@ -6,7 +6,7 @@ Capability reference (opcodes **1…100** from `protocol.hpp`, wire formats, pla
 
 ## Build
 
-Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.3 is vendored under `third_party/minhook`. Zydis and Capstone are fetched for the disasm backends.
+Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.4 is vendored under `third_party/minhook`. Zydis and Capstone are fetched for the disasm backends.
 
 ```bat
 cmake --preset x64-windows-vs2022

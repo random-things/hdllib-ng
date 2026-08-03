@@ -373,7 +373,7 @@ reapply a patch.
 ## External dependencies and platform assumptions
 
 - C++20, MSVC x64, MASM, Windows APIs.
-- MinHook v1.3.3 is vendored in [`third_party/minhook`](../third_party/minhook/).
+- MinHook v1.3.4 is vendored in [`third_party/minhook`](../third_party/minhook/).
 - Zydis 4.1.1 and Capstone 5.0.3 are fetched by CMake. Either may be disabled,
   but not both.
 - Zydis and Capstone are fetched for the optional disasm backends.

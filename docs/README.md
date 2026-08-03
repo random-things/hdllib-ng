@@ -114,7 +114,7 @@ src/disasm/           Pluggable built-in disassembly backends
 tools/client/         Injector, pipe client, CLI, store, recipes, session persist
 tests/                Domain, live IPC, injection-matrix, and toy tests
 toys/arena/           Deterministic target for higher-level discovery workflows
-third_party/minhook/  Vendored MinHook v1.3.3
+third_party/minhook/  Vendored MinHook v1.3.4
 docs/inject/          Per-technique behavior and constraints
 docs/future/          Investigated but intentionally unimplemented ideas
 ```
