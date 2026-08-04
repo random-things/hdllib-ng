@@ -645,10 +645,14 @@ bool ExtractObjectArray(const std::string& json, const char* key, std::vector<st
 
 namespace {
 
-bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out);
-bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>* elems);
+constexpr size_t kMaxDisplayNesting = 128;
 
-bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>* elems) {
+bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out, size_t depth);
+bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>* elems,
+                       size_t depth);
+
+bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>* elems,
+                       size_t depth) {
     if (!i || !elems || *i >= s.size() || s[*i] != '[') {
         return false;
     }
@@ -676,7 +680,7 @@ bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>
             return false;
         }
         std::string v;
-        if (!ParseDisplayValue(s, i, &v)) {
+        if (!ParseDisplayValue(s, i, &v, depth)) {
             return false;
         }
         elems->push_back(std::move(v));
@@ -684,7 +688,7 @@ bool ParseDisplayArray(const std::string& s, size_t* i, std::vector<std::string>
     }
 }
 
-bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out) {
+bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out, size_t depth) {
     if (!i || !out) {
         return false;
     }
@@ -706,8 +710,11 @@ bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out) {
         return true;
     }
     if (s[*i] == '[') {
+        if (depth >= kMaxDisplayNesting) {
+            return false;
+        }
         std::vector<std::string> elems;
-        if (!ParseDisplayArray(s, i, &elems)) {
+        if (!ParseDisplayArray(s, i, &elems, depth + 1)) {
             return false;
         }
         std::string raw = "[";
@@ -715,11 +722,12 @@ bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out) {
             if (e) {
                 raw.push_back(',');
             }
-            if (!elems[e].empty() && elems[e][0] == '{') {
-                raw += elems[e];
-            } else if (elems[e] == "true" || elems[e] == "false" || elems[e] == "null" ||
-                       (!elems[e].empty() &&
-                        (elems[e][0] == '-' || (elems[e][0] >= '0' && elems[e][0] <= '9')))) {
+            const bool raw_value =
+                elems[e] == "true" || elems[e] == "false" || elems[e] == "null" ||
+                (!elems[e].empty() &&
+                 (elems[e][0] == '{' || elems[e][0] == '[' || elems[e][0] == '-' ||
+                  (elems[e][0] >= '0' && elems[e][0] <= '9')));
+            if (raw_value) {
                 raw += elems[e];
             } else {
                 raw.push_back('"');
@@ -808,7 +816,7 @@ bool ParseObjectFields(const std::string& json,
         }
         ++i;
         std::string val;
-        if (!ParseDisplayValue(json, &i, &val)) {
+        if (!ParseDisplayValue(json, &i, &val, 0)) {
             return false;
         }
         fields->emplace_back(std::move(key), std::move(val));
@@ -825,7 +833,7 @@ bool ParseArrayElements(const std::string& arr, std::vector<std::string>* elems)
     if (i >= arr.size() || arr[i] != '[') {
         return false;
     }
-    if (!ParseDisplayArray(arr, &i, elems)) {
+    if (!ParseDisplayArray(arr, &i, elems, 0)) {
         return false;
     }
     SkipWs(arr, &i);

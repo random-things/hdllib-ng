@@ -6,8 +6,6 @@ namespace hdl {
 namespace inject {
 namespace {
 
-constexpr ULONG ProcessInstrumentationCallback = 40;
-
 struct ProcessInstrumentationCallbackInfo {
     ULONG Version;
     ULONG Reserved;
@@ -65,7 +63,7 @@ struct InstrumentationStub {
 } // namespace
 
 HdlStatus InstrumentationCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    auto nt_set = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationProcess");
+    auto nt_set = GetLoadedModuleProc(L"ntdll.dll", "NtSetInformationProcess");
     if (!nt_set) {
         return HDL_E_NOT_FOUND;
     }

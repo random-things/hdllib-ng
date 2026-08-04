@@ -59,7 +59,7 @@ bool ApplyRelocations(uint8_t* image, size_t image_bytes, const PeImageView& pe,
             *slot += delta;
             return true;
         }
-        if (type == IMAGE_REL_BASED_ABSOLUTE || type == 0) {
+        if (type == IMAGE_REL_BASED_ABSOLUTE) {
             return true;
         }
         return false;

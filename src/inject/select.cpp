@@ -584,7 +584,7 @@ bool ModulePresent(DWORD pid, const wchar_t* file) {
 bool ProbeKct(HANDLE process) {
     using NtQueryInformationProcess_t = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
     auto ntq = reinterpret_cast<NtQueryInformationProcess_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtQueryInformationProcess"));
     if (!ntq) {
         return false;
     }
@@ -624,8 +624,7 @@ bool CheckDllExport(const wchar_t* dll_path, const char* export_name) {
 }
 
 FARPROC NtdllProc(const char* name) {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    return ntdll ? GetProcAddress(ntdll, name) : nullptr;
+    return GetLoadedModuleProc(L"ntdll.dll", name);
 }
 
 void ProbeLocalApis(TargetProfile& p) {

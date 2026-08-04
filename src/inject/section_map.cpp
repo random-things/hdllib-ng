@@ -19,12 +19,12 @@ constexpr DWORD ViewUnmap = 2; // ViewUnmap
 } // namespace
 
 HdlStatus SectionMapMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    auto nt_create = reinterpret_cast<NtCreateSection_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCreateSection"));
+    auto nt_create =
+        reinterpret_cast<NtCreateSection_t>(GetLoadedModuleProc(L"ntdll.dll", "NtCreateSection"));
     auto nt_map = reinterpret_cast<NtMapViewOfSection_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtMapViewOfSection"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtMapViewOfSection"));
     auto nt_unmap = reinterpret_cast<NtUnmapViewOfSection_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtUnmapViewOfSection"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtUnmapViewOfSection"));
     if (!nt_create || !nt_map || !nt_unmap) {
         return HDL_E_NOT_FOUND;
     }

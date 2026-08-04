@@ -22,6 +22,10 @@ param(
     [string]$SarifOut = 'codeql-results.sarif',
     [string]$CsvOut = 'codeql-results.csv',
 
+    # Wrapper-owned caches; defaults preserve direct developer compatibility.
+    [string]$CacheDir = 'tools/.cache/codeql',
+    [string]$FetchContentDir,
+
     # Must be the same single suite the GitHub workflow loads via codeql-config.yml.
     [string]$QuerySuite = '.github/codeql/hdllib-security-extended.qls'
 )
@@ -54,9 +58,9 @@ $BundleTag = $pinnedBundleTag
 $workflow = Get-Content -LiteralPath $workflowPath -Raw -Encoding utf8
 $actionRefs = [regex]::Matches(
     $workflow,
-    'github/codeql-action/(?:init|analyze)@(?<version>v[0-9.]+)'
+    'github/codeql-action/upload-sarif@(?<version>v[0-9.]+)'
 )
-if ($actionRefs.Count -ne 2 -or
+if ($actionRefs.Count -ne 1 -or
     @($actionRefs | Where-Object { $_.Groups['version'].Value -ne $actionVersion }).Count -ne 0) {
     throw "CodeQL workflow action references do not match toolchain action '$actionVersion'."
 }
@@ -72,9 +76,14 @@ function Resolve-CodeQlExe {
         throw "codeql.exe not found under CodeQlHome '$HomeDir'."
     }
 
-    $cacheExe = Join-Path $repoRoot 'tools\.cache\codeql\codeql\codeql.exe'
+    $cacheExe = Join-Path $script:cacheRoot 'codeql\codeql.exe'
     if (Test-Path -LiteralPath $cacheExe -PathType Leaf) {
         return (Resolve-Path -LiteralPath $cacheExe).Path
+    }
+
+    $legacyCacheExe = Join-Path $repoRoot 'tools\.cache\codeql\codeql\codeql.exe'
+    if (Test-Path -LiteralPath $legacyCacheExe -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $legacyCacheExe).Path
     }
 
     $cmd = Get-Command codeql -ErrorAction SilentlyContinue
@@ -88,7 +97,7 @@ function Resolve-CodeQlExe {
 function Install-CodeQlBundle {
     param([string]$Tag)
 
-    $cacheRoot = Join-Path $repoRoot 'tools\.cache\codeql'
+    $cacheRoot = $script:cacheRoot
     New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
 
     if ([string]::IsNullOrWhiteSpace($Tag)) {
@@ -139,6 +148,11 @@ function Get-CodeQlVersion {
     return [string](($versionJson | ConvertFrom-Json).version)
 }
 
+$script:cacheRoot = if ([IO.Path]::IsPathRooted($CacheDir)) {
+    [IO.Path]::GetFullPath($CacheDir)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $CacheDir))
+}
 $codeql = Resolve-CodeQlExe -HomeDir $CodeQlHome
 if (-not $codeql) {
     if ($InstallBundle) {
@@ -170,17 +184,22 @@ the $BundleTag bundle.
 Write-Host "Using CodeQL: $codeql"
 Write-Host "Matched github/codeql-action ${actionVersion}: CLI $actualCodeQlVersion ($BundleTag)"
 
-$dbPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $DatabaseDir))
-$sarifPath = Join-Path $repoRoot $SarifOut
-$csvPath = Join-Path $repoRoot $CsvOut
-$configPath = Join-Path $repoRoot '.github\codeql\codeql-config.yml'
-$repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-if (-not $dbPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "DatabaseDir must resolve inside the repository: '$dbPath'."
+function Resolve-ResultPath([string]$Path) {
+    if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
+    return [IO.Path]::GetFullPath((Join-Path $repoRoot $Path))
 }
 
+$dbPath = Resolve-ResultPath $DatabaseDir
+$sarifPath = Resolve-ResultPath $SarifOut
+$csvPath = Resolve-ResultPath $CsvOut
+$configPath = Join-Path $repoRoot '.github\codeql\codeql-config.yml'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dbPath),
+    (Split-Path -Parent $sarifPath), (Split-Path -Parent $csvPath) | Out-Null
+
 if (-not $AnalyzeOnly) {
-    & (Join-Path $PSScriptRoot 'add-vs-cmake-to-path.ps1')
+    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+        throw 'CMake is not available. Invoke CodeQL through tools/ci/run-checks.ps1.'
+    }
 
     if (Test-Path -LiteralPath $dbPath) {
         Write-Host "Removing stale database: $dbPath"
@@ -196,7 +215,11 @@ if (-not $AnalyzeOnly) {
     }
 
     $tempRoot = Join-Path $env:TEMP ("hdllib-codeql-{0}" -f [guid]::NewGuid().ToString('N'))
-    $fetchDir = Join-Path $tempRoot 'fetchcontent'
+    $fetchDir = if ([string]::IsNullOrWhiteSpace($FetchContentDir)) {
+        Join-Path $tempRoot 'fetchcontent'
+    } else {
+        Resolve-ResultPath $FetchContentDir
+    }
     $buildScript = Join-Path $tempRoot 'build.cmd'
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
     try {
@@ -238,8 +261,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "codeql database analyze (SARIF) failed with exit code $LASTEXITCODE."
 }
 
+# The database is fresh and the exact suite just completed above. Reuse those
+# query results when serializing CSV instead of evaluating every query twice.
 & $codeql database analyze $dbPath $QuerySuite `
-    --rerun `
     --format=csv `
     --output=$csvPath
 if ($LASTEXITCODE -ne 0) {
@@ -266,13 +290,37 @@ function Test-CodeQlAlertActionable {
         return $false
     }
 
-    # paths-ignore does not drop compiled third_party from a traced C/C++ DB;
-    # GitHub still surfaces them unless suppressed — keep them actionable so
-    # local/CI stay aligned (prefer in-source suppressions in third_party).
     return $true
 }
 
 $sarif = Get-Content -LiteralPath $sarifPath -Raw -Encoding utf8 | ConvertFrom-Json
+$vendorResultCount = 0
+foreach ($run in @($sarif.runs)) {
+    $keptResults = @()
+    foreach ($result in @($run.results)) {
+        $isVendorResult = $false
+        foreach ($location in @($result.locations)) {
+            $uri = [string]$location.physicalLocation.artifactLocation.uri
+            if (($uri -replace '\\', '/') -match '(^|/)third_party/') {
+                $isVendorResult = $true
+                break
+            }
+        }
+        if ($isVendorResult) {
+            $vendorResultCount++
+        } else {
+            $keptResults += $result
+        }
+    }
+    $run.results = $keptResults
+}
+if ($vendorResultCount -gt 0) {
+    # CodeQL's compiled-language extractor includes built vendor code even when
+    # codeql-config.yml uses paths-ignore. Filter it from the exact SARIF that
+    # is gated locally and uploaded by GitHub, preserving pristine vendor source.
+    $sarif | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $sarifPath -Encoding utf8
+    Write-Host "Excluded $vendorResultCount third_party SARIF result(s)."
+}
 $rawCount = 0
 $alertCount = 0
 foreach ($run in @($sarif.runs)) {

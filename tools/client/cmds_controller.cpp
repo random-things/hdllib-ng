@@ -30,16 +30,6 @@ void CollectLog(std::vector<std::wstring>* lines, const std::wstring& s) {
     }
 }
 
-std::string LinesJson(const std::vector<std::wstring>& lines) {
-    JsonWriter w;
-    w.BeginArray();
-    for (const auto& l : lines) {
-        w.Str(l);
-    }
-    w.EndArray();
-    return w.Take();
-}
-
 CommandResult NeedStore(CmdCtx& ctx) {
     return FailArg(ctx, L"--store PATH required for this command");
 }

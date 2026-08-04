@@ -10,9 +10,9 @@
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 #include <Psapi.h>
 #include <TlHelp32.h>
+#include <Windows.h>
 
 #pragma comment(lib, "Psapi.lib")
 
@@ -60,11 +60,12 @@ LONG CALLBACK ExceptionVeh(EXCEPTION_POINTERS* info) {
     const EXCEPTION_RECORD* er = info->ExceptionRecord;
     // Record fatal-ish first-chance exceptions that assistants care about.
     const DWORD code = er->ExceptionCode;
-    const bool interesting = code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW ||
-                             code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
-                             code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_IN_PAGE_ERROR ||
-                             code == EXCEPTION_ARRAY_BOUNDS_EXCEEDED || code == EXCEPTION_DATATYPE_MISALIGNMENT ||
-                             code == EXCEPTION_FLT_DIVIDE_BY_ZERO || code == EXCEPTION_BREAKPOINT;
+    const bool interesting =
+        code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW ||
+        code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+        code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_IN_PAGE_ERROR ||
+        code == EXCEPTION_ARRAY_BOUNDS_EXCEEDED || code == EXCEPTION_DATATYPE_MISALIGNMENT ||
+        code == EXCEPTION_FLT_DIVIDE_BY_ZERO || code == EXCEPTION_BREAKPOINT;
 
     if (interesting) {
         HdlEvent ev{};
@@ -105,8 +106,8 @@ BOOL CALLBACK HungEnumProc(HWND hwnd, LPARAM lp) {
         return FALSE;
     }
     DWORD_PTR result = 0;
-    const LRESULT sm = SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 200,
-                                           &result);
+    const LRESULT sm =
+        SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &result);
     if (sm == 0) {
         ctx->hung = true;
         return FALSE;
@@ -134,7 +135,7 @@ void SampleCpu(HANDLE process, FILETIME* out_user, FILETIME* out_kernel, uint32_
     if (g_prev_tick != 0 && now > g_prev_tick) {
         const ULONGLONG du = u.QuadPart - g_prev_user;
         const ULONGLONG dk = k.QuadPart - g_prev_kernel;
-        const ULONGLONG dt_100ns = (now - g_prev_tick) * 10000ULL;  // ms -> 100ns
+        const ULONGLONG dt_100ns = (now - g_prev_tick) * 10000ULL; // ms -> 100ns
         SYSTEM_INFO si{};
         GetSystemInfo(&si);
         const ULONGLONG capacity =
@@ -159,8 +160,11 @@ uint64_t QueryThreadStartAddress(HANDLE thread) {
     static bool resolved = false;
     if (!resolved) {
         resolved = true;
-        fn = reinterpret_cast<NtQueryInformationThread_t>(
-            GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll) {
+            fn = reinterpret_cast<NtQueryInformationThread_t>(
+                GetProcAddress(ntdll, "NtQueryInformationThread"));
+        }
     }
     if (!fn) {
         return 0;
@@ -170,7 +174,7 @@ uint64_t QueryThreadStartAddress(HANDLE thread) {
     return st >= 0 ? reinterpret_cast<uint64_t>(start) : 0;
 }
 
-}  // namespace
+} // namespace
 
 HdlStatus SetHealthVeh(bool enabled) {
     if (enabled) {
@@ -370,4 +374,4 @@ HdlStatus EnumThreads(HdlThreadInfo* out, uint32_t* inout_count) {
     return HDL_OK;
 }
 
-}  // namespace hdl
+} // namespace hdl

@@ -1,242 +1,128 @@
-# Windows continuous integration
+# Windows CI and local checks
 
-`hdllib` uses two Windows CI tiers because its end-to-end tests create real
-windows, install hooks, inject DLLs, and communicate with child processes.
-GitHub-hosted Windows machines are used for builds and tests that do not need a
-desktop. A self-hosted runner on an existing Windows PC supplies an unlocked
-interactive desktop for trusted `main` builds and scheduled GUI and injection
-suites. It does not need to be a rented server.
+[`tools/ci/run-checks.ps1`](../tools/ci/run-checks.ps1) is the single supported
+entry point for build, test, formatting, analysis, fuzzing, coverage, and
+reproducibility checks. Workflows select runners, restore caches, and publish
+artifacts; they do not duplicate check commands.
 
-## Workflow layout
-
-| Workflow/job | Runner | Trigger | Coverage |
-|---|---|---|---|
-| `Windows CI / hosted-build` | `windows-2022` | pull request, `main`, manual | Release build, changed-file formatting, `headless` CTest label |
-| `Windows CI / gui-tests` | Self-hosted Windows x64 | Push or manual dispatch of `main` | Partitioned GUI, API, injection, IPC, and toy tests |
-| `Windows Nightly / backend-matrix` | `windows-2022` | Nightly, manual | Zydis-only and Capstone-only configurations |
-| `Windows Nightly / address-sanitizer` | `windows-2022` | Nightly, manual | MSVC ASan build and headless tests |
-| `Windows Nightly / *-analysis` | `windows-2022` | Nightly, manual | MSVC `/analyze` and clang-tidy; initially advisory |
-| `Windows Nightly / windows-canary` | `windows-2025` | Nightly, manual | Non-blocking newest-image compatibility signal |
-| `Windows Nightly / gui-stress` | Self-hosted Windows x64 | Nightly or manual dispatch of `main` | GUI partitions repeated three times, then the combined full suite |
-| `CodeQL` | `windows-2022` | Pull request, `main`, weekly | C/C++ security analysis excluding vendored sources |
-
-The primary image is pinned to `windows-2022` so changes to
-`windows-latest` cannot silently change the compiler. The `windows-2025`
-canary is intentionally non-blocking until it has a stable history.
-
-## Test partitions
-
-CTest labels are the boundary between hosted and desktop execution:
-
-- `headless`: deterministic selection and interest-store tests. These may run
-  on GitHub-hosted Windows.
-- `gui`: tests that load or inject the DLL, create a target window, use hooks,
-  or drive live IPC. These run only on the interactive runner.
-- `full`: the combined `hdl_tests` suite. It runs nightly to avoid duplicating
-  every partition on each trusted push.
-
-GUI tests also acquire the `hdl_gui_desktop` CTest resource lock. Keep the GUI
-CTest presets at one worker; parallel desktop/injection tests can interfere
-with each other's processes and window state.
-
-Useful local commands:
+## Reproduce checks locally
 
 ```powershell
-cmake --preset ci-windows
-cmake --build --preset ci-windows --parallel
-ctest --preset ci-headless
+# Fast developer gate (the default)
+./tools/ci/run-checks.ps1
 
-cmake --preset ci-gui
-cmake --build --preset ci-gui --parallel
-ctest --preset ci-gui-smoke
-ctest --preset ci-gui-full
+# Required pull-request parity; downloads the pinned CodeQL bundle if absent
+./tools/ci/run-checks.ps1 -Profile PR -Bootstrap
+
+# Diagnose one check
+./tools/ci/run-checks.ps1 -Check DependencyPins
+
+# Interactive desktop suite
+./tools/ci/run-checks.ps1 -Profile GUI
 ```
 
-For a local ASan run, execute
-`tools/ci/add-msvc-asan-runtime-to-path.ps1` in the same PowerShell session
-before CTest. Visual Studio does not place its ASan runtime DLL on an ordinary
-shell's `PATH`; the nightly workflow performs this step explicitly.
+Use `-ListChecks` to list check names and `-DryRun` to inspect profile expansion.
+In CI, caches default below `$RUNNER_TEMP`; locally they default below
+`build/tooling/cache`. Logs, reports, fuzz corpora, minimized failures, and the
+machine-readable summary default below `build/tooling/artifacts`. Override those
+locations with `-FetchContentDir` and `-ArtifactsDir`; no drive-level cache path
+is assumed.
 
-## Local CodeQL (same gate as GitHub)
+The profiles are:
 
-Before pushing, you can run the same C/C++ `security-extended` analysis as
-[`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) without waiting
-on Actions:
+| Profile | Purpose |
+|---|---|
+| `Fast` | Workflow lint, formatting, dependency pins, Release headless tests |
+| `PR` | `Fast` plus fuzzer smoke tests, coverage, and CodeQL |
+| `Nightly` | Backend variants, sanitizers, static analysis, VS 2022 compatibility, offline build, extended fuzzing |
+| `GUI` | GUI smoke, GUI stress, and ASan lifecycle coverage |
+| `All` | Every registered check once |
+
+`-Bootstrap` may download pinned tooling such as CodeQL. It never installs or
+changes Visual Studio components. Install VS 2026 Build Tools with the Desktop
+development with C++ workload, CMake tools, and (for fuzzing/coverage)
+LLVM/clang-cl and Ninja. The wrapper imports the newest installed x64 Visual
+Studio environment via `vswhere`, then selects the newest complete CMake, Ninja,
+and LLVM installations it can find. VS 2022 is retained only as the compatibility
+floor. The primary tier requires CMake 4.4+ and Ninja 1.13.2+.
+
+Formatting fixes and git-hook installation intentionally remain direct,
+developer-only mutation commands:
 
 ```powershell
-# First time: download GitHub's exact win64 CodeQL bundle into tools/.cache/codeql
-powershell -NoProfile -File tools/ci/run-codeql.ps1 -InstallBundle
-
-# Later runs: recreate the DB and traced build, then analyze
-powershell -NoProfile -File tools/ci/run-codeql.ps1
-
-# Advanced: re-run queries against the existing DB only (source must be unchanged)
-powershell -NoProfile -File tools/ci/run-codeql.ps1 -AnalyzeOnly
+./tools/ci/fix-format.ps1 -WorkingTree
+./tools/ci/install-git-hooks.ps1
 ```
 
-What it does:
+## Hosted and interactive jobs
 
-1. Validates the exact CodeQL Action/CLI/bundle versions pinned in
-   [`.github/codeql/toolchain.json`](../.github/codeql/toolchain.json), refusing
-   a different local CLI instead of silently using a newer query pack.
-2. Deletes the previous database and `build/ci-codeql`, then traces a clean
-   `cmake --preset ci-codeql` + `cmake --build --preset ci-codeql` (VS 2022).
-3. Applies [`.github/codeql/codeql-config.yml`](../.github/codeql/codeql-config.yml)
-   (`paths-ignore`: `build/**`, `third_party/**`).
-4. Analyzes with [`.github/codeql/hdllib-security-extended.qls`](../.github/codeql/hdllib-security-extended.qls)
-   (security-extended + alert suppression; excludes intentional
-   `cpp/uncontrolled-process-operation` for this injection toolkit).
-5. Writes `codeql-results.sarif` / `codeql-results.csv` and fails if any
-   actionable alerts remain (only in-source `// codeql[...]` / `// lgtm[...]`
-   suppressions are ignored — same as GitHub Code Scanning; override with
-   `-AllowFindings`). Always passes `--rerun` so incremental cache cannot
-   false-green after a database recreate.
+GitHub's `windows-2025-vs2026` image is the primary hosted target. It executes
+headless builds, parser/client IPC tests, backend variants, static analysis,
+CodeQL, fuzzing, coverage, and the fully disconnected rebuild with VS 2026.
+The image currently supplies CMake 4.4, Ninja 1.13.2, and standalone LLVM
+20.1.8. The wrapper chooses a newer complete LLVM toolset when the VS component
+or a local installation provides one; this Windows 11 development runner uses
+LLVM 22. The manifest records the hosted floor, and the wrapper refuses an
+older VS 2026 toolchain. A nightly `windows-2022` job preserves explicit VS 2022
+compatibility. The repository's existing self-hosted runner, labeled
+`self-hosted`, `Windows`, and `X64`, executes tests that create windows, install
+hooks, inject DLLs, or exercise UI-thread calls. No additional or paid runner is
+required. That runner must have VS 2026 Build Tools installed so GUI validation
+uses the same current compiler generation as hosted CI.
 
-If the pinned CodeQL version is already on `PATH`, omit `-InstallBundle`. Pass
-`-CodeQlHome` to point at that exact unpacked bundle. `-AnalyzeOnly` is only for
-re-querying a database when its extracted source is known to be unchanged; a
-normal run always rebuilds so it cannot report against stale code.
+CTest labels are the execution boundary:
 
-## Interactive runner setup
+- `headless` covers deterministic unit, selection, store, PE, JSON, operations
+  manifest, ABI, headless API, invocation, and no-window client IPC tests.
+- `gui` covers UI-thread API, locate/injection, lifecycle, and toy tests.
+- `full` is the combined GUI suite.
 
-For occasional open-source CI, the self-hosted runner can be this development
-PC and can remain offline between runs. A dedicated Windows 11 VM or physical
-machine is safer for frequent or multi-contributor use. Do not attach a runner
-that holds production credentials to workflows which may execute untrusted code.
+GUI tests use a single worker and the `hdl_gui_desktop` resource lock.
 
-1. Install current Visual Studio 2022 Build Tools with the Desktop development
-   with C++ workload, CMake 3.20 or newer, Git, and PowerShell 5.1 or newer.
-2. Create a dedicated local runner account. Give it only the permissions the
-   tests need and write access to the runner's work directory.
-3. In the repository's **Settings > Actions > Runners** page, add a self-hosted
-   Windows x64 runner. The workflows use its default `self-hosted`, `Windows`,
-   and `X64` labels.
-4. When runner setup asks whether to run as a Windows service, answer **No**.
-   A service runs in session 0 and cannot provide the required desktop.
-5. Sign in as the runner account and start `run.cmd` from that session. For
-   automatic startup, create a Task Scheduler entry triggered **At log on**,
-   select **Run only when user is logged on**, and launch `run.cmd` with its
-   runner directory as the working directory.
-6. Keep the session signed in and unlocked. Prefer a hypervisor console over an
-   RDP session: disconnecting or locking RDP can remove access to the active
-   desktop even while the runner process remains online.
-7. Run `tools/ci/assert-interactive-desktop.ps1` in the runner session. It must
-   report a nonzero session, a visible window station, an Explorer shell, a
-   display, and successful window creation.
-8. Keep the runner application current. `actions/checkout@v6` requires runner
-   version 2.329.0 or later. The runner normally updates itself, but an offline
-   runner can fall behind.
+### The self-hosted runner must own an interactive desktop
 
-### Convert an existing service runner
+A GitHub Actions runner installed as a Windows service runs in session 0.
+Windows isolates session 0 from the logged-on desktop, so a service can be
+automatic but cannot run these GUI tests. The desktop probe fails early in that
+configuration by design.
 
-Running `run.cmd` does not require registering a second runner. To preserve the
-existing GitHub registration while moving an installed runner out of session 0,
-open PowerShell as Administrator and run:
+Use the already registered runner application from the intended user's logged-on
+session. For automatic startup without paying for hosting, disable the runner
+service and create a Task Scheduler task triggered at that user's logon which
+starts `C:\actions-runner\run.cmd` with that directory as its working directory.
+Configure it to run only when the user is logged on. Keep the desktop unlocked;
+disconnecting RDP can remove or lock the interactive desktop.
+
+Only trusted `main` code is sent to the persistent interactive machine. Pull
+requests run on GitHub-hosted runners. Restrict the runner group to this
+repository and do not grant the runner account unrelated secrets or admin rights.
+
+## Coverage and fuzzing
+
+`FuzzSmoke` runs each clang-cl/libFuzzer harness for 5,000 iterations;
+`FuzzExtended` runs each for 300 seconds. Harnesses parse IPC framing/wire data,
+search patterns/descriptors, PE data, JSON/store/discover data, and one-shot CLI
+invocations. They never dispatch operational IPC handlers.
+
+`Coverage` runs deterministic headless tests with clang source coverage, emits
+LLVM JSON and HTML reports, and gates only the first-party sources listed in
+`tools/ci/coverage-sources.txt`. A decrease greater than 0.1 percentage points
+fails. After reviewing an intentional change, update the baseline locally with:
 
 ```powershell
-$runnerRoot = 'C:\actions-runner'
-$runnerService = Get-CimInstance Win32_Service |
-    Where-Object {
-        $_.Name -like 'actions.runner.*' -and
-        $_.PathName -like "*$runnerRoot\bin\RunnerService.exe*"
-    }
-
-if ($null -eq $runnerService) {
-    throw "No GitHub Actions service found under $runnerRoot."
-}
-
-Stop-Service -Name $runnerService.Name
-Set-Service -Name $runnerService.Name -StartupType Disabled
-
-$runnerUser = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction `
-    -Execute "$env:SystemRoot\System32\cmd.exe" `
-    -Argument "/d /s /c `"`"$runnerRoot\run.cmd`"`"" `
-    -WorkingDirectory $runnerRoot
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $runnerUser
-$principal = New-ScheduledTaskPrincipal `
-    -UserId $runnerUser `
-    -LogonType Interactive `
-    -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -MultipleInstances IgnoreNew
-
-Register-ScheduledTask `
-    -TaskName 'GitHub Actions Runner (interactive)' `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Settings $settings `
-    -Force
-Start-ScheduledTask -TaskName 'GitHub Actions Runner (interactive)'
+./tools/ci/run-checks.ps1 -Check Coverage -UpdateCoverageBaseline
 ```
 
-Verify that `Runner.Listener.exe` moved to the signed-in user's nonzero session:
+Baseline updates are rejected in CI.
 
-```powershell
-Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" |
-    Select-Object ProcessId, SessionId
-tools/ci/assert-interactive-desktop.ps1
-```
+## Dependency and CodeQL reproducibility
 
-The scheduled task starts automatically only after that user signs in. Keep the
-session signed in and unlocked for GUI runs; Windows services cannot be moved
-onto the interactive desktop by changing the workflow.
+Zydis and Capstone are pinned to audited commit hashes. MinHook v1.3.4 is
+vendored with its upstream commit recorded in CMake. `DependencyPins` rejects
+mutable FetchContent references and checks that the CodeQL bundle, CLI, and
+SARIF upload action match `.github/codeql/toolchain.json`.
 
-The GUI smoke job runs after the hosted build on every trusted push to `main`.
-The GUI stress job runs nightly. Both can also be dispatched manually against
-`main`; pull-request code is never sent to this runner. If the PC is offline,
-the job remains queued until the runner comes online or the workflow is
-cancelled. If you do not want GitHub orchestration for a particular run, use
-the `ci-gui-smoke` and `ci-gui-full` presets locally instead.
-
-The workflows place FetchContent checkouts under
-`$env:RUNNER_TEMP\hdllib-fetchcontent`. On the example installation at
-`C:\actions-runner`, this resolves beneath `C:\actions-runner\_work\_temp`.
-It is separate from the repository checkout because it contains only downloaded
-and built third-party dependencies. The `add-vs-cmake-to-path.ps1` helper finds
-Visual Studio's bundled CMake through `vswhere`; the runner account does not
-need a machine-wide CMake `PATH` entry.
-
-## Security boundary
-
-Do not add `pull_request` or `pull_request_target` execution to a persistent
-self-hosted runner. Pull-request code can modify the build, tests, or workflow
-and retain control of the machine after a job. The checked-in workflows allow
-the GUI runner only when `github.ref` is exactly `refs/heads/main`.
-
-Recommended repository settings:
-
-- Protect `main` and require `hosted-build` plus CodeQL before merge.
-- Put GUI runners in a runner group restricted to this repository.
-- Do not expose production secrets, signing keys, personal browser sessions,
-  or sensitive network access to the runner account.
-- Snapshot or rebuild the VM regularly and after any suspected compromise.
-- If GUI tests must become a pre-merge gate, provision a fresh ephemeral VM for
-  each merge-queue job and destroy it afterward. Do not broaden the persistent
-  runner's trigger.
-
-## Quality-tool adoption
-
-Changed C/C++ lines are checked against `.clang-format` in primary CI
-(`tools/ci/check-format.ps1`). Format locally before commit:
-
-```powershell
-# One-time: point git at the repo hooks (formats staged C/C++ on commit)
-powershell -NoProfile -File tools/ci/install-git-hooks.ps1
-
-# Or format on demand
-powershell -NoProfile -File tools/ci/fix-format.ps1 -Staged
-powershell -NoProfile -File tools/ci/fix-format.ps1 -WorkingTree
-```
-
-actionlint validates workflow files with the custom runner labels in
-`.github/actionlint.yaml`. CodeQL is blocking; run
-`tools/ci/run-codeql.ps1` before push. clang-tidy and MSVC native analysis are
-nightly and advisory while the existing warning baseline is reduced; remove
-`continue-on-error` from those jobs once their output is clean. Dependabot
-proposes updates to pinned GitHub Actions versions each week.
+`OfflineBuild` first populates the selected FetchContent cache, then configures a
+fresh build tree with `FETCHCONTENT_FULLY_DISCONNECTED=ON`, builds it, and runs
+headless tests. `CodeQL` always uses the same local database/analyze path in CI
+and on a developer machine; GitHub only uploads the resulting SARIF.

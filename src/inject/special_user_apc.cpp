@@ -21,9 +21,9 @@ using NtQueueApcThreadEx_t = NTSTATUS(NTAPI*)(HANDLE ThreadHandle, HANDLE UserAp
 
 HdlStatus SpecialUserApcMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     auto nt_q2 = reinterpret_cast<NtQueueApcThreadEx2_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueueApcThreadEx2"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtQueueApcThreadEx2"));
     auto nt_q_ex = reinterpret_cast<NtQueueApcThreadEx_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueueApcThreadEx"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtQueueApcThreadEx"));
     auto load_library = GetKernel32Proc("LoadLibraryW");
     if (!load_library) {
         return HDL_E_FAILED;

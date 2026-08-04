@@ -145,6 +145,16 @@ int main() {
     Expect(ParseObjectFields("{\"enabled\":true,\"n\":2}", &fields) && fields.size() == 2 &&
                fields[0].first == "enabled" && fields[0].second == "true",
            "parse object fields bool");
+    Expect(ParseObjectFields("{\"matrix\":[[1,2],[3]]}", &fields) && fields.size() == 1 &&
+               fields[0].second == "[[1,2],[3]]",
+           "parse object fields preserves nested arrays");
+    std::string deeply_nested = "{\"value\":";
+    deeply_nested.append(129, '[');
+    deeply_nested += '0';
+    deeply_nested.append(129, ']');
+    deeply_nested += '}';
+    Expect(!ParseObjectFields(deeply_nested, &fields),
+           "parse object fields rejects excessive nesting");
     std::vector<std::string> elems;
     Expect(ParseArrayElements("[\"a\",1,true]", &elems) && elems.size() == 3 && elems[2] == "true",
            "parse array elements");

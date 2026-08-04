@@ -1,4 +1,5 @@
 #include "cmd.hpp"
+#include "invocation.hpp"
 #include "json_out.hpp"
 #include "local_inject.hpp"
 #include "usage.hpp"
@@ -8,8 +9,8 @@
 
 #include <cstdio>
 #include <cstring>
-#include <cwctype>
 #include <string>
+#include <vector>
 
 static const CmdEntry kCommands[] = {
     {L"ping", CmdPing},
@@ -134,41 +135,6 @@ static CmdHandler FindCommand(const wchar_t* name) {
     return nullptr;
 }
 
-/* Map short aliases to the canonical verb name handlers compare against. */
-static const wchar_t* CanonicalCmd(const wchar_t* name) {
-    static const struct {
-        const wchar_t* alias;
-        const wchar_t* canon;
-    } kMap[] = {
-        {L"dcreate", L"discover-create"},
-        {L"dclose", L"discover-close"},
-        {L"dadd", L"discover-add"},
-        {L"dscan", L"discover-scan"},
-        {L"dconstraint", L"discover-constraint"},
-        {L"dsynth", L"discover-synth"},
-        {L"dpathscan", L"discover-pathscan"},
-        {L"dpathvalidate", L"discover-pathvalidate"},
-        {L"dwatch", L"discover-watch"},
-        {L"dunwatch", L"discover-unwatch"},
-        {L"dbegin", L"discover-action-begin"},
-        {L"dend", L"discover-action-end"},
-        {L"dregion", L"discover-watch-region"},
-        {L"dheat", L"discover-heat"},
-        {L"drank", L"discover-rank"},
-        {L"dcluster", L"discover-cluster"},
-        {L"dcands", L"discover-cands"},
-        {L"henable", L"hook-enable"},
-        {L"enablehook", L"hook-enable"},
-        {L"rpat", L"resolve-pattern"},
-    };
-    for (const auto& m : kMap) {
-        if (wcscmp(name, m.alias) == 0) {
-            return m.canon;
-        }
-    }
-    return name;
-}
-
 static bool EqFlag(const wchar_t* a, const wchar_t* b) {
     return a && b && _wcsicmp(a, b) == 0;
 }
@@ -193,109 +159,41 @@ int wmain(int argc, wchar_t** argv) {
         return RunLocalUnload(argc - 2, argv + 2, reload_default);
     }
 
-    if (argc < 2) {
+    ParsedInvocation invocation = ParseInvocation(argc, argv);
+    if (invocation.error == InvocationError::RemovedSurface) {
+        wprintf(L"REPL/TUI removed; use one-shot verbs (session/store/recipe/stabilize).\n");
         PrintUsage();
         return 1;
     }
-
-    const wchar_t* store_path = nullptr;
-    bool want_json = false;
-    int argi = 1;
-
-    /* Optional global flags before pid: --store PATH --json */
-    while (argi < argc) {
-        if (EqFlag(argv[argi], L"--store") && argi + 1 < argc) {
-            store_path = argv[++argi];
-            ++argi;
-            continue;
-        }
-        if (EqFlag(argv[argi], L"--json")) {
-            want_json = true;
-            ++argi;
-            continue;
-        }
-        if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui") ||
-            EqFlag(argv[argi], L"repl")) {
-            wprintf(L"REPL/TUI removed; use one-shot verbs (session/store/recipe/stabilize).\n");
-            PrintUsage();
-            return 1;
-        }
-        break;
-    }
-
-    if (argi >= argc) {
-        PrintUsage();
-        return 1;
-    }
-
-    const uint32_t pid = static_cast<uint32_t>(_wtoi(argv[argi]));
-    if (pid == 0) {
+    if (invocation.error == InvocationError::InvalidPid) {
         wprintf(L"Invalid pid\n");
         return 1;
     }
-    ++argi;
-
-    while (argi < argc) {
-        if (EqFlag(argv[argi], L"--store") && argi + 1 < argc) {
-            store_path = argv[++argi];
-            ++argi;
-            continue;
-        }
-        if (EqFlag(argv[argi], L"--json")) {
-            want_json = true;
-            ++argi;
-            continue;
-        }
-        if (EqFlag(argv[argi], L"--tui") || EqFlag(argv[argi], L"tui") ||
-            EqFlag(argv[argi], L"repl")) {
-            wprintf(L"REPL/TUI removed; use one-shot verbs (session/store/recipe/stabilize).\n");
-            PrintUsage();
-            return 1;
-        }
-        break;
-    }
-
-    if (argi >= argc) {
+    if (invocation.error != InvocationError::None) {
         PrintUsage();
         return 1;
     }
 
-    const CmdHandler handler = FindCommand(argv[argi]);
+    const CmdHandler handler = FindCommand(invocation.command.c_str());
     if (!handler) {
         PrintUsage();
         return 1;
     }
-    const wchar_t* canon = CanonicalCmd(argv[argi]);
 
-    PipeClient client(pid);
+    PipeClient client(invocation.pid);
     if (!client.Connect()) {
-        return FailConnect(pid);
+        return FailConnect(invocation.pid);
     }
 
-    CmdCtx ctx{argc, argv, pid, canon, client};
-    ctx.json = want_json;
-    ctx.store_path = store_path;
-    if (argi != 2 || canon != argv[argi]) {
-        static wchar_t* syn[256];
-        static wchar_t canon_buf[64];
-        wcsncpy_s(canon_buf, canon, _TRUNCATE);
-        int n = 0;
-        syn[n++] = argv[0];
-        syn[n++] = argv[1];
-        for (int i = 1; i < argc; ++i) {
-            if (static_cast<uint32_t>(_wtoi(argv[i])) == pid && wcslen(argv[i]) > 0 &&
-                iswdigit(argv[i][0])) {
-                syn[1] = argv[i];
-                break;
-            }
-        }
-        syn[n++] = canon_buf;
-        for (int i = argi + 1; i < argc && n < 255; ++i) {
-            syn[n++] = argv[i];
-        }
-        ctx.argc = n;
-        ctx.argv = syn;
-        ctx.cmd = canon_buf;
+    std::vector<wchar_t*> normalized_argv;
+    normalized_argv.reserve(invocation.normalized_args.size());
+    for (std::wstring& arg : invocation.normalized_args) {
+        normalized_argv.push_back(arg.data());
     }
+
+    CmdCtx ctx{static_cast<int>(normalized_argv.size()), normalized_argv.data(), invocation.pid,
+               invocation.command.c_str(), client};
+    ctx.json = invocation.json;
+    ctx.store_path = invocation.store_path.empty() ? nullptr : invocation.store_path.c_str();
     return Render(ctx, handler(ctx));
 }

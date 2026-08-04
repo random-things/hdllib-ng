@@ -45,10 +45,10 @@ HdlStatus RtlRemoteCallMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* o
     (void)out_base;
     return HDL_E_FAILED;
 #else
-    auto rtl_remote = reinterpret_cast<RtlRemoteCall_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlRemoteCall"));
-    auto nt_continue = reinterpret_cast<NtContinue_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtContinue"));
+    auto rtl_remote =
+        reinterpret_cast<RtlRemoteCall_t>(GetLoadedModuleProc(L"ntdll.dll", "RtlRemoteCall"));
+    auto nt_continue =
+        reinterpret_cast<NtContinue_t>(GetLoadedModuleProc(L"ntdll.dll", "NtContinue"));
     auto load_library = GetKernel32Proc("LoadLibraryW");
     if (!rtl_remote || !nt_continue || !load_library) {
         return HDL_E_NOT_FOUND;

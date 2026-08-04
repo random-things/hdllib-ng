@@ -64,8 +64,8 @@ struct EtwRegStub {
 } // namespace
 
 HdlStatus EtwCallbackMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    auto etw_reg = reinterpret_cast<EtwEventRegister_t>(GetProcAddress(ntdll, "EtwEventRegister"));
+    auto etw_reg =
+        reinterpret_cast<EtwEventRegister_t>(GetLoadedModuleProc(L"ntdll.dll", "EtwEventRegister"));
     if (!etw_reg) {
         return HDL_E_NOT_FOUND;
     }

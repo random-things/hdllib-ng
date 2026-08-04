@@ -65,6 +65,15 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
 ## Testing and tooling recommendations
 
+The unified testing/tooling work below is now implemented. All supported checks
+flow through `tools/ci/run-checks.ps1`; see [ci.md](ci.md). Completed work
+includes hosted/headless and interactive GUI partitions, API headless mode,
+backend and sanitizer presets, clang-format/actionlint/clang-tidy/MSVC analysis,
+CodeQL SARIF generation, parser fuzzers, LLVM coverage gating, immutable
+dependency pins, MinHook v1.3.4 provenance, and an offline rebuild.
+
+The historical recommendations are retained below as the implementation record.
+
 - Add Windows CI with separate quick and extended jobs:
 
   - PR: build, selection/store unit tests, API-only, client IPC tests.
@@ -98,7 +107,8 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
 - Improve dependency reproducibility: pin FetchContent dependencies to immutable commit hashes, cache them in CI, and support offline builds. A vcpkg manifest is a reasonable longer-term option.
 
-- Fix the CMake version contract. [`CMakeLists.txt`](/C:/Users/Me/Documents/GitHub/hdllib/CMakeLists.txt:1) claims CMake 3.16, while [`CMakePresets.json`](/C:/Users/Me/Documents/GitHub/hdllib/CMakePresets.json:2) uses schema version 3, which requires CMake 3.21. The installed VS 2019 CMake 3.20 rejected the documented preset command. [CMake preset version reference](https://cmake.org/cmake/help/v3.29/manual/cmake-presets.7.html)
+- The CMake/toolchain contract is now explicit: VS 2026 with CMake 4.4+ and
+  Ninja 1.13+ is primary, while VS 2022 is exercised as a compatibility tier.
 
 ## Recommended implementation order
 

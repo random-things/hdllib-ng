@@ -75,7 +75,7 @@ struct Interest {
     std::string name;
     std::string kind; /* address|function|object|field|patch|… */
     std::string tag;
-    std::string evidence; /* v3 optional */
+    std::string evidence;                   /* v3 optional */
     std::vector<std::string> struct_fields; /* v3 optional */
     std::vector<Locator> locators;
 };
@@ -87,9 +87,10 @@ struct InterestStore {
     std::vector<Interest> interests;
 
     bool Load(const wchar_t* file_path);
+    bool LoadJson(const std::string& json);
     bool Save(const wchar_t* file_path = nullptr) const;
     Interest* Find(const char* name);
     void AddOrReplace(Interest in);
 };
 
-}  // namespace hdlcli
+} // namespace hdlcli

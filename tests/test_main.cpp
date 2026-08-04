@@ -13,7 +13,9 @@ namespace {
 void PrintUsage() {
     std::wprintf(L"Usage:\n"
                  L"  hdl_tests [--dll <hdllib.dll>] [--target <hdl_test_target.exe>]\n"
-                 L"            [--api-only] [--inject-only] [--locate-only] [--lifecycle-only]\n");
+                 L"            [--api-only|--api-headless-only|--api-asan-only]\n"
+                 L"            [--inject-only]\n"
+                 L"            [--locate-only] [--lifecycle-only]\n");
 }
 
 } // namespace
@@ -22,6 +24,8 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring dll_path;
     std::wstring target_path;
     bool api_only = false;
+    bool api_headless_only = false;
+    bool api_asan_only = false;
     bool inject_only = false;
     bool locate_only = false;
     bool lifecycle_only = false;
@@ -33,6 +37,12 @@ int wmain(int argc, wchar_t** argv) {
             target_path = argv[++i];
         } else if (_wcsicmp(argv[i], L"--api-only") == 0) {
             api_only = true;
+        } else if (_wcsicmp(argv[i], L"--api-headless-only") == 0) {
+            api_only = true;
+            api_headless_only = true;
+        } else if (_wcsicmp(argv[i], L"--api-asan-only") == 0) {
+            api_only = true;
+            api_asan_only = true;
         } else if (_wcsicmp(argv[i], L"--inject-only") == 0) {
             inject_only = true;
         } else if (_wcsicmp(argv[i], L"--locate-only") == 0) {
@@ -85,7 +95,7 @@ int wmain(int argc, wchar_t** argv) {
         RunLifecycleStressTests(c, target_full, payload.c_str());
     } else {
         if (!inject_only && !locate_only) {
-            RunLocalApiTests(c, payload.c_str());
+            RunLocalApiTests(c, payload.c_str(), !api_headless_only, !api_asan_only);
             if (!api_only) {
                 RunLifecycleStressTests(c, target_full, payload.c_str());
             }

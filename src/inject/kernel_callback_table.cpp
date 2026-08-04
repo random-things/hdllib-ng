@@ -122,7 +122,7 @@ HdlStatus KernelCallbackTableMethod(uint32_t pid, const wchar_t* dll_path, uint6
     }
 
     auto nt_query = reinterpret_cast<NtQueryInformationProcess_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+        GetLoadedModuleProc(L"ntdll.dll", "NtQueryInformationProcess"));
     auto send_to = GetUser32Proc("SendMessageTimeoutW");
     auto load_library = GetKernel32Proc("LoadLibraryW");
     if (!nt_query || !send_to || !load_library) {

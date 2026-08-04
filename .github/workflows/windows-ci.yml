@@ -16,53 +16,93 @@ concurrency:
 
 jobs:
   hosted-build:
-    name: Build and headless tests (Windows 2022)
-    runs-on: windows-2022
-    timeout-minutes: 45
-
+    name: Fast build and headless tests
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
     steps:
-      - name: Check out source
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Cache FetchContent dependencies
-        uses: actions/cache@v6
+      - uses: actions/cache@v6
         with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Lint GitHub Actions workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -no-color
-
-      - name: Check formatting of changed C and C++ files
+          path: ${{ runner.temp }}\hdllib-tooling-cache
+          key: tooling-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'tools/ci/toolchain.json') }}
+      - name: Run fast checks
         env:
           BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: ./tools/ci/check-format.ps1 -BaseRevision $env:BASE_REVISION
-
-      - name: Configure
         run: >-
-          cmake --preset ci-windows
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build
-        run: cmake --build --preset ci-windows --parallel
-
-      - name: Run headless tests
-        run: ctest --preset ci-headless
-
-      - name: Upload release binaries
+          ./tools/ci/run-checks.ps1 -Profile Fast
+          -BaseRevision $env:BASE_REVISION
+          -ArtifactsDir "$env:RUNNER_TEMP\hdllib-artifacts"
+      - name: Upload release binaries and logs
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: hdllib-windows-x64-release
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
           path: |
-            build/ci-windows/Release/*.dll
-            build/ci-windows/Release/*.exe
-            build/ci-windows/Release/*.lib
-            build/ci-windows/Release/*.pdb
+            build/ci-windows/**/*.dll
+            build/ci-windows/**/*.exe
+            build/ci-windows/**/*.lib
+            build/ci-windows/**/*.pdb
+            ${{ runner.temp }}/hdllib-artifacts/logs/*.log
+            ${{ runner.temp }}/hdllib-artifacts/summary.json
+
+  fuzz-smoke:
+    name: Fuzzer smoke tests
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\hdllib-tooling-cache
+          key: tooling-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
+      - name: Run fuzzer smoke checks
+        run: >-
+          ./tools/ci/run-checks.ps1 -Check FuzzSmoke
+          -ArtifactsDir "$env:RUNNER_TEMP\hdllib-fuzz-artifacts"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hdllib-fuzz-smoke
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/hdllib-fuzz-artifacts
+
+  coverage:
+    name: First-party source coverage
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\hdllib-tooling-cache
+          key: tooling-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
+      - name: Run coverage gate
+        run: >-
+          ./tools/ci/run-checks.ps1 -Check Coverage
+          -ArtifactsDir "$env:RUNNER_TEMP\hdllib-coverage-artifacts"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hdllib-coverage
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/hdllib-coverage-artifacts
 
   gui-tests:
     name: GUI and injection tests
@@ -70,39 +110,22 @@ jobs:
     needs: hosted-build
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 90
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
     concurrency:
       group: hdllib-interactive-gui-runner
       cancel-in-progress: false
-
     steps:
-      - name: Check out trusted main
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           clean: true
           persist-credentials: false
-
-      - name: Verify interactive desktop
-        run: ./tools/ci/assert-interactive-desktop.ps1
-
-      - name: Add Visual Studio CMake to PATH
-        run: ./tools/ci/add-vs-cmake-to-path.ps1
-
-      - name: Configure
-        run: >-
-          cmake --preset ci-gui
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build
-        run: cmake --build --preset ci-gui --parallel
-
-      - name: Run GUI smoke suite
-        run: ctest --preset ci-gui-smoke
-
-      - name: Upload GUI test log
-        if: always()
+      - name: Run GUI smoke checks
+        run: ./tools/ci/run-checks.ps1 -Check GuiSmoke
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: hdllib-gui-test-log-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 14
-          path: build/ci-gui/Testing/Temporary/*.log
+          path: build/tooling/artifacts

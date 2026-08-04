@@ -13,190 +13,72 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  backend-matrix:
+  hosted-checks:
     name: ${{ matrix.name }}
-    runs-on: windows-2022
-    timeout-minutes: 45
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    continue-on-error: ${{ matrix.advisory }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Zydis only
-            build: ci-zydis
-            test: ci-zydis-headless
-          - name: Capstone only
-            build: ci-capstone
-            test: ci-capstone-headless
-
+          - {name: Zydis only, check: BackendZydis, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: false}
+          - {name: Capstone only, check: BackendCapstone, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: false}
+          - {name: AddressSanitizer, check: AsanHeadless, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: false}
+          - {name: clang-tidy, check: ClangTidy, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: true}
+          - {name: MSVC native analysis, check: MsvcAnalyze, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: true}
+          - {name: VS 2022 compatibility, check: WindowsCanary, runner: windows-2022, vs: 17, timeout: 60, advisory: true}
+          - {name: Offline rebuild, check: OfflineBuild, runner: windows-2025-vs2026, vs: 18, timeout: 60, advisory: false}
+          - {name: Extended fuzzing, check: FuzzExtended, runner: windows-2025-vs2026, vs: 18, timeout: 180, advisory: false}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
       - uses: actions/cache@v6
         with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Configure ${{ matrix.name }}
-        run: >-
-          cmake --preset ${{ matrix.build }}
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build ${{ matrix.name }}
-        run: cmake --build --preset ${{ matrix.build }} --parallel
-
-      - name: Run headless tests
-        run: ctest --preset ${{ matrix.test }}
-
-  address-sanitizer:
-    name: AddressSanitizer
-    runs-on: windows-2022
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Configure
-        run: >-
-          cmake --preset ci-asan
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build
-        run: cmake --build --preset ci-asan --parallel
-
-      - name: Add the MSVC ASan runtime to PATH
-        run: ./tools/ci/add-msvc-asan-runtime-to-path.ps1
-
-      - name: Run headless tests under ASan
+          path: ${{ runner.temp }}\hdllib-tooling-cache
+          key: tooling-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
+      - name: Run ${{ matrix.check }}
         env:
-          ASAN_OPTIONS: halt_on_error=1
-        run: ctest --preset ci-asan-headless
-
-  msvc-analysis:
-    name: MSVC native analysis
-    runs-on: windows-2022
-    timeout-minutes: 45
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Configure
+          HDL_EXPECTED_VS_MAJOR: ${{ matrix.vs }}
         run: >-
-          cmake --preset ci-msvc-analyze
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Analyze while building
-        run: cmake --build --preset ci-msvc-analyze --parallel
-
-  clang-tidy:
-    name: clang-tidy
-    runs-on: windows-2022
-    timeout-minutes: 45
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v7
+          ./tools/ci/run-checks.ps1 -Check ${{ matrix.check }}
+          -ArtifactsDir "$env:RUNNER_TEMP\hdllib-${{ matrix.check }}-artifacts"
+      - if: always()
+        uses: actions/upload-artifact@v7
         with:
-          persist-credentials: false
+          name: hdllib-${{ matrix.check }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/hdllib-${{ matrix.check }}-artifacts
 
-      - uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Analyze first-party C++
-        shell: cmd
-        run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --preset ci-clang-tidy "-DFETCHCONTENT_BASE_DIR=%RUNNER_TEMP%\hdllib-fetchcontent"
-          cmake --build --preset ci-clang-tidy --parallel
-
-  windows-canary:
-    name: Windows 2025 canary
-    runs-on: windows-2025
-    timeout-minutes: 45
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}\hdllib-fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-
-      - name: Configure with the newest installed Visual Studio
-        run: >-
-          cmake -S . -B build/canary -A x64
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-          -DHDL_BUILD_TOOLS=OFF
-          -DHDL_BUILD_TOYS=OFF
-          -DHDL_WARNINGS_AS_ERRORS=ON
-
-      - name: Build
-        run: cmake --build build/canary --config Release --parallel
-
-      - name: Run headless tests
-        run: ctest --test-dir build/canary -C Release -L headless --output-on-failure
-
-  gui-stress:
-    name: GUI lifecycle stress
+  gui-checks:
+    name: ${{ matrix.name }}
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 180
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: GUI lifecycle stress, check: GuiStress}
+          - {name: ASan GUI lifecycle, check: AsanGuiLifecycle}
     concurrency:
       group: hdllib-interactive-gui-runner
       cancel-in-progress: false
-
     steps:
       - uses: actions/checkout@v7
         with:
           clean: true
           persist-credentials: false
-
-      - name: Verify interactive desktop
-        run: ./tools/ci/assert-interactive-desktop.ps1
-
-      - name: Add Visual Studio CMake to PATH
-        run: ./tools/ci/add-vs-cmake-to-path.ps1
-
-      - name: Configure
-        run: >-
-          cmake --preset ci-gui
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build
-        run: cmake --build --preset ci-gui --parallel
-
-      - name: Repeat the partitioned GUI suite
-        run: ctest --preset ci-gui-smoke --repeat until-fail:3
-
-      - name: Run the combined full suite
-        run: ctest --preset ci-gui-full
-
-      - name: Upload GUI stress log
-        if: always()
+      - name: Run ${{ matrix.check }}
+        run: ./tools/ci/run-checks.ps1 -Check ${{ matrix.check }}
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: hdllib-gui-stress-log-${{ github.run_attempt }}
+          name: hdllib-${{ matrix.check }}-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 14
-          path: build/ci-gui/Testing/Temporary/*.log
+          path: build/tooling/artifacts

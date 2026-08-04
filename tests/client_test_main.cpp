@@ -545,11 +545,11 @@ void RunNegotiateMismatch(Counters& c) {
     PipeClient client(pid);
     const bool connected = client.Connect(3000);
     const std::string& err = client.NegotiateError();
+    server.join();
     const bool rejected = !connected && err.find("mismatch") != std::string::npos && served.load();
     Report(c, rejected, false, "ipc/reject_major_mismatch",
            rejected ? "PipeClient::Negotiate refuses incompatible major" : err.c_str());
 
-    server.join();
     CloseHandle(pipe);
 }
 
@@ -729,7 +729,11 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
 
     /* Place / code smoke */
     ExpectOk(c, "client disasm-backend list", Cli(ctx, {L"disasm-backend", L"list"}));
+#if defined(HDL_HAS_ZYDIS)
     ExpectOk(c, "client disasm-backend set zydis", Cli(ctx, {L"disasm-backend", L"set", L"1"}));
+#elif defined(HDL_HAS_CAPSTONE)
+    ExpectOk(c, "client disasm-backend set capstone", Cli(ctx, {L"disasm-backend", L"set", L"2"}));
+#endif
     if (fn) {
         wchar_t a[32];
         swprintf_s(a, L"0x%llx", static_cast<unsigned long long>(fn));
