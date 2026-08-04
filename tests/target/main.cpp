@@ -31,7 +31,7 @@ HANDLE g_exit_event = nullptr;
 extern "C" {
 
 /* Unique string in image; referenced by HdlTestLocateUseString (RIP xref). */
-__declspec(dllexport) const char HdlTestLocateString[] = "HDL_LOCATE_STRING_v1";
+extern __declspec(dllexport) const char HdlTestLocateString[] = "HDL_LOCATE_STRING_v1";
 
 /* Absolute pointer in .data for HDL_XREF_ABSOLUTE tests. */
 __declspec(dllexport) const char* HdlTestLocateStringPtr = HdlTestLocateString;
@@ -42,7 +42,7 @@ __declspec(dllexport) __declspec(noinline) const char* HdlTestLocateUseString(vo
 }
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 __declspec(dllexport) __declspec(noinline) int HdlTestLocateFn(int a, int b) {
     /* Immediate 0x48444C31 ('HDL1') appears as bytes 31 4C 44 48 in the image. */
@@ -55,7 +55,7 @@ __declspec(dllexport) __declspec(noinline) int HdlTestLocateFn(int a, int b) {
     return s;
 }
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 struct HdlTestLeaf {
@@ -86,17 +86,13 @@ static uint64_t __cdecl HdlTestObjAdd(HdlTestObj* self, uint64_t x) {
 static HdlTestMethod g_locate_vt[1] = {&HdlTestObjAdd};
 
 __declspec(dllexport) HdlTestObj HdlTestLocateObj = {
-    g_locate_vt,
-    42,
-    1.5f,
-    2.5f,
-    &HdlTestLocateLeaf,
+    g_locate_vt, 42, 1.5f, 2.5f, &HdlTestLocateLeaf,
 };
 
 /* ---- Discover fixtures ---- */
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 __declspec(dllexport) __declspec(noinline) void HdlTestDiscoverLeaf(void) {
     volatile int x = 0x44495343; /* 'DISC' */
@@ -107,7 +103,7 @@ __declspec(dllexport) __declspec(noinline) void HdlTestDiscoverAction(void) {
     HdlTestDiscoverLeaf();
 }
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 struct HdlTestDiscoverObj {
@@ -121,19 +117,11 @@ struct HdlTestDiscoverObj {
 static HdlTestMethod g_discover_vt[1] = {&HdlTestObjAdd};
 
 __declspec(dllexport) HdlTestDiscoverObj HdlTestDiscoverObjA = {
-    g_discover_vt,
-    80,
-    100,
-    3.0f,
-    4.0f,
+    g_discover_vt, 80, 100, 3.0f, 4.0f,
 };
 
 __declspec(dllexport) HdlTestDiscoverObj HdlTestDiscoverObjB = {
-    g_discover_vt,
-    50,
-    100,
-    5.0f,
-    6.0f,
+    g_discover_vt, 50, 100, 5.0f, 6.0f,
 };
 
 __declspec(dllexport) void HdlTestDiscoverDamage(int32_t amount) {
@@ -164,7 +152,7 @@ __declspec(dllexport) HdlTestLeaf* HdlTestDiscoverDynLeaf(void) {
     return g_discover_dyn;
 }
 
-}  // extern "C"
+} // extern "C"
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_DESTROY) {
@@ -211,7 +199,7 @@ HANDLE HandleFromArg(const wchar_t* s) {
     return reinterpret_cast<HANDLE>(_wcstoui64(s, nullptr, 0));
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     /* Touch fixtures so the linker keeps them and rip-rel code is emitted. */

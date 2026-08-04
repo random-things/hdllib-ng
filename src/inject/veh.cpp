@@ -68,9 +68,9 @@ HdlStatus VehMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     }
 
     auto add_veh = reinterpret_cast<void*>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAddVectoredExceptionHandler"));
+        GetLoadedModuleProc(L"ntdll.dll", "RtlAddVectoredExceptionHandler"));
     auto remove_veh = reinterpret_cast<RemoveVeh_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlRemoveVectoredExceptionHandler"));
+        GetLoadedModuleProc(L"ntdll.dll", "RtlRemoveVectoredExceptionHandler"));
     auto debug_break = reinterpret_cast<LPTHREAD_START_ROUTINE>(GetKernel32Proc("DebugBreak"));
     if (!add_veh || !debug_break) {
         return HDL_E_NOT_FOUND;

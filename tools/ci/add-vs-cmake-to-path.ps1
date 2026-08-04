@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $vswhere = Join-Path ${env:ProgramFiles(x86)} `
     'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-    throw "vswhere.exe was not found at '$vswhere'. Install Visual Studio 2022 Build Tools."
+    throw "vswhere.exe was not found at '$vswhere'. Install Visual Studio Build Tools."
 }
 
 $installationPath = & $vswhere `
@@ -35,4 +35,3 @@ if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PATH)) {
 
 Write-Host "Using Visual Studio CMake from: $cmakeBin"
 & $cmake --version
-

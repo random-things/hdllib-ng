@@ -6,14 +6,17 @@ Capability reference (opcodes **1…100** from `protocol.hpp`, wire formats, pla
 
 ## Build
 
-Requirements: Visual Studio 2019+ Build Tools (Visual Studio 2022 recommended), MSVC x64, CMake 3.20+, and Ninja or a Visual Studio generator. MinHook v1.3.4 is vendored under `third_party/minhook`. Zydis and Capstone are fetched for the disasm backends.
+Primary requirements: Visual Studio 2026 Build Tools, MSVC x64, CMake 4.4+, and
+Ninja 1.13+. Visual Studio 2022 remains a compatibility target. MinHook v1.3.4
+is vendored under `third_party/minhook`; Zydis and Capstone are fetched for the
+disassembly backends.
 
 ```bat
-cmake --preset x64-windows-vs2022
-cmake --build --preset x64-windows-vs2022 --config Release
+cmake --preset x64-windows-vs2026
+cmake --build --preset x64-windows-vs2026 --config Release
 ```
 
-Artifacts land under `build/x64-windows-vs2022/Release/`:
+Artifacts land under `build/x64-windows-vs2026/Release/`:
 
 - `hdllib.dll` — inject this
 - `hdlclient.exe` — inject + IPC CLI (store/recipes/session)
@@ -21,6 +24,10 @@ Artifacts land under `build/x64-windows-vs2022/Release/`:
 Ninja preset (`x64-windows`) works the same if `ninja` is on `PATH` after `vcvars64`.
 Windows CI, including the required interactive GUI runner, is documented in
 [docs/ci.md](docs/ci.md).
+
+Run the supported local quality gate with `./tools/ci/run-checks.ps1`. Use
+`-Profile PR -Bootstrap` for pull-request parity or `-Profile GUI` from an
+unlocked interactive desktop.
 
 ## Inject and talk
 

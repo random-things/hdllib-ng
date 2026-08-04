@@ -1,0 +1,123 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$FetchContentDir,
+    [Parameter(Mandatory)][string]$ArtifactsDir,
+    [switch]$UpdateBaseline
+)
+
+$ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$buildDir = Join-Path $repoRoot 'build\ci-coverage'
+$artifacts = [IO.Path]::GetFullPath($ArtifactsDir)
+$rawDir = Join-Path $artifacts 'raw'
+$htmlDir = Join-Path $artifacts 'html'
+New-Item -ItemType Directory -Force -Path $artifacts, $rawDir, $htmlDir | Out-Null
+Get-ChildItem -LiteralPath $rawDir -Filter '*.profraw' -File | Remove-Item -Force
+if (Test-Path -LiteralPath $htmlDir) {
+    Remove-Item -LiteralPath $htmlDir -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $htmlDir | Out-Null
+}
+
+function Invoke-Native {
+    param([string]$File, [string[]]$Arguments)
+    Write-Host "> $File $($Arguments -join ' ')"
+    & $File @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "Command failed with exit code ${LASTEXITCODE}: $File" }
+}
+
+foreach ($tool in @('clang-cl', 'ninja', 'llvm-profdata', 'llvm-cov')) {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+        throw "$tool is required for source coverage. Install LLVM $tool or the Visual Studio LLVM tools."
+    }
+}
+
+Invoke-Native cmake @('--fresh', '--preset', 'ci-coverage',
+    "-DFETCHCONTENT_BASE_DIR=$FetchContentDir")
+Invoke-Native cmake @('--build', '--preset', 'ci-coverage', '--parallel')
+$env:LLVM_PROFILE_FILE = Join-Path $rawDir '%m-%p.profraw'
+Invoke-Native ctest @('--preset', 'ci-coverage-headless')
+
+$rawProfiles = @(Get-ChildItem -LiteralPath $rawDir -Filter '*.profraw' -File)
+if ($rawProfiles.Count -eq 0) { throw 'Coverage tests produced no .profraw files.' }
+$profile = Join-Path $artifacts 'coverage.profdata'
+Invoke-Native llvm-profdata (@('merge', '-sparse') + @($rawProfiles.FullName) + @('-o', $profile))
+
+$objects = @(Get-ChildItem -LiteralPath $buildDir -Recurse -File |
+    Where-Object { $_.Name -match '^hdl_.*tests\.exe$' -or $_.Name -eq 'hdllib.dll' } |
+    Select-Object -ExpandProperty FullName -Unique)
+if ($objects.Count -eq 0) { throw 'No instrumented test objects were found.' }
+$primary = $objects[0]
+$additionalObjects = @()
+foreach ($object in @($objects | Select-Object -Skip 1)) {
+    $additionalObjects += @('-object', $object)
+}
+
+$reportPath = Join-Path $artifacts 'coverage.json'
+$exportArgs = @('export', $primary) + $additionalObjects + @("-instr-profile=$profile")
+& llvm-cov @exportArgs | Set-Content -LiteralPath $reportPath -Encoding utf8
+if ($LASTEXITCODE -ne 0) { throw 'llvm-cov export failed.' }
+
+$ignore = '(^|[\\/])(third_party|tests|toys|build)([\\/])|tests[\\/]fuzz'
+Invoke-Native llvm-cov (@('show', $primary) + $additionalObjects +
+    @("-instr-profile=$profile", '-format=html', "-output-dir=$htmlDir",
+        "-ignore-filename-regex=$ignore"))
+
+$allowed = @{}
+foreach ($line in Get-Content -LiteralPath (Join-Path $PSScriptRoot 'coverage-sources.txt')) {
+    $trimmed = $line.Trim().Replace('\', '/')
+    if ($trimmed) { $allowed[$trimmed.ToLowerInvariant()] = $true }
+}
+$coverage = Get-Content -LiteralPath $reportPath -Raw -Encoding utf8 | ConvertFrom-Json
+$lineCount = 0L
+$lineCovered = 0L
+$branchCount = 0L
+$branchCovered = 0L
+$matched = @()
+foreach ($data in @($coverage.data)) {
+    foreach ($file in @($data.files)) {
+        $fullName = [IO.Path]::GetFullPath([string]$file.filename).Replace('\', '/')
+        $rootPrefix = $repoRoot.Replace('\', '/').TrimEnd('/') + '/'
+        if (-not $fullName.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        $relative = $fullName.Substring($rootPrefix.Length).ToLowerInvariant()
+        if (-not $allowed.ContainsKey($relative)) { continue }
+        $matched += $relative
+        $lineCount += [long]$file.summary.lines.count
+        $lineCovered += [long]$file.summary.lines.covered
+        $branchCount += [long]$file.summary.branches.count
+        $branchCovered += [long]$file.summary.branches.covered
+    }
+}
+if ($matched.Count -eq 0) { throw 'LLVM coverage did not contain any gated first-party source.' }
+$linePercent = if ($lineCount) { 100.0 * $lineCovered / $lineCount } else { 100.0 }
+$branchPercent = if ($branchCount) { 100.0 * $branchCovered / $branchCount } else { 100.0 }
+$summary = [ordered]@{
+    linePercent = [Math]::Round($linePercent, 4)
+    branchPercent = [Math]::Round($branchPercent, 4)
+    lineCovered = $lineCovered
+    lineCount = $lineCount
+    branchCovered = $branchCovered
+    branchCount = $branchCount
+    sources = @($matched | Sort-Object -Unique)
+}
+$summary | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $artifacts 'summary.json') -Encoding utf8
+
+$baselinePath = Join-Path $PSScriptRoot 'coverage-baseline.json'
+if ($UpdateBaseline) {
+    [ordered]@{
+        linePercent = $summary.linePercent
+        branchPercent = $summary.branchPercent
+        tolerancePercentagePoints = 0.1
+        note = 'Generated by run-checks.ps1 -Check Coverage -UpdateCoverageBaseline.'
+    } | ConvertTo-Json | Set-Content -LiteralPath $baselinePath -Encoding utf8
+    Write-Host "Updated coverage baseline: line $($summary.linePercent)%, branch $($summary.branchPercent)%"
+    return
+}
+
+$baseline = Get-Content -LiteralPath $baselinePath -Raw -Encoding utf8 | ConvertFrom-Json
+$tolerance = [double]$baseline.tolerancePercentagePoints
+Write-Host ("Coverage: line {0:N2}% (baseline {1:N2}%), branch {2:N2}% (baseline {3:N2}%)" -f `
+        $linePercent, [double]$baseline.linePercent, $branchPercent, [double]$baseline.branchPercent)
+if ($linePercent + $tolerance -lt [double]$baseline.linePercent -or
+    $branchPercent + $tolerance -lt [double]$baseline.branchPercent) {
+    throw "Coverage dropped more than $tolerance percentage points below baseline."
+}

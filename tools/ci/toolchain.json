@@ -1,0 +1,13 @@
+{
+  "actionlintVersion": "v1.7.12",
+  "windows": {
+    "primaryRunner": "windows-2025-vs2026",
+    "compatibilityRunner": "windows-2022",
+    "primaryVisualStudioMajor": 18,
+    "compatibilityVisualStudioMajor": 17,
+    "primaryCmakeMinimum": "4.4.0",
+    "primaryCmakeValidated": "4.4.1",
+    "primaryNinjaMinimum": "1.13.2",
+    "llvmMinimum": "20.1.8"
+  }
+}

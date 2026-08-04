@@ -20,13 +20,6 @@
       }
     },
     {
-      "name": "x64-windows-vs",
-      "displayName": "x64 Windows VS 2019",
-      "generator": "Visual Studio 16 2019",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/${presetName}"
-    },
-    {
       "name": "x64-windows-vs2022",
       "displayName": "x64 Windows VS 2022",
       "generator": "Visual Studio 17 2022",
@@ -34,12 +27,23 @@
       "binaryDir": "${sourceDir}/build/${presetName}"
     },
     {
+      "name": "x64-windows-vs2026",
+      "displayName": "x64 Windows VS 2026",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
       "name": "ci-base",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
+      "generator": "Ninja",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
         "HDL_BUILD_TESTS": "ON",
         "HDL_BUILD_TOOLS": "ON",
         "HDL_BUILD_TOYS": "ON",
@@ -63,6 +67,18 @@
       "displayName": "CI AddressSanitizer",
       "inherits": "ci-base",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "ci-asan-gui",
+      "displayName": "CI GUI AddressSanitizer lifecycle",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "HDL_BUILD_TOOLS": "OFF",
         "HDL_BUILD_TOYS": "OFF",
         "HDL_ENABLE_ASAN": "ON"
@@ -106,6 +122,18 @@
       }
     },
     {
+      "name": "ci-vs2022-compat",
+      "displayName": "CI VS 2022 compatibility",
+      "inherits": "ci-base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": null,
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF"
+      }
+    },
+    {
       "name": "ci-clang-tidy",
       "displayName": "CI clang-tidy",
       "generator": "Ninja",
@@ -116,11 +144,60 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "HDL_BUILD_TESTS": "OFF",
         "HDL_BUILD_TOOLS": "OFF",
         "HDL_BUILD_TOYS": "OFF",
         "HDL_ENABLE_CLANG_TIDY": "ON",
+        "HDL_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "ci-offline",
+      "displayName": "CI fully disconnected rebuild",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON"
+      }
+    },
+    {
+      "name": "ci-fuzz",
+      "displayName": "CI clang-cl libFuzzer harnesses",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "HDL_BUILD_FUZZERS": "ON",
+        "HDL_BUILD_TESTS": "OFF",
+        "HDL_BUILD_TOOLS": "OFF",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "ci-coverage",
+      "displayName": "CI clang-cl source coverage",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "HDL_BUILD_TOYS": "OFF",
+        "HDL_ENABLE_COVERAGE": "ON",
         "HDL_WARNINGS_AS_ERRORS": "OFF"
       }
     }
@@ -131,13 +208,13 @@
       "configurePreset": "x64-windows"
     },
     {
-      "name": "x64-windows-vs",
-      "configurePreset": "x64-windows-vs",
+      "name": "x64-windows-vs2022",
+      "configurePreset": "x64-windows-vs2022",
       "configuration": "Release"
     },
     {
-      "name": "x64-windows-vs2022",
-      "configurePreset": "x64-windows-vs2022",
+      "name": "x64-windows-vs2026",
+      "configurePreset": "x64-windows-vs2026",
       "configuration": "Release"
     },
     {
@@ -153,6 +230,11 @@
     {
       "name": "ci-asan",
       "configurePreset": "ci-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ci-asan-gui",
+      "configurePreset": "ci-asan-gui",
       "configuration": "RelWithDebInfo"
     },
     {
@@ -176,8 +258,26 @@
       "configuration": "Release"
     },
     {
+      "name": "ci-vs2022-compat",
+      "configurePreset": "ci-vs2022-compat",
+      "configuration": "Release"
+    },
+    {
       "name": "ci-clang-tidy",
       "configurePreset": "ci-clang-tidy"
+    },
+    {
+      "name": "ci-offline",
+      "configurePreset": "ci-offline",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-fuzz",
+      "configurePreset": "ci-fuzz"
+    },
+    {
+      "name": "ci-coverage",
+      "configurePreset": "ci-coverage"
     }
   ],
   "testPresets": [
@@ -242,6 +342,9 @@
       "filter": {
         "include": {
           "label": "^headless$"
+        },
+        "exclude": {
+          "name": "^hdl_api_headless_tests$"
         }
       },
       "output": {
@@ -249,6 +352,23 @@
       },
       "execution": {
         "jobs": 2,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-asan-gui-lifecycle",
+      "configurePreset": "ci-asan-gui",
+      "configuration": "RelWithDebInfo",
+      "filter": {
+        "include": {
+          "name": "^(hdl_api_asan_tests|hdl_lifecycle_tests)$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
         "noTestsAction": "error"
       }
     },
@@ -276,6 +396,56 @@
       },
       "output": {
         "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-offline-headless",
+      "configurePreset": "ci-offline",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 2,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-vs2022-compat-headless",
+      "configurePreset": "ci-vs2022-compat",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 2,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-coverage-headless",
+      "configurePreset": "ci-coverage",
+      "filter": {
+        "include": {
+          "label": "^headless$"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
       }
     }
   ]

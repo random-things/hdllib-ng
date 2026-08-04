@@ -73,10 +73,11 @@ struct TpDriverStub {
 } // namespace
 
 HdlStatus ThreadPoolMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    auto tp_alloc = reinterpret_cast<TpAllocWork_t>(GetProcAddress(ntdll, "TpAllocWork"));
-    auto tp_post = reinterpret_cast<TpPostWork_t>(GetProcAddress(ntdll, "TpPostWork"));
-    auto tp_release = reinterpret_cast<TpReleaseWork_t>(GetProcAddress(ntdll, "TpReleaseWork"));
+    auto tp_alloc =
+        reinterpret_cast<TpAllocWork_t>(GetLoadedModuleProc(L"ntdll.dll", "TpAllocWork"));
+    auto tp_post = reinterpret_cast<TpPostWork_t>(GetLoadedModuleProc(L"ntdll.dll", "TpPostWork"));
+    auto tp_release =
+        reinterpret_cast<TpReleaseWork_t>(GetLoadedModuleProc(L"ntdll.dll", "TpReleaseWork"));
     if (!tp_alloc || !tp_post || !tp_release) {
         return HDL_E_NOT_FOUND;
     }

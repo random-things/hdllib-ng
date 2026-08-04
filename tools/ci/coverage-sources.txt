@@ -1,0 +1,12 @@
+src/json/json.cpp
+src/protocol.hpp
+src/ipc/framing.cpp
+src/ipc/wire.hpp
+src/ipc/ops_manifest.inc
+src/inject/pe_image_view.cpp
+src/inject/pe_relocs.cpp
+src/inject/select.cpp
+src/memory_aob.cpp
+src/memory_search.cpp
+tools/client/store.cpp
+tools/client/invocation.cpp

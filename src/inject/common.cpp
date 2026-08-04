@@ -88,9 +88,16 @@ HANDLE OpenTargetProcess(DWORD pid, DWORD extra) {
     return OpenProcess(access, FALSE, pid);
 }
 
+FARPROC GetLoadedModuleProc(const wchar_t* module_name, const char* proc_name) {
+    if (!module_name || !proc_name) {
+        return nullptr;
+    }
+    HMODULE module = GetModuleHandleW(module_name);
+    return module ? GetProcAddress(module, proc_name) : nullptr;
+}
+
 FARPROC GetKernel32Proc(const char* name) {
-    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
-    return k32 ? GetProcAddress(k32, name) : nullptr;
+    return GetLoadedModuleProc(L"kernel32.dll", name);
 }
 
 std::vector<DWORD> EnumProcessThreads(DWORD pid) {
@@ -311,8 +318,8 @@ HdlStatus FindWindowByTitleClass(DWORD pid, const wchar_t* title_substr_or_null,
 }
 
 NtQueueApcThread_t GetNtQueueApcThread() {
-    static NtQueueApcThread_t fn = reinterpret_cast<NtQueueApcThread_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueueApcThread"));
+    static NtQueueApcThread_t fn =
+        reinterpret_cast<NtQueueApcThread_t>(GetLoadedModuleProc(L"ntdll.dll", "NtQueueApcThread"));
     return fn;
 }
 
@@ -331,7 +338,7 @@ HdlStatus AtomWriteW(HANDLE thread, ATOM atom, void* remote_dest, ULONG cch) {
 
 HdlStatus ApcMemsetWrite(HANDLE thread, void* remote_dest, const void* data, size_t size) {
     auto nt_q = GetNtQueueApcThread();
-    auto memset_fn = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "memset");
+    auto memset_fn = GetLoadedModuleProc(L"ntdll.dll", "memset");
     if (!nt_q || !memset_fn) {
         return HDL_E_NOT_FOUND;
     }
@@ -390,7 +397,7 @@ void RegisterCfgCallTarget(HANDLE process, void* stub) {
         BOOL(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, CfgCallTargetInfo*);
 
     auto set_cfg = reinterpret_cast<SetProcessValidCallTargets_t>(
-        GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "SetProcessValidCallTargets"));
+        GetLoadedModuleProc(L"kernelbase.dll", "SetProcessValidCallTargets"));
     if (!set_cfg) {
         set_cfg = reinterpret_cast<SetProcessValidCallTargets_t>(
             GetKernel32Proc("SetProcessValidCallTargets"));

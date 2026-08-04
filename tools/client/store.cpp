@@ -75,7 +75,10 @@ bool InterestStore::Load(const wchar_t* file_path) {
     }
     std::ostringstream ss;
     ss << fin.rdbuf();
-    const std::string json = ss.str();
+    return LoadJson(ss.str());
+}
+
+bool InterestStore::LoadJson(const std::string& json) {
     interests.clear();
     ExtractString(json, "module", &module);
     uint64_t ver = 1;

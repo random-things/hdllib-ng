@@ -16,35 +16,34 @@ permissions:
 jobs:
   analyze:
     name: C++ security analysis
-    runs-on: windows-2022
-    timeout-minutes: 60
-
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      HDL_EXPECTED_VS_MAJOR: 18
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.37.4
+      - uses: actions/cache@v6
         with:
-          languages: c-cpp
-          config-file: ./.github/codeql/codeql-config.yml
-          # v4.37.3 embeds codeql-bundle-v2.26.1. The local runner validates
-          # this against .github/codeql/toolchain.json before every analysis.
-          # Force the same suite as tools/ci/run-codeql.ps1. Without `+`, this
-          # overrides config `queries` — keep it identical to codeql-config.yml.
-          queries: ./.github/codeql/hdllib-security-extended.qls
-
-      - name: Configure
+          path: |
+            ${{ runner.temp }}\hdllib-tooling-cache\codeql
+            ${{ runner.temp }}\hdllib-tooling-cache\fetchcontent
+          key: codeql-${{ runner.os }}-${{ hashFiles('.github/codeql/toolchain.json', 'CMakeLists.txt') }}
+      - name: Run pinned local CodeQL analysis
         run: >-
-          cmake --preset ci-codeql
-          "-DFETCHCONTENT_BASE_DIR=$env:RUNNER_TEMP\hdllib-fetchcontent"
-
-      - name: Build
-        run: cmake --build --preset ci-codeql --parallel
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v4.37.4
+          ./tools/ci/run-checks.ps1 -Check CodeQL -Bootstrap
+          -ArtifactsDir "$env:RUNNER_TEMP\hdllib-codeql-artifacts"
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4.37.3
         with:
+          sarif_file: ${{ runner.temp }}\hdllib-codeql-artifacts\codeql\codeql-results.sarif
           category: /language:c-cpp
           wait-for-processing: true
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hdllib-codeql-results
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/hdllib-codeql-artifacts

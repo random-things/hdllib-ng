@@ -35,6 +35,8 @@ Build with `HDL_BUILD_TESTS=ON` (default), then from the output directory:
 ```bat
 hdl_tests.exe
 hdl_tests.exe --api-only
+hdl_tests.exe --api-headless-only
+hdl_tests.exe --api-asan-only
 hdl_tests.exe --inject-only
 hdl_tests.exe --locate-only
 hdl_client_tests.exe
@@ -45,15 +47,18 @@ ctest -C Release -R hdl_ --output-on-failure
 `--locate-only` runs locate + discover inject fixtures (skips the inject matrix).
 `hdl_client_tests` requires `hdlclient.exe`, `hdllib.dll`, and `hdl_test_target.exe` beside the test binary (POST_BUILD copies them).
 
-CTest exposes `headless`, `gui`, and `full` labels. Only `hdl_select_tests` and
-`hdl_store_tests` are classified as headless. All local API, injection, locate,
-IPC/client, and toy coverage requires an interactive Windows desktop. Use the
-presets rather than guessing which executables are safe for a service session:
+`--api-headless-only` runs the local API suite without its UI-thread call case.
+`--api-asan-only` retains UI-thread/API coverage but skips the whole-process-region
+code-cave scan, whose intentional reads of ASan redzones are incompatible with
+the sanitizer runtime.
+CTest exposes `headless`, `gui`, and `full` labels. Deterministic unit/parser,
+headless API, and no-window client IPC coverage is headless. UI-thread calls,
+injection, locate, lifecycle, and toy coverage require an interactive Windows
+desktop. Reproduce supported check partitions through the wrapper:
 
 ```bat
-ctest --preset ci-headless
-ctest --preset ci-gui-smoke
-ctest --preset ci-gui-full
+powershell -NoProfile -File tools/ci/run-checks.ps1 -Check ReleaseHeadless
+powershell -NoProfile -File tools/ci/run-checks.ps1 -Profile GUI
 ```
 
 The GUI presets deliberately use one worker and a shared CTest resource lock.

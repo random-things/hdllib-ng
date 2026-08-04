@@ -22,7 +22,7 @@ using RtlCreateUserThread_t = NTSTATUS(NTAPI*)(HANDLE ProcessHandle,
 
 HdlStatus RtlCreateUserThreadMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
     auto rtl_create = reinterpret_cast<RtlCreateUserThread_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlCreateUserThread"));
+        GetLoadedModuleProc(L"ntdll.dll", "RtlCreateUserThread"));
     if (!rtl_create) {
         return HDL_E_NOT_FOUND;
     }

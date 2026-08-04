@@ -272,7 +272,8 @@ DWORD WINAPI UiThreadProc(LPVOID param) {
 
 } // namespace
 
-void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
+void RunLocalApiTests(Counters& c, const wchar_t* dll_path, bool include_ui_thread_test,
+                      bool include_process_region_scan_test) {
     std::printf("\n== Local API / lifecycle ==\n");
 
     // Linking hdllib loads DllMain bootstrap asynchronously â€” wait or init explicitly.
@@ -309,14 +310,16 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
     uint32_t count = 0;
     st = hdl::EnumRegions(nullptr, &count);
     Report(c, st == HDL_E_BUFFER_SMALL && count > 0, false, "HdlEnumRegions size query", "");
-    std::vector<HdlRegionInfo> regions(count);
+    std::vector<HdlRegionInfo> regions(count + 64);
+    count = static_cast<uint32_t>(regions.size());
     st = hdl::EnumRegions(regions.data(), &count);
     Report(c, st == HDL_OK && count > 0, false, "HdlEnumRegions fill", "");
 
     count = 0;
     st = hdl::EnumModules(nullptr, &count);
     Report(c, st == HDL_E_BUFFER_SMALL && count > 0, false, "HdlEnumModules size query", "");
-    std::vector<HdlModuleInfo> modules(count);
+    std::vector<HdlModuleInfo> modules(count + 8);
+    count = static_cast<uint32_t>(modules.size());
     st = hdl::EnumModules(modules.data(), &count);
     Report(c, st == HDL_OK && count > 0, false, "HdlEnumModules fill", "");
 
@@ -726,7 +729,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             }
         }
 
-        {
+        if (include_process_region_scan_test) {
             alignas(16) uint8_t pad[256];
             memset(pad, 0xCC, sizeof(pad));
             HdlCaveQuery q{};
@@ -1090,7 +1093,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
             }
         }
 
-        {
+        if (include_ui_thread_test) {
             UiThreadCtx ui{};
             ui.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
             ui.done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -1129,7 +1132,7 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         Report(c, st == HDL_OK && modbase != 0, false, "HdlModuleBase", "");
 
         /* Local locate API smoke (fixtures live in hdl_test_target; exercised via inject below). */
-        {
+        if (include_process_region_scan_test) {
             const char* local_str = "HDL_LOCAL_LOCATE_STR";
             uint64_t xrefs[8]{};
             uint32_t xc = 8;
@@ -1155,7 +1158,9 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path) {
         Report(c, st == HDL_OK, false, "HdlPollEvents", "");
     }
 
-    RunLocalDiscoverTests(c);
+    if (include_process_region_scan_test) {
+        RunLocalDiscoverTests(c);
+    }
 
     // IPC
     st = hdl::StartIpc();

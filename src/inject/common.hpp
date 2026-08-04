@@ -4,8 +4,8 @@
 #include "log.hpp"
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 #include <TlHelp32.h>
+#include <Windows.h>
 
 #include <string>
 #include <vector>
@@ -40,6 +40,7 @@ bool PathEndsWithFile(const wchar_t* full, const wchar_t* file);
 
 uint64_t FindModuleBaseByPath(DWORD pid, const wchar_t* dll_path);
 HANDLE OpenTargetProcess(DWORD pid, DWORD extra = 0);
+FARPROC GetLoadedModuleProc(const wchar_t* module_name, const char* proc_name);
 FARPROC GetKernel32Proc(const char* name);
 std::vector<DWORD> EnumProcessThreads(DWORD pid);
 
@@ -47,8 +48,8 @@ HdlStatus WriteRemotePath(HANDLE process, const wchar_t* dll_path, RemoteAlloc& 
 HdlStatus WaitThreadAndBase(HANDLE thread, DWORD pid, const wchar_t* dll_path, uint64_t* out_base);
 
 // Poll until the DLL appears in the module list (or timeout).
-HdlStatus PollForModule(DWORD pid, const wchar_t* dll_path, uint64_t* out_base,
-                        int attempts = 50, DWORD sleep_ms = 100);
+HdlStatus PollForModule(DWORD pid, const wchar_t* dll_path, uint64_t* out_base, int attempts = 50,
+                        DWORD sleep_ms = 100);
 
 // Poll until the DLL disappears from the module list (or timeout).
 HdlStatus PollForModuleGone(DWORD pid, const wchar_t* dll_path, int attempts = 50,
@@ -73,14 +74,16 @@ using NtQueueApcThread_t = NTSTATUS(NTAPI*)(HANDLE ThreadHandle, PVOID ApcRoutin
 
 NtQueueApcThread_t GetNtQueueApcThread();
 
-// Queue GlobalGetAtomNameW APC to write a global atom's contents to remote dest (cch includes room for NUL).
+// Queue GlobalGetAtomNameW APC to write a global atom's contents to remote dest (cch includes room
+// for NUL).
 HdlStatus AtomWriteW(HANDLE thread, ATOM atom, void* remote_dest, ULONG cch);
 
 // Write arbitrary bytes using NtQueueApcThread(memset, dst, byte, 1) — no WriteProcessMemory.
 HdlStatus ApcMemsetWrite(HANDLE thread, void* remote_dest, const void* data, size_t size);
 
 // Open a thread suitable for APC queueing; prefers suspended-capable workers.
-HANDLE OpenApcThread(DWORD pid, DWORD desired_access = THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION);
+HANDLE OpenApcThread(DWORD pid,
+                     DWORD desired_access = THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION);
 
 // x64: LoadLibraryW(path); ret
 #pragma pack(push, 1)
@@ -103,5 +106,5 @@ HdlStatus AllocLoadLibraryStub(HANDLE process, const wchar_t* dll_path, RemoteAl
 // Mark a remote executable address as a valid CFG call target (best-effort).
 void RegisterCfgCallTarget(HANDLE process, void* stub);
 
-}  // namespace inject
-}  // namespace hdl
+} // namespace inject
+} // namespace hdl

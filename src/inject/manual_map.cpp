@@ -39,6 +39,9 @@ HMODULE FindRemoteModule(HANDLE process, const wchar_t* name) {
 }
 
 HMODULE LoadRemoteModule(HANDLE process, const char* mod_name) {
+    if (!mod_name || !mod_name[0]) {
+        return nullptr;
+    }
     wchar_t wname[MAX_PATH]{};
     if (MultiByteToWideChar(CP_ACP, 0, mod_name, -1, wname, MAX_PATH) <= 0) {
         return nullptr;
@@ -374,7 +377,7 @@ bool ApplyRelocationsRemote(uint8_t* remote_base, HANDLE process, const PeImageV
             }
             return true;
         }
-        if (type == IMAGE_REL_BASED_ABSOLUTE || type == 0) {
+        if (type == IMAGE_REL_BASED_ABSOLUTE) {
             return true;
         }
         HDL_LOG_ERROR("Manual map: unsupported reloc type %u", type);

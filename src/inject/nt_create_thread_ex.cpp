@@ -15,8 +15,8 @@ using NtCreateThreadEx_t = NTSTATUS(NTAPI*)(PHANDLE ThreadHandle, ACCESS_MASK De
 } // namespace
 
 HdlStatus NtCreateThreadExMethod(uint32_t pid, const wchar_t* dll_path, uint64_t* out_base) {
-    auto nt_create = reinterpret_cast<NtCreateThreadEx_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCreateThreadEx"));
+    auto nt_create =
+        reinterpret_cast<NtCreateThreadEx_t>(GetLoadedModuleProc(L"ntdll.dll", "NtCreateThreadEx"));
     if (!nt_create) {
         return HDL_E_NOT_FOUND;
     }

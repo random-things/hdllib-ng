@@ -6,7 +6,8 @@
 
 #include <cstdint>
 
-void RunLocalApiTests(hdltest::Counters& c, const wchar_t* dll_path);
+void RunLocalApiTests(hdltest::Counters& c, const wchar_t* dll_path, bool include_ui_thread_test,
+                      bool include_process_region_scan_test);
 void RunLocateTargetTests(hdltest::Counters& c, const wchar_t* target_path,
                           const wchar_t* dll_path);
 void RunDiscoverTargetTests(hdltest::Counters& c, const wchar_t* target_path,

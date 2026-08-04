@@ -60,8 +60,8 @@ HdlStatus QueueAtomPathWrites(HANDLE thread, void* remote_path, const std::vecto
 }
 
 void NudgeAlertable(HANDLE thread) {
-    auto nt_alert = reinterpret_cast<NtAlertThread_t>(
-        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtAlertThread"));
+    auto nt_alert =
+        reinterpret_cast<NtAlertThread_t>(GetLoadedModuleProc(L"ntdll.dll", "NtAlertThread"));
     if (nt_alert) {
         nt_alert(thread);
     }
