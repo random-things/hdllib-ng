@@ -34,7 +34,8 @@ endif()
 if(HDL_BUILD_FUZZERS)
   add_compile_definitions(
     _DISABLE_STRING_ANNOTATION
-    _DISABLE_VECTOR_ANNOTATION)
+    _DISABLE_VECTOR_ANNOTATION
+    _DISABLE_OPTIONAL_ANNOTATION)
   execute_process(
     COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
     RESULT_VARIABLE _HDL_CLANG_RESOURCE_RESULT
@@ -53,6 +54,9 @@ if(HDL_ENABLE_CLANG_TIDY)
 endif()
 
 function(hdl_configure_target target_name)
+  set(_HDL_TARGET_OPTIONS HOST_TOOL)
+  cmake_parse_arguments(HDL_TARGET "${_HDL_TARGET_OPTIONS}" "" "" ${ARGN})
+
   target_compile_options(${target_name} PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:/W4>"
     "$<$<COMPILE_LANGUAGE:CXX>:/W4;/EHsc;/permissive->")
@@ -62,7 +66,9 @@ function(hdl_configure_target target_name)
       "$<$<COMPILE_LANGUAGE:C,CXX>:/WX>")
   endif()
 
-  if(HDL_ENABLE_ASAN)
+  # Build-time host tools link against uninstrumented dependency libraries, so
+  # keep sanitizer and coverage instrumentation off those executables.
+  if(HDL_ENABLE_ASAN AND NOT HDL_TARGET_HOST_TOOL)
     if(NOT MSVC)
       message(FATAL_ERROR "HDL_ENABLE_ASAN currently requires the Microsoft C++ compiler")
     endif()
@@ -95,12 +101,12 @@ function(hdl_configure_target target_name)
       "${HDL_CLANG_TIDY_EXECUTABLE};--quiet")
   endif()
 
-  if(HDL_BUILD_FUZZERS)
+  if(HDL_BUILD_FUZZERS AND NOT HDL_TARGET_HOST_TOOL)
     target_compile_options(${target_name} PRIVATE
       "$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=fuzzer-no-link,address>")
   endif()
 
-  if(HDL_ENABLE_COVERAGE)
+  if(HDL_ENABLE_COVERAGE AND NOT HDL_TARGET_HOST_TOOL)
     target_compile_options(${target_name} PRIVATE
       "$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-instr-generate;-fcoverage-mapping>")
     get_target_property(hdl_target_type ${target_name} TYPE)
@@ -112,6 +118,8 @@ function(hdl_configure_target target_name)
         /INCREMENTAL:NO)
     endif()
   endif()
+
+  unset(_HDL_TARGET_OPTIONS)
 endfunction()
 
 function(hdl_configure_fuzzer target_name)
@@ -220,13 +228,16 @@ FetchContent_Declare(absl
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+set(ABSL_MSVC_STATIC_RUNTIME ${HDL_BUILD_FUZZERS} CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(absl)
 
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
 set(protobuf_BUILD_LIBPROTOC ON CACHE BOOL "" FORCE)
-set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+# The fuzz preset intentionally uses the static MSVC CRT. Generated messages,
+# Protobuf itself, and every final fuzz executable must agree on that choice.
+set(protobuf_MSVC_STATIC_RUNTIME ${HDL_BUILD_FUZZERS} CACHE BOOL "" FORCE)
 set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
 set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
 set(utf8_range_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
@@ -285,7 +296,7 @@ set(HDL_RPC_BINDING_OUTPUTS
 
 add_executable(hdl_rpc_codegen tools/rpc_codegen/main.cpp)
 target_link_libraries(hdl_rpc_codegen PRIVATE protobuf::libprotoc protobuf::libprotobuf)
-hdl_configure_target(hdl_rpc_codegen)
+hdl_configure_target(hdl_rpc_codegen HOST_TOOL)
 
 add_custom_command(
   OUTPUT ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS}
