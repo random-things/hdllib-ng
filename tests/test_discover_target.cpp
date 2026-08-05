@@ -43,9 +43,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     }
 
     auto resolve_export = [&](const char* name, uint64_t* out) -> bool {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpResolveExport));
+        SetMethod(req, hdl::rpc::Method::ResolveExport);
         AppendWString(req, L"");
         AppendString(req, name);
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
@@ -62,9 +62,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     };
 
     auto call_export = [&](const char* name, const HdlCallArg* args, uint32_t argc) -> bool {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpCallExport));
+        SetMethod(req, hdl::rpc::Method::CallExport);
         AppendWString(req, L"");
         AppendString(req, name);
         AppendPod(req, argc);
@@ -100,9 +100,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
            "discover truth DynRoot", "");
 
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpEnumFunctions));
+        SetMethod(req, hdl::rpc::Method::EnumFunctions);
         AppendPod(req, 0ull);
         AppendPod(req, 0ull);
         AppendPod(req, HDL_SEARCH_MODULE);
@@ -132,9 +132,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     /* Create discover session */
     uint64_t disc_id = 0;
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
+        SetMethod(req, hdl::rpc::Method::DiscoverCreate);
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
             Report(c, false, false, "discover create ipc", "");
             return;
@@ -150,7 +150,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
     /* Constraint scan for discover objs */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
         HdlFieldPred preds[2]{};
         preds[0].offset = 8;
@@ -160,7 +160,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
         preds[1].offset = 8;
         preds[1].kind = HDL_PRED_LE_I32;
         preds[1].a = 4;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverConstraintScan));
+        SetMethod(req, hdl::rpc::Method::DiscoverConstraintScan);
         AppendPod(req, disc_id);
         AppendPod(req, static_cast<uint32_t>(24)); /* sizeof approx */
         AppendPod(req, static_cast<uint32_t>(2));
@@ -180,9 +180,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
     /* Get candidates â€” expect ObjA/ObjB */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetCandidates));
+        SetMethod(req, hdl::rpc::Method::DiscoverGetCandidates);
         AppendPod(req, disc_id);
         AppendPod(req, static_cast<uint32_t>(128));
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
@@ -213,9 +213,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
     /* Synthesize pattern for Leaf */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverAddCandidate));
+        SetMethod(req, hdl::rpc::Method::DiscoverAddCandidate);
         AppendPod(req, disc_id);
         AppendPod(req, static_cast<uint32_t>(HDL_CAND_FUNCTION));
         AppendPod(req, truth_leaf);
@@ -232,7 +232,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverSynthesizePattern));
+        SetMethod(req, hdl::rpc::Method::DiscoverSynthesizePattern);
         AppendPod(req, disc_id);
         AppendPod(req, cand_id);
         AppendPod(req, static_cast<uint32_t>(0));
@@ -253,9 +253,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
     /* Action + watch + rank */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverWatch));
+        SetMethod(req, hdl::rpc::Method::DiscoverWatch);
         AppendPod(req, disc_id);
         AppendPod(req, truth_leaf);
         AppendPod(req, static_cast<uint32_t>(0));
@@ -269,7 +269,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverWatchRegion));
+        SetMethod(req, hdl::rpc::Method::DiscoverWatchRegion);
         AppendPod(req, disc_id);
         AppendPod(req, truth_obj_a);
         AppendPod(req, static_cast<uint32_t>(24));
@@ -279,7 +279,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverActionBegin));
+        SetMethod(req, hdl::rpc::Method::DiscoverActionBegin);
         AppendPod(req, disc_id);
         AppendString(req, "fire");
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
@@ -302,7 +302,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverActionEnd));
+        SetMethod(req, hdl::rpc::Method::DiscoverActionEnd);
         AppendPod(req, disc_id);
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
             Report(c, false, false, "discover action end ipc", "");
@@ -314,7 +314,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverRankFunctions));
+        SetMethod(req, hdl::rpc::Method::DiscoverRankFunctions);
         AppendPod(req, disc_id);
         AppendString(req, "fire");
         AppendPod(req, static_cast<uint32_t>(0));
@@ -343,7 +343,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetHeat));
+        SetMethod(req, hdl::rpc::Method::DiscoverGetHeat);
         AppendPod(req, disc_id);
         AppendPod(req, truth_obj_a);
         AppendPod(req, static_cast<uint32_t>(16));
@@ -374,10 +374,10 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
         /* Ensure dyn leaf allocated */
         call_export("HdlTestDiscoverAllocDyn", nullptr, 0);
 
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
         /* Resolve current dyn leaf via follow DynRoot */
-        AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+        SetMethod(req, hdl::rpc::Method::FollowPointers);
         AppendPod(req, truth_dyn_root);
         AppendPod(req, static_cast<uint32_t>(1));
         AppendPod(req, static_cast<int64_t>(0));
@@ -391,7 +391,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverPathConsensus));
+        SetMethod(req, hdl::rpc::Method::DiscoverPathConsensus);
         AppendPod(req, dyn1);
         AppendPod(req, static_cast<uint32_t>(2));
         AppendPod(req, static_cast<uint32_t>(0x100));
@@ -423,7 +423,7 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
         call_export("HdlTestDiscoverAllocDyn", nullptr, 0);
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+        SetMethod(req, hdl::rpc::Method::FollowPointers);
         AppendPod(req, truth_dyn_root);
         AppendPod(req, static_cast<uint32_t>(1));
         AppendPod(req, static_cast<int64_t>(0));
@@ -437,11 +437,11 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
 
         req.clear();
         resp.clear();
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverPathValidate));
+        SetMethod(req, hdl::rpc::Method::DiscoverPathValidate);
         AppendPod(req, dyn2);
         AppendPod(req, static_cast<uint32_t>(paths.size()));
         for (const auto& p : paths) {
-            hdl::proto::AppendHdlPointerPath(req, p);
+            hdl::proto::AppendHdlPointerPath(req.payload, p);
         }
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
             Report(c, false, false, "discover pathvalidate ipc", "");
@@ -470,9 +470,9 @@ void RunDiscoverTargetTests(Counters& c, const wchar_t* target_path, const wchar
     }
 
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
+        SetMethod(req, hdl::rpc::Method::DiscoverClose);
         AppendPod(req, disc_id);
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
             Report(c, false, false, "discover close ipc", "");

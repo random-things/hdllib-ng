@@ -16,11 +16,17 @@ foreach ($block in $fetchBlocks) {
     $name = $block.Groups['name'].Value
     $body = $block.Groups['body'].Value
     $tag = [regex]::Match($body, 'GIT_TAG\s+(?<tag>[^\s\)]+)')
-    if (-not $tag.Success -or $tag.Groups['tag'].Value -notmatch '^[0-9a-fA-F]{40}$') {
-        throw "FetchContent dependency '$name' is not pinned to a full commit hash."
-    }
-    if ($body -match 'GIT_SHALLOW\s+TRUE') {
-        throw "FetchContent dependency '$name' uses shallow fetching, which is not reproducible by commit."
+    $url = [regex]::Match($body, 'URL\s+(?<url>https://[^\s\)]+)')
+    $urlHash = [regex]::Match($body, 'URL_HASH\s+SHA256=(?<hash>[0-9a-fA-F]{64})')
+    if ($tag.Success) {
+        if ($tag.Groups['tag'].Value -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "FetchContent dependency '$name' is not pinned to a full commit hash."
+        }
+        if ($body -match 'GIT_SHALLOW\s+TRUE') {
+            throw "FetchContent dependency '$name' uses shallow fetching, which is not reproducible by commit."
+        }
+    } elseif (-not $url.Success -or -not $urlHash.Success) {
+        throw "FetchContent dependency '$name' must use a full commit or a SHA-256-pinned HTTPS archive."
     }
 }
 

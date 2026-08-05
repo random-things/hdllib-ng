@@ -31,12 +31,9 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> log-file [path]   (omit path to clear file sink)
   hdlclient <pid> fingerprint [--stream] [--modules-only] [--no-imports]
   hdlclient <pid> events [--timeout MS] [--max N]
-  hdlclient <pid> job create [--timeout MS]
-  hdlclient <pid> job cancel <id>
-  hdlclient <pid> job close <id>
   hdlclient <pid> resolve [--module NAME] <export>
-  hdlclient <pid> call [--module NAME] [--timeout MS] [--job ID] <export> [ARGS...]
-  hdlclient <pid> call --addr HEX [--main] [--timeout MS] [--job ID] [ARGS...]
+  hdlclient <pid> call [--module NAME] [--timeout MS] <export> [ARGS...]
+  hdlclient <pid> call --addr HEX [--main] [--timeout MS] [ARGS...]
   hdlclient <pid> vcall HEX_OBJ INDEX [--main] [--timeout MS] [--no-this] [ARGS...]
   hdlclient <pid> alloc SIZE [--protect RW|RWX]
   hdlclient <pid> alloc-near HEX_NEAR SIZE [--dist HEX]
@@ -74,10 +71,11 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> read <hex-address> <size>
   hdlclient <pid> write <hex-address> <hex-bytes|@file>
   hdlclient <pid> scan --pattern "48 8B ?? ??" [--start HEX] [--size HEX] [--max N]
-                       [--job ID] [--timeout MS]
+                       [--timeout MS] [--candidates FILE]
   hdlclient <pid> scan --type TYPE --value VAL [--start HEX] [--size HEX] [--max N]
                        [--cmp exact|unknown|greater|less] [--unaligned] [--session ID]
-                       [--job ID] [--timeout MS] [--image] [--executable] [--module NAME]
+                       [--timeout MS] [--candidates FILE]
+                       [--image] [--executable] [--module NAME]
 )");
     wprintf(LR"(  hdlclient <pid> resolve-pattern "AOB" [--module NAME] [--hit N] [--offset N]
   hdlclient <pid> xrefs HEX_ADDR [--module NAME]
@@ -116,8 +114,9 @@ Pipe commands (DLL already loaded in <pid>):
     recipe action NAME WATCH --wait-ms N | --signal FILE
   hdlclient --store PATH <pid> stabilize CAND_ID   (requires resolved --session)
   Aliases: dcreate dclose dadd dscan … henable rpat
-  hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--job ID] [--timeout MS]
-  hdlclient <pid> scan --hits --session ID [--max N]
+  hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--timeout MS]
+                       [--candidates FILE]
+  hdlclient <pid> scan --hits --session ID [--max N] [--candidates FILE]
   hdlclient <pid> scan --close|--reset --session ID
   hdlclient <pid> inject <dll-path> [--target-pid N] [--method NAME] [--exe PATH] [--hook-export NAME]
   hdlclient <pid> unload <dll-path> [--target-pid N] [--reload]

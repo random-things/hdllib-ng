@@ -19,8 +19,8 @@ CLI, recipes, and a persistent interest store.
 | Choose an end-to-end outcome | [goal-oriented workflows](workflows.md) | [client command workflows](client.md) |
 | Run a concrete end-to-end investigation | [toy arena walkthrough](toy-arena-walkthrough.md) | [`tests/toy_test_main.cpp`](../tests/toy_test_main.cpp) |
 | System boundaries, lifecycle, and data flow | [architecture](architecture.md) | [`src/core.cpp`](../src/core.cpp), [`src/ipc/`](../src/ipc/) |
-| Find the implementation of a feature | [functionality index](#functionality-index) | domain `src/*.cpp`, [`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/`](../src/ipc/) |
-| Understand an IPC opcode or payload | [capability reference](capabilities.md) | [`src/protocol.hpp`](../src/protocol.hpp), [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) |
+| Find the implementation of a feature | [functionality index](#functionality-index) | domain `src/*.cpp`, [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1), [`src/ipc/`](../src/ipc/) |
+| Understand an RPC method or payload | [RPC contract](rpc.md) | [`services.proto`](../proto/hdl/rpc/v1/services.proto), [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) |
 | Understand a CLI or recipe workflow | [client workflows](client.md) | [`tools/client/main.cpp`](../tools/client/main.cpp), [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) |
 | Change or extend the project | [development guide](development.md) | [`CMakeLists.txt`](../CMakeLists.txt), [test guide](../tests/README.md) |
 | Configure Windows CI or the GUI runner | [CI guide](ci.md) | [workflow definitions](../.github/workflows/) |
@@ -41,7 +41,7 @@ flowchart LR
     subgraph Target["Target process"]
         DLL["hdllib.dll"]
         IPC["Named-pipe server"]
-        Handlers["Opcode handlers"]
+        Handlers["Named RPC handlers"]
         Core["Shared in-target subsystems"]
         DLL --> IPC
         IPC --> Handlers
@@ -49,13 +49,13 @@ flowchart LR
     end
 
     Injector -- "loads DLL" --> DLL
-    Client -- "length-prefixed frames" --> IPC
-    Custom -- "length-prefixed frames" --> IPC
+    Client -- "protobuf envelopes" --> IPC
+    Custom -- "protobuf envelopes" --> IPC
 ```
 
 IPC handlers adapt the pipe onto shared domain functions. The client is a
 human/script surface that serializes those operations. When a feature is
-changed, update domain, opcode/handler, client, and tests.
+changed, update the protobuf service schema, handler, client, and tests.
 
 ## Source-of-truth order
 
@@ -63,8 +63,8 @@ When documentation and code disagree, use this order:
 
 1. [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) for the exported ABI,
    status codes, flags, public structures, and fill-buffer contracts.
-2. [`src/protocol.hpp`](../src/protocol.hpp) plus
-   [`src/ipc/handlers_*.cpp`](../src/ipc/) for opcode values and actual wire
+2. [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1), generated RPC bindings, and
+   [`src/ipc/handlers_*.cpp`](../src/ipc/) for method identity and payload
    parsing/serialization.
 3. Domain implementation files under [`src/`](../src/) for semantics and
    lifetime behavior.
@@ -74,21 +74,20 @@ When documentation and code disagree, use this order:
 5. Tests for executable examples and edge-case expectations.
 6. Markdown documentation for intent and workflows.
 
-Two protocol values are deliberately non-contiguous with their placement in
-the enum: `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
-`OpTrackLoadedDll = 95`. Never infer opcode values from source order.
+There is no numeric operation registry. `services.proto` is the source of truth;
+the code generator derives method names, metadata, and dispatch bindings.
 
 ## Functionality index
 
 | Functionality | Contract and entry points | Core implementation | Remote/client path | Best tests and docs |
 |---|---|---|---|---|
-| Lifecycle, quiet defaults, logging, clean unload | `HdlInit`, `HdlShutdown` / `HdlShutdownEx`, `HdlStartIpc`, `HdlTrackLoadedDll`, log/health controls in [`hdllib.h`](../include/hdllib/hdllib.h) | [`dllmain.cpp`](../src/dllmain.cpp), [`core.cpp`](../src/core.cpp), [`loaded_modules.cpp`](../src/loaded_modules.cpp), [`env.cpp`](../src/env.cpp), [`log.cpp`](../src/log.cpp) | `OpShutdown` / `OpTrackLoadedDll` in [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp); `shutdown` in [`cmds_ipc_inject.cpp`](../tools/client/cmds_ipc_inject.cpp); `ping`/`log` in [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp) | [architecture](architecture.md) lifecycle, [capabilities: injection](capabilities.md#2-dll-injection), clean-unload cases in [`test_main.cpp`](../tests/test_main.cpp) |
+| Lifecycle, quiet defaults, logging, clean unload | `HdlInit`, `HdlShutdown` / `HdlShutdownEx`, `HdlStartIpc`, `HdlTrackLoadedDll`, log/health controls in [`hdllib.h`](../include/hdllib/hdllib.h) | [`dllmain.cpp`](../src/dllmain.cpp), [`core.cpp`](../src/core.cpp), [`loaded_modules.cpp`](../src/loaded_modules.cpp), [`env.cpp`](../src/env.cpp), [`log.cpp`](../src/log.cpp) | `Control.Shutdown` / `Injection.TrackLoadedDll` in [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp); `shutdown` in [`cmds_ipc_inject.cpp`](../tools/client/cmds_ipc_inject.cpp); `ping`/`log` in [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp) | [architecture](architecture.md) lifecycle, [capabilities: injection](capabilities.md#2-dll-injection), clean-unload cases in [`test_main.cpp`](../tests/test_main.cpp) |
 | Injection, target resolution, recommendation, unload/reload | `HdlInjectDll*`, `HdlResolveTarget`, `HdlRecommendInject`, `HdlUnloadDll` / `HdlUnloadDllEx` | [`inject.cpp`](../src/inject.cpp), [`inject/select.cpp`](../src/inject/select.cpp), [`inject/unload.cpp`](../src/inject/unload.cpp), one implementation per method in [`src/inject/`](../src/inject/) | Local controller path in [`local_inject.cpp`](../tools/client/local_inject.cpp); IPC inject/unload in [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp) | [injection index](inject/README.md), [selection](inject/selection.md), [`test_select.cpp`](../tests/test_select.cpp), injection matrix in [`test_main.cpp`](../tests/test_main.cpp) |
-| IPC framing, dispatch, jobs, streaming | `HdlFormatPipeName` in [`pipe_name.h`](../include/hdllib/pipe_name.h); opcode enum/encoders in [`protocol.hpp`](../src/protocol.hpp) | [`ipc/framing.cpp`](../src/ipc/framing.cpp), [`ipc/server.cpp`](../src/ipc/server.cpp), [`ipc/common.cpp`](../src/ipc/common.cpp), [`jobs.cpp`](../src/jobs.cpp) | [`pipe_client.cpp`](../tools/client/pipe_client.cpp), central switch in [`ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) | [capabilities: framing](capabilities.md#framing-and-encoding), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
+| RPC framing, generated dispatch, deadlines, streaming | `HdlFormatPipeName` in [`pipe_name.h`](../include/hdllib/pipe_name.h); schemas in [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1) | [`rpc/runtime.cpp`](../src/rpc/runtime.cpp), [`ipc/framing.cpp`](../src/ipc/framing.cpp), [`ipc/server.cpp`](../src/ipc/server.cpp), [`ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) | [`pipe_client.cpp`](../tools/client/pipe_client.cpp), generated method switch in [`ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) | [RPC contract](rpc.md), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
 | Memory read/write and region/module enumeration | `HdlReadMemory`, `HdlWriteMemory`, `HdlEnumRegions`, `HdlEnumModules` | [`memory.cpp`](../src/memory.cpp) | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp), [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp) | [capabilities: memory](capabilities.md#3-memory-read--write--enumerate), local/client tests |
 | AOB and typed incremental search | `HdlSearchMemory`, `HdlSearchCreate/First/Next/GetHits/Close` | [`memory.cpp`](../src/memory.cpp) | [`handlers_search.cpp`](../src/ipc/handlers_search.cpp), [`cmds_scan.cpp`](../tools/client/cmds_scan.cpp) | [client: memory and search](client.md#memory-and-search), local/client tests |
 | Passive process fingerprinting | `HdlEnumFingerprintTags`, pure `HdlClassifyFingerprint` | [`fingerprint.cpp`](../src/fingerprint.cpp), rule table in [`fingerprint_rules.hpp`](../src/fingerprint_rules.hpp) | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp), `fingerprint` in [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp), suggestions in [`recipes.cpp`](../tools/client/recipes.cpp) | [capabilities: fingerprint](capabilities.md#6b-process-fingerprint), local/client tests |
-| Health, threads, events, cancellation/deadlines | `HdlGetHealth`, `HdlEnumThreads`, `HdlPollEvents`, `HdlJob*` | [`health.cpp`](../src/health.cpp), [`jobs.cpp`](../src/jobs.cpp) | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp), `health`/`threads`/`events`/`job` in [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp) | [capabilities: health](capabilities.md#6-process--thread-health-and-events), local/client tests |
+| Health, threads, events, deadlines | `HdlGetHealth`, `HdlEnumThreads`, `HdlPollEvents`; local-only `HdlJob*` | [`health.cpp`](../src/health.cpp), [`jobs.cpp`](../src/jobs.cpp) | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp), `health`/`threads`/`events` in [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp) | [capabilities: health](capabilities.md#6-process--thread-health-and-events), local/client tests |
 | Address and export resolution | `HdlResolveRipRelative`, `HdlFollowPointers`, `HdlModuleBase`, `HdlResolveExport` | [`resolve.cpp`](../src/resolve.cpp), export resolution in [`call.cpp`](../src/call.cpp) | [`handlers_call.cpp`](../src/ipc/handlers_call.cpp), `rip`/`ptrchain`/`modbase`/`resolve` in client command files | [capabilities: address helpers](capabilities.md#7-address-resolution-helpers) |
 | Locate: patterns, string xrefs, pointer scan, struct probe | `HdlResolvePattern`, `HdlFindStringXrefs`, `HdlPointerScan`, `HdlProbeStruct` | [`locate.cpp`](../src/locate.cpp) | [`handlers_locate.cpp`](../src/ipc/handlers_locate.cpp), [`cmds_locate.cpp`](../tools/client/cmds_locate.cpp) | [client: locate](client.md#locate-signatures--addresses), locate fixtures in [`test_main.cpp`](../tests/test_main.cpp) |
 | In-process calls and UI-thread dispatch | `HdlCall`, `HdlCallExport`, `HdlCallVtable` | [`call.cpp`](../src/call.cpp), [`call_invoke.asm`](../src/call_invoke.asm), [`call_dispatch.cpp`](../src/call_dispatch.cpp) | [`handlers_call.cpp`](../src/ipc/handlers_call.cpp), [`cmds_call.cpp`](../tools/client/cmds_call.cpp) | [capabilities: calls](capabilities.md#8-in-process-calls-export--absolute--vtable), local/client/toy tests |
@@ -108,7 +107,9 @@ the enum: `OpUnloadDll = 92`, `OpFingerprint = 93`, `OpShutdown = 94`, and
 include/hdllib/       Shared types/enums + pipe-name helper; inject callback decls
 src/api.cpp           Inject callback exports only (HdlHookProc / HdlWinEventProc)
 src/*.cpp             In-target domain implementations
-src/ipc/              Pipe server, framing, opcode dispatch, domain adapters
+src/rpc/              Protobuf envelope runtime and generated-request helpers
+src/ipc/              Pipe server, framing, named-method dispatch, domain adapters
+proto/hdl/rpc/v1/     First-release RPC source schemas
 src/inject/           One injection technique per file plus selection/common code
 src/disasm/           Pluggable built-in disassembly backends
 tools/client/         Injector, pipe client, CLI, store, recipes, session persist
@@ -129,7 +130,7 @@ runtime state.
 |---|---|
 | In-target | Code executing inside the process that loaded `hdllib.dll`; memory addresses are meaningful only there. |
 | Controller | `hdlclient` or another process using the pipe to control the in-target DLL. |
-| IPC surface | Numeric opcodes and byte layouts in `protocol.hpp` plus the matching handlers (sole remote control channel). |
+| RPC surface | Schema-generated method names in `services.proto`, protobuf envelopes, and compact domain payload adapters. |
 | Client surface | Human-facing commands and higher-level recipes; some compose several IPC operations. |
 | Search session | Mutable typed-scan candidate/snapshot state. Domain callers hold an opaque pointer; IPC callers hold a process-global numeric ID. |
 | Discover session | Server-side candidate, evidence, hook, action, and heat state. It is richer than a search session. |
@@ -140,16 +141,18 @@ runtime state.
 ## Constraints worth retaining in context
 
 - Windows x64 only; no Wow64 helper.
-- The pipe is byte-mode, length-prefixed, little-endian native POD. It is not a
-  self-describing or version-negotiated protocol.
+- The pipe is byte-mode with a fixed preface and length-prefixed protobuf
+  envelopes. `ClientHello` / `ServerHello` negotiate the protocol and advertise
+  the generated method inventory and transport limits.
 - Pipe access is limited to SYSTEM, Administrators, and the target process user.
-- Multiple clients are accepted concurrently. IPC session IDs are process-global,
+- Multiple clients are accepted concurrently. Live session IDs are process-global,
   not connection-scoped.
-- Long operations cooperate with jobs/deadlines; cancellation is not preemptive.
+- Long operations cooperate with request deadlines; remote job-management RPCs
+  are intentionally absent.
 - A timed-out in-process call may continue after the waiter returns.
 - UI-thread calls require a non-console top-level window.
 - Logs and the health exception VEH are off by default after injection.
-- Allocations, patches, hooks, watches, jobs, and live sessions are process-local
+- Allocations, patches, hooks, watches, local jobs, and live sessions are process-local
   runtime state and are cleaned up during shutdown. Durable intent belongs in
   the client interest store.
 - The disassembly backends are selected at runtime, but at least one built-in

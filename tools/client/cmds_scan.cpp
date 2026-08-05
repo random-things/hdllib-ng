@@ -10,14 +10,119 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
+#include <bcrypt.h>
+
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "Bcrypt.lib")
+
+namespace {
+
+class CandidateFileWriter {
+  public:
+    ~CandidateFileWriter() {
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle_);
+        }
+    }
+
+    bool Open(const std::wstring& path) {
+        path_ = path;
+        handle_ = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        static constexpr char kMagic[] = "HDLCAND1";
+        const uint32_t version = 1;
+        const uint32_t record_size = sizeof(uint64_t);
+        const uint64_t count = 0;
+        return WriteAll(kMagic, sizeof(kMagic) - 1) && WriteAll(&version, sizeof(version)) &&
+               WriteAll(&record_size, sizeof(record_size)) && WriteAll(&count, sizeof(count));
+    }
+
+    bool Append(const uint64_t* hits, uint32_t count) {
+        if (!hits || count == 0) {
+            return true;
+        }
+        if (!WriteAll(hits, static_cast<size_t>(count) * sizeof(uint64_t))) {
+            return false;
+        }
+        count_ += count;
+        return true;
+    }
+
+    bool Finish() {
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            return true;
+        }
+        LARGE_INTEGER count_offset{};
+        count_offset.QuadPart = 16;
+        if (!SetFilePointerEx(handle_, count_offset, nullptr, FILE_BEGIN) ||
+            !WriteAll(&count_, sizeof(count_)) || !FlushFileBuffers(handle_)) {
+            return false;
+        }
+        CloseHandle(handle_);
+        handle_ = INVALID_HANDLE_VALUE;
+        return true;
+    }
+
+    uint64_t Count() const { return count_; }
+    const std::wstring& Path() const { return path_; }
+
+  private:
+    bool WriteAll(const void* data, size_t size) {
+        const auto* cursor = static_cast<const uint8_t*>(data);
+        while (size != 0) {
+            const DWORD chunk = static_cast<DWORD>((std::min)(size, size_t{0xffffffffu}));
+            DWORD wrote = 0;
+            if (!WriteFile(handle_, cursor, chunk, &wrote, nullptr) || wrote == 0) {
+                return false;
+            }
+            cursor += wrote;
+            size -= wrote;
+        }
+        return true;
+    }
+
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    uint64_t count_ = 0;
+    std::wstring path_;
+};
+
+bool MakeDefaultCandidatePath(std::wstring* out) {
+    if (!out) {
+        return false;
+    }
+    wchar_t temp[MAX_PATH]{};
+    const DWORD length = GetTempPathW(MAX_PATH, temp);
+    if (length == 0 || length >= MAX_PATH) {
+        return false;
+    }
+    std::array<uint32_t, 4> token{};
+    if (BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(token.data()), sizeof(token),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) {
+        return false;
+    }
+    wchar_t path[MAX_PATH]{};
+    if (swprintf_s(path, L"%shdllib-candidates-%08x%08x%08x%08x.bin", temp, token[0], token[1],
+                   token[2], token[3]) < 0) {
+        return false;
+    }
+    *out = path;
+    return true;
+}
+
+} // namespace
+
 static std::string BuildHitsJson(int32_t /*st*/, uint64_t session, bool have_session,
-                                 uint32_t total, const std::vector<uint64_t>& hits,
-                                 const wchar_t* /*cmd*/) {
+                                 uint64_t total, const std::vector<uint64_t>& hits,
+                                 const std::wstring& candidate_file, const wchar_t* /*cmd*/) {
     JsonWriter w;
     w.BeginObject();
     if (have_session) {
@@ -26,6 +131,10 @@ static std::string BuildHitsJson(int32_t /*st*/, uint64_t session, bool have_ses
     }
     w.Key("total");
     w.Num(total);
+    if (!candidate_file.empty()) {
+        w.Key("candidate_file");
+        w.Str(candidate_file);
+    }
     w.Key("hits");
     w.BeginArray();
     for (uint64_t h : hits) {
@@ -188,9 +297,9 @@ bool EncodeTypedValue(int32_t type, const wchar_t* text, std::vector<uint8_t>& o
 
 static bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
+    SetMethod(req, hdl::rpc::Method::SearchCreate);
     if (!ctx.client.Request(req, resp)) {
         return false;
     }
@@ -203,8 +312,9 @@ static bool IpcCreateSession(CmdCtx& ctx, uint64_t* out_id) {
 }
 
 /* Growable collector for search frames: total, count, u64[count] (no offset). */
-bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, int32_t* out_st,
-                         uint32_t* out_total, std::vector<uint64_t>* out_hits, bool* out_bad_resp) {
+bool CollectStreamedHits(PipeClient& client, const hdl::rpc::PreparedRequest& req, int32_t* out_st,
+                         uint64_t* out_total, std::vector<uint64_t>* out_hits,
+                         CandidateFileWriter* writer, bool* out_bad_resp) {
     using namespace hdl::proto;
     if (!out_st || !out_total || !out_hits) {
         return false;
@@ -219,31 +329,32 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
     bool ok =
         client.RequestStream(req, [&](int32_t st, uint32_t flags, const uint8_t* p, size_t n) {
             Reader r(p, n);
-            uint32_t total = 0;
+            uint64_t total = 0;
             uint32_t count = 0;
             if (!r.TakePod(total) || !r.TakePod(count)) {
                 bad_resp = true;
                 return false;
             }
-            const size_t need = out_hits->size() + count;
-            if (out_hits->capacity() < need) {
-                size_t cap = out_hits->capacity() ? out_hits->capacity() : 256;
-                while (cap < need) {
-                    cap *= 2;
-                }
-                out_hits->reserve(cap);
-            }
+            std::vector<uint64_t> frame_hits;
+            frame_hits.reserve(count);
             for (uint32_t i = 0; i < count; ++i) {
                 uint64_t hit = 0;
                 if (!r.TakePod(hit)) {
                     bad_resp = true;
                     return false;
                 }
-                out_hits->push_back(hit);
+                frame_hits.push_back(hit);
+                if (!writer || out_hits->size() < 64) {
+                    out_hits->push_back(hit);
+                }
+            }
+            if (writer && !writer->Append(frame_hits.data(), count)) {
+                bad_resp = true;
+                return false;
             }
             if ((flags & HDL_IPC_MORE) == 0) {
                 *out_st = st;
-                *out_total = total ? total : static_cast<uint32_t>(out_hits->size());
+                *out_total = total ? total : (writer ? writer->Count() : out_hits->size());
             }
             return true;
         });
@@ -253,10 +364,45 @@ bool CollectStreamedHits(PipeClient& client, const std::vector<uint8_t>& req, in
     return ok;
 }
 
-static CommandResult PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits) {
+static bool CollectScanResults(PipeClient& client, const hdl::rpc::PreparedRequest& req,
+                               uint32_t max_hits, const std::wstring& requested_file,
+                               int32_t* out_st, uint64_t* out_total,
+                               std::vector<uint64_t>* out_hits, std::wstring* out_file,
+                               bool* out_bad_resp, bool* out_bad_file) {
+    if (!out_file || !out_bad_file) {
+        return false;
+    }
+    *out_bad_file = false;
+    out_file->clear();
+    CandidateFileWriter writer;
+    CandidateFileWriter* writer_ptr = nullptr;
+    if (!requested_file.empty() || max_hits == 0) {
+        *out_file = requested_file;
+        if (out_file->empty() && !MakeDefaultCandidatePath(out_file)) {
+            *out_bad_file = true;
+            return false;
+        }
+        if (!writer.Open(*out_file)) {
+            *out_bad_file = true;
+            return false;
+        }
+        writer_ptr = &writer;
+    }
+    if (!CollectStreamedHits(client, req, out_st, out_total, out_hits, writer_ptr, out_bad_resp)) {
+        return false;
+    }
+    if (writer_ptr && !writer.Finish()) {
+        *out_bad_file = true;
+        return false;
+    }
+    return true;
+}
+
+static CommandResult PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_hits,
+                                   const std::wstring& requested_file) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
-    AppendPod(req, static_cast<uint32_t>(OpSearchGetHits));
+    PreparedRequest req;
+    SetMethod(req, hdl::rpc::Method::SearchGetHits);
     AppendPod(req, session);
     AppendPod(req, max_hits);
     AppendPod(req, static_cast<uint64_t>(0));
@@ -264,19 +410,26 @@ static CommandResult PrintScanHits(CmdCtx& ctx, uint64_t session, uint32_t max_h
     AppendPod(req, static_cast<uint32_t>(HDL_IPC_REQ_STREAM));
 
     int32_t st = 0;
-    uint32_t total = 0;
+    uint64_t total = 0;
     std::vector<uint64_t> hits;
+    std::wstring candidate_file;
     bool bad_resp = false;
-    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+    bool bad_file = false;
+    if (!CollectScanResults(ctx.client, req, max_hits, requested_file, &st, &total, &hits,
+                            &candidate_file, &bad_resp, &bad_file)) {
+        if (bad_file) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_ACCESS, L"Unable to write candidate file");
+        }
         return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
-    std::string data_json = BuildHitsJson(st, session, true, total, hits, ctx.cmd.c_str());
+    std::string data_json =
+        BuildHitsJson(st, session, true, total, hits, candidate_file, ctx.cmd.c_str());
     return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
 }
 
 CommandResult CmdScan(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     const char* pattern = nullptr;
@@ -295,9 +448,9 @@ CommandResult CmdScan(CmdCtx& ctx) {
     uint64_t size = 0;
     uint64_t session = 0;
     bool have_session = false;
-    uint64_t job_id = 0;
     uint32_t timeout_ms = 0;
     uint32_t max_hits = 0; /* 0 = unlimited */
+    std::wstring candidate_file_request;
 
     for (int i = 3; i < ctx.argc; ++i) {
         if (wcscmp(ctx.argv[i], L"--pattern") == 0 && i + 1 < ctx.argc) {
@@ -328,10 +481,10 @@ CommandResult CmdScan(CmdCtx& ctx) {
         } else if (wcscmp(ctx.argv[i], L"--session") == 0 && i + 1 < ctx.argc) {
             session = _wcstoui64(ctx.argv[++i], nullptr, 0);
             have_session = true;
-        } else if (wcscmp(ctx.argv[i], L"--job") == 0 && i + 1 < ctx.argc) {
-            job_id = _wcstoui64(ctx.argv[++i], nullptr, 0);
         } else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
             timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
+        } else if (wcscmp(ctx.argv[i], L"--candidates") == 0 && i + 1 < ctx.argc) {
+            candidate_file_request = ctx.argv[++i];
         } else if (wcscmp(ctx.argv[i], L"--next") == 0) {
             do_next = true;
         } else if (wcscmp(ctx.argv[i], L"--hits") == 0) {
@@ -347,29 +500,37 @@ CommandResult CmdScan(CmdCtx& ctx) {
         }
     }
 
-    auto append_job_trailer = [&](std::vector<uint8_t>& out, uint32_t flags = 0) {
-        AppendPod(out, job_id);
+    auto append_request_trailer = [&](PreparedRequest& out, uint32_t flags = 0) {
+        out.timeout_ms = timeout_ms;
+        AppendPod(out, static_cast<uint64_t>(0));
         AppendPod(out, timeout_ms);
         AppendPod(out, flags);
     };
 
-    // Legacy one-shot AOB path (no session) — always streamed with backpressure.
+    // One-shot AOB path (no session) — always streamed with backpressure.
     if (pattern && !do_next && !do_hits && !do_close && !do_reset &&
         value_type == HDL_VALUE_BYTES && !have_session && !have_cmp) {
-        AppendPod(req, static_cast<uint32_t>(OpSearchMemory));
+        SetMethod(req, hdl::rpc::Method::SearchMemory);
         AppendPod(req, start);
         AppendPod(req, size);
         AppendPod(req, max_hits);
         AppendString(req, pattern);
-        append_job_trailer(req, HDL_IPC_REQ_STREAM);
+        append_request_trailer(req, HDL_IPC_REQ_STREAM);
         int32_t st = 0;
-        uint32_t total = 0;
+        uint64_t total = 0;
         std::vector<uint64_t> hits;
+        std::wstring candidate_file;
         bool bad_resp = false;
-        if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+        bool bad_file = false;
+        if (!CollectScanResults(ctx.client, req, max_hits, candidate_file_request, &st, &total,
+                                &hits, &candidate_file, &bad_resp, &bad_file)) {
+            if (bad_file) {
+                return CmdFail(ctx.cmd.c_str(), HDL_E_ACCESS, L"Unable to write candidate file");
+            }
             return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
         }
-        std::string data_json = BuildHitsJson(st, 0, false, total, hits, ctx.cmd.c_str());
+        std::string data_json =
+            BuildHitsJson(st, 0, false, total, hits, candidate_file, ctx.cmd.c_str());
         return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
     }
 
@@ -380,10 +541,10 @@ CommandResult CmdScan(CmdCtx& ctx) {
     }
 
     if (do_hits) {
-        return PrintScanHits(ctx, session, max_hits);
+        return PrintScanHits(ctx, session, max_hits, candidate_file_request);
     }
     if (do_close || do_reset) {
-        AppendPod(req, static_cast<uint32_t>(do_close ? OpSearchClose : OpSearchReset));
+        SetMethod(req, do_close ? hdl::rpc::Method::SearchClose : hdl::rpc::Method::SearchReset);
         AppendPod(req, session);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
@@ -409,14 +570,14 @@ CommandResult CmdScan(CmdCtx& ctx) {
                 return FailArg(ctx, L"Bad --value");
             }
         }
-        AppendPod(req, static_cast<uint32_t>(OpSearchNext));
+        SetMethod(req, hdl::rpc::Method::SearchNext);
         AppendPod(req, session);
         AppendPod(req, cmp);
         AppendPod(req, static_cast<uint32_t>(encoded.size()));
         if (!encoded.empty()) {
             AppendBytes(req, encoded.data(), encoded.size());
         }
-        append_job_trailer(req);
+        append_request_trailer(req);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -427,7 +588,7 @@ CommandResult CmdScan(CmdCtx& ctx) {
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"Bad response");
         }
         if (st == HDL_OK) {
-            return PrintScanHits(ctx, session, max_hits);
+            return PrintScanHits(ctx, session, max_hits, candidate_file_request);
         }
         JsonWriter w;
         w.BeginObject();
@@ -478,7 +639,7 @@ CommandResult CmdScan(CmdCtx& ctx) {
         have_session = true;
     }
 
-    AppendPod(req, static_cast<uint32_t>(OpSearchFirst));
+    SetMethod(req, hdl::rpc::Method::SearchFirst);
     AppendPod(req, session);
     AppendPod(req, start);
     AppendPod(req, size);
@@ -504,14 +665,21 @@ CommandResult CmdScan(CmdCtx& ctx) {
     }
     AppendPod(req, search_flags);
     AppendWString(req, module.c_str());
-    append_job_trailer(req, HDL_IPC_REQ_STREAM);
+    append_request_trailer(req, HDL_IPC_REQ_STREAM);
     int32_t st = 0;
-    uint32_t total = 0;
+    uint64_t total = 0;
     std::vector<uint64_t> hits;
+    std::wstring candidate_file;
     bool bad_resp = false;
-    if (!CollectStreamedHits(ctx.client, req, &st, &total, &hits, &bad_resp)) {
+    bool bad_file = false;
+    if (!CollectScanResults(ctx.client, req, max_hits, candidate_file_request, &st, &total, &hits,
+                            &candidate_file, &bad_resp, &bad_file)) {
+        if (bad_file) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_ACCESS, L"Unable to write candidate file");
+        }
         return bad_resp ? FailBadResp(ctx) : FailIpc(ctx);
     }
-    std::string data_json = BuildHitsJson(st, session, true, total, hits, ctx.cmd.c_str());
+    std::string data_json =
+        BuildHitsJson(st, session, true, total, hits, candidate_file, ctx.cmd.c_str());
     return CmdStatus(ctx.cmd.c_str(), st, std::move(data_json));
 }

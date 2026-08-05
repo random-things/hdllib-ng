@@ -1,0 +1,54 @@
+edition = "2023";
+
+package hdl.rpc.v1;
+
+import "hdl/rpc/v1/common.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message ClientHello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  string client_name = 3;
+  string client_build = 4;
+}
+
+message ServerHello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  string server_name = 3;
+  string server_build = 4;
+  bytes server_instance_id = 5;
+  repeated MethodInfo methods = 6;
+  TransportLimits limits = 7;
+}
+
+message Request {
+  fixed64 request_id = 1;
+  string method = 2;
+  uint32 timeout_ms = 3;
+  bytes payload = 4;
+  bool stream_response = 5;
+}
+
+message Response {
+  fixed64 request_id = 1;
+  uint32 sequence = 2;
+  bool end_stream = 3;
+  RpcStatus status = 4;
+  bytes payload = 5;
+}
+
+message GoAway {
+  RpcStatus status = 1;
+}
+
+message Envelope {
+  oneof body {
+    ClientHello client_hello = 1;
+    ServerHello server_hello = 2;
+    Request request = 3;
+    Response response = 4;
+    GoAway go_away = 5;
+  }
+}

@@ -24,7 +24,7 @@ Default remains human text. See [client.md](client.md).
 
 1. Expand golden fixtures beyond ping/modules/error (`scan`, `discover-cands`,
    `hookhits`, `watch hits`, `fingerprint`, `health`).
-2. Stream-heavy ops emit one final JSON envelope today (not NDJSON chunks).
+2. Stream-heavy commands emit one final JSON envelope today (not NDJSON chunks).
 
 **Acceptance (done):** `hdlclient --json <pid> ping` is valid JSON with the
 remote pid; handlers return `CommandResult` with structured `data_json` only and
@@ -113,7 +113,7 @@ Most verbs lack `verb --help`.
    from a small table).
 
 **Acceptance:** `hdlclient 1234 scan --help` explains `--type` / `--cmp` /
-`--next` without scrolling past discover opcodes.
+`--next` without scrolling past every discover command.
 
 ---
 
@@ -139,7 +139,7 @@ ranks/heats.
 **Acceptance:** One command returns the target to a known quiet instrumentation
 state without killing the process or unloading the DLL.
 
-**Note:** `hdlclient <pid> shutdown` / `OpShutdown` already restores hooks, patches,
+**Note:** `hdlclient <pid> shutdown` / `Control/Shutdown` already restores hooks, patches,
 watches, and health and stops the pipe (optional `--modules` unloads tracked
 payload DLLs) without `FreeLibrary` of `hdllib`. A selective `cleanup` verb that
 leaves the helper running remains useful for long sessions.
@@ -202,7 +202,7 @@ RIP without a second `resolve-function` invocation.
 copy-and-paste ideas but does not run them. Triage still requires retyping.
 
 **Current state:** Suggestion printer in [`recipes.cpp`](../tools/client/recipes.cpp);
-fingerprint via `OpFingerprint`.
+fingerprint via `Process/Fingerprint`.
 
 **What needs to be done:**
 

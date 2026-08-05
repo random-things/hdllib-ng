@@ -8,9 +8,9 @@ CommandResult CmdSections(CmdCtx& ctx) {
     if (ctx.argc >= 4) {
         base = _wcstoui64(ctx.argv[3], nullptr, 0);
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpEnumSections));
+    SetMethod(req, hdl::rpc::Method::EnumSections);
     AppendPod(req, base);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -66,9 +66,9 @@ CommandResult CmdExports(CmdCtx& ctx) {
     if (ctx.argc >= 4) {
         base = _wcstoui64(ctx.argv[3], nullptr, 0);
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpEnumExports));
+    SetMethod(req, hdl::rpc::Method::EnumExports);
     AppendPod(req, base);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -125,9 +125,9 @@ CommandResult CmdImports(CmdCtx& ctx) {
     if (ctx.argc >= 4) {
         base = _wcstoui64(ctx.argv[3], nullptr, 0);
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpEnumImports));
+    SetMethod(req, hdl::rpc::Method::EnumImports);
     AppendPod(req, base);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -189,9 +189,9 @@ CommandResult CmdFunctions(CmdCtx& ctx) {
             module = ctx.argv[++i];
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpEnumFunctions));
+    SetMethod(req, hdl::rpc::Method::EnumFunctions);
     AppendPod(req, 0ull);
     AppendPod(req, 0ull);
     AppendPod(req, module.empty() ? 0u : HDL_SEARCH_MODULE);
@@ -247,9 +247,9 @@ CommandResult CmdXrefsFrom(CmdCtx& ctx) {
     const uint64_t seed = _wcstoui64(ctx.argv[3], nullptr, 0);
     uint32_t depth = 2;
     uint32_t nodes = 64;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpXrefsFrom));
+    SetMethod(req, hdl::rpc::Method::XrefsFrom);
     AppendPod(req, seed);
     AppendPod(req, depth);
     AppendPod(req, nodes);
@@ -310,9 +310,9 @@ CommandResult CmdResolveFunction(CmdCtx& ctx) {
             module = ctx.argv[++i];
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpResolveFunction));
+    SetMethod(req, hdl::rpc::Method::ResolveFunction);
     AppendPod(req, addr);
     AppendPod(req, module.empty() ? 0u : HDL_SEARCH_MODULE);
     AppendWString(req, module.c_str());
@@ -361,9 +361,9 @@ CommandResult CmdXrefsTo(CmdCtx& ctx) {
             kinds = HDL_XREF_CALL | HDL_XREF_JMP;
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpXrefsTo));
+    SetMethod(req, hdl::rpc::Method::XrefsTo);
     AppendPod(req, target);
     AppendPod(req, nodes);
     AppendPod(req, kinds);
@@ -421,9 +421,9 @@ CommandResult CmdInvalidateFnIndex(CmdCtx& ctx) {
             module = ctx.argv[++i];
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpInvalidateFnIndex));
+    SetMethod(req, hdl::rpc::Method::InvalidateFnIndex);
     AppendWString(req, module.c_str());
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);

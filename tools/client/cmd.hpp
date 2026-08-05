@@ -44,7 +44,6 @@ CommandResult CmdThreads(CmdCtx& ctx);
 CommandResult CmdHealth(CmdCtx& ctx);
 CommandResult CmdFingerprint(CmdCtx& ctx);
 CommandResult CmdEvents(CmdCtx& ctx);
-CommandResult CmdJob(CmdCtx& ctx);
 CommandResult CmdRead(CmdCtx& ctx);
 CommandResult CmdWrite(CmdCtx& ctx);
 CommandResult CmdResolve(CmdCtx& ctx);

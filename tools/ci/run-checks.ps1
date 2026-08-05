@@ -390,15 +390,12 @@ function Invoke-RegisteredCheck {
         }
         'MsvcAnalyze' { Invoke-CMakeCheck 'ci-msvc-analyze' 'ci-msvc-analyze' $null }
         'CodeQL' {
-            Import-VisualStudioEnvironment
-            $codeqlFetchPath = Join-Path $script:fetchPath 'ci-codeql'
-            New-Item -ItemType Directory -Force -Path $codeqlFetchPath | Out-Null
             $codeqlArgs = @{
+                BuildMode = 'none'
                 DatabaseDir = (Join-Path $script:artifactPath 'codeql\database')
                 SarifOut = (Join-Path $script:artifactPath 'codeql\codeql-results.sarif')
                 CsvOut = (Join-Path $script:artifactPath 'codeql\codeql-results.csv')
                 CacheDir = (Join-Path $script:cachePath 'codeql')
-                FetchContentDir = $codeqlFetchPath
             }
             if ($Bootstrap) { $codeqlArgs.InstallBundle = $true }
             & (Join-Path $PSScriptRoot 'run-codeql.ps1') @codeqlArgs

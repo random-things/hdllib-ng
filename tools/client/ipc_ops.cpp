@@ -22,8 +22,9 @@ IpcStatus TakeStatus(const std::vector<uint8_t>&, Reader* r) {
 } // namespace
 
 IpcStatus Ping(PipeClient& c, uint32_t* out_pid) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpPing));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::Ping);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
     }
@@ -38,8 +39,9 @@ IpcStatus Ping(PipeClient& c, uint32_t* out_pid) {
 }
 
 IpcStatus ModBase(PipeClient& c, const wchar_t* module_or_null, uint64_t* out_base) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpModuleBase));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::ModuleBase);
     AppendWString(req, module_or_null ? module_or_null : L"");
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -58,8 +60,9 @@ IpcStatus ResolvePattern(PipeClient& c, const char* pattern, uint32_t hit_index,
                          int32_t pattern_offset, uint32_t rip_disp, uint32_t rip_len,
                          const std::vector<int64_t>& follows, uint32_t search_flags,
                          const wchar_t* module_or_null, HdlPatternResult* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpResolvePattern));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::ResolvePattern);
     AppendString(req, pattern);
     AppendPod(req, hit_index);
     AppendPod(req, pattern_offset);
@@ -87,8 +90,9 @@ IpcStatus ResolvePattern(PipeClient& c, const char* pattern, uint32_t hit_index,
 
 IpcStatus FollowPointers(PipeClient& c, uint64_t base, const std::vector<int64_t>& offsets,
                          uint64_t* out_addr) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::FollowPointers);
     AppendPod(req, base);
     AppendPod(req, static_cast<uint32_t>(offsets.size()));
     for (int64_t o : offsets) {
@@ -108,8 +112,9 @@ IpcStatus FollowPointers(PipeClient& c, uint64_t base, const std::vector<int64_t
 }
 
 IpcStatus DiscoverCreate(PipeClient& c, uint64_t* out_id) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverCreate);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
     }
@@ -124,8 +129,9 @@ IpcStatus DiscoverCreate(PipeClient& c, uint64_t* out_id) {
 }
 
 IpcStatus DiscoverClose(PipeClient& c, uint64_t id) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverClose);
     AppendPod(req, id);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -135,8 +141,9 @@ IpcStatus DiscoverClose(PipeClient& c, uint64_t id) {
 }
 
 IpcStatus DiscoverWatch(PipeClient& c, uint64_t session, uint64_t fn, uint32_t args) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverWatch));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverWatch);
     AppendPod(req, session);
     AppendPod(req, fn);
     AppendPod(req, args);
@@ -148,8 +155,9 @@ IpcStatus DiscoverWatch(PipeClient& c, uint64_t session, uint64_t fn, uint32_t a
 }
 
 IpcStatus DiscoverUnwatchAll(PipeClient& c, uint64_t session) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverUnwatchAll));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverUnwatchAll);
     AppendPod(req, session);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -159,8 +167,9 @@ IpcStatus DiscoverUnwatchAll(PipeClient& c, uint64_t session) {
 }
 
 IpcStatus DiscoverActionBegin(PipeClient& c, uint64_t session, const char* name) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverActionBegin));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverActionBegin);
     AppendPod(req, session);
     AppendString(req, name ? name : "");
     if (!c.Request(req, resp)) {
@@ -171,8 +180,9 @@ IpcStatus DiscoverActionBegin(PipeClient& c, uint64_t session, const char* name)
 }
 
 IpcStatus DiscoverActionEnd(PipeClient& c, uint64_t session) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverActionEnd));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverActionEnd);
     AppendPod(req, session);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -182,8 +192,9 @@ IpcStatus DiscoverActionEnd(PipeClient& c, uint64_t session) {
 }
 
 IpcStatus DiscoverWatchRegion(PipeClient& c, uint64_t session, uint64_t base, uint32_t size) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverWatchRegion));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverWatchRegion);
     AppendPod(req, session);
     AppendPod(req, base);
     AppendPod(req, size);
@@ -196,8 +207,9 @@ IpcStatus DiscoverWatchRegion(PipeClient& c, uint64_t session, uint64_t base, ui
 
 IpcStatus DiscoverRank(PipeClient& c, uint64_t session, const char* name,
                        std::vector<HdlCandidate>* out, uint32_t flags) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverRankFunctions));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverRankFunctions);
     AppendPod(req, session);
     AppendString(req, name ? name : "");
     AppendPod(req, flags);
@@ -221,8 +233,9 @@ IpcStatus DiscoverRank(PipeClient& c, uint64_t session, const char* name,
 IpcStatus DiscoverSynth(PipeClient& c, uint64_t session, uint64_t cand_id, uint32_t before,
                         uint32_t after, uint32_t search_flags, const wchar_t* module_or_null,
                         HdlSynthesizedPattern* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverSynthesizePattern));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverSynthesizePattern);
     AppendPod(req, session);
     AppendPod(req, cand_id);
     AppendPod(req, before);
@@ -245,8 +258,9 @@ IpcStatus DiscoverSynth(PipeClient& c, uint64_t session, uint64_t cand_id, uint3
 IpcStatus DiscoverConstraint(PipeClient& c, uint64_t session, uint32_t object_size,
                              const std::vector<HdlFieldPred>& preds, uint32_t search_flags,
                              const wchar_t* module_or_null, uint32_t max_results, const char* tag) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverConstraintScan));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverConstraintScan);
     AppendPod(req, session);
     AppendPod(req, object_size);
     AppendPod(req, static_cast<uint32_t>(preds.size()));
@@ -255,7 +269,7 @@ IpcStatus DiscoverConstraint(PipeClient& c, uint64_t session, uint32_t object_si
     AppendWString(req, module_or_null ? module_or_null : L"");
     AppendString(req, tag ? tag : "");
     for (const auto& p : preds) {
-        AppendHdlFieldPred(req, p);
+        AppendHdlFieldPred(req.payload, p);
     }
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -265,8 +279,9 @@ IpcStatus DiscoverConstraint(PipeClient& c, uint64_t session, uint32_t object_si
 }
 
 IpcStatus DiscoverGetCandidates(PipeClient& c, uint64_t session, std::vector<HdlCandidate>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverGetCandidates));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverGetCandidates);
     AppendPod(req, session);
     AppendPod(req, static_cast<uint32_t>(256));
     if (!c.Request(req, resp)) {
@@ -288,8 +303,9 @@ IpcStatus DiscoverGetCandidates(PipeClient& c, uint64_t session, std::vector<Hdl
 IpcStatus DiscoverCluster(PipeClient& c, uint64_t session, uint64_t seed, uint32_t object_size,
                           uint32_t search_flags, const wchar_t* module_or_null,
                           uint32_t max_results) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverClusterType));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverClusterType);
     AppendPod(req, session);
     AppendPod(req, seed);
     AppendPod(req, object_size);
@@ -305,8 +321,9 @@ IpcStatus DiscoverCluster(PipeClient& c, uint64_t session, uint64_t seed, uint32
 
 IpcStatus DiscoverAddCandidate(PipeClient& c, uint64_t session, uint32_t kind, uint64_t addr,
                                const char* tag, uint64_t* out_cand_id) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverAddCandidate));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverAddCandidate);
     AppendPod(req, session);
     AppendPod(req, kind);
     AppendPod(req, addr);
@@ -327,8 +344,9 @@ IpcStatus DiscoverAddCandidate(PipeClient& c, uint64_t session, uint32_t kind, u
 IpcStatus PathConsensus(PipeClient& c, uint64_t target, uint32_t max_depth, uint32_t max_offset,
                         uint32_t max_results, uint32_t search_flags, const wchar_t* module_or_null,
                         std::vector<HdlPointerPath>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverPathConsensus));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverPathConsensus);
     AppendPod(req, target);
     AppendPod(req, max_depth);
     AppendPod(req, max_offset);
@@ -355,12 +373,13 @@ IpcStatus PathValidate(PipeClient& c, uint64_t expected, std::vector<HdlPointerP
     if (!paths) {
         return IpcStatus{HDL_E_INVALID_ARG};
     }
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverPathValidate));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::DiscoverPathValidate);
     AppendPod(req, expected);
     AppendPod(req, static_cast<uint32_t>(paths->size()));
     for (const auto& p : *paths) {
-        AppendHdlPointerPath(req, p);
+        AppendHdlPointerPath(req.payload, p);
     }
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -378,8 +397,9 @@ IpcStatus PathValidate(PipeClient& c, uint64_t expected, std::vector<HdlPointerP
 
 IpcStatus CallExport(PipeClient& c, const wchar_t* module, const char* name,
                      const std::vector<HdlCallArg>& args, uint32_t timeout_ms, HdlCallResult* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpCallExport));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::CallExport);
     AppendWString(req, module ? module : L"");
     AppendString(req, name ? name : "");
     AppendPod(req, static_cast<uint32_t>(args.size()));
@@ -404,8 +424,9 @@ IpcStatus CallExport(PipeClient& c, const wchar_t* module, const char* name,
 }
 
 IpcStatus FindCaves(PipeClient& c, const HdlCaveQuery& q, std::vector<HdlCaveInfo>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpFindCaves));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::FindCaves);
     AppendPod(req, q.min_size);
     AppendPod(req, q.fill_byte);
     AppendPod(req, q.search_flags);
@@ -431,8 +452,9 @@ IpcStatus FindCaves(PipeClient& c, const HdlCaveQuery& q, std::vector<HdlCaveInf
 
 IpcStatus AllocNear(PipeClient& c, uint64_t near_addr, uint64_t max_distance, uint64_t size,
                     uint32_t protect, uint64_t* out_addr) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpAllocNear));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::AllocNear);
     AppendPod(req, near_addr);
     AppendPod(req, max_distance);
     AppendPod(req, size);
@@ -451,8 +473,9 @@ IpcStatus AllocNear(PipeClient& c, uint64_t near_addr, uint64_t max_distance, ui
 }
 
 IpcStatus BuildStub(PipeClient& c, const HdlStubDesc& desc, HdlStubResult* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpBuildStub));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::BuildStub);
     AppendPod(req, desc.kind);
     AppendPod(req, desc.flags);
     AppendPod(req, desc.target);
@@ -479,8 +502,9 @@ IpcStatus BuildStub(PipeClient& c, const HdlStubDesc& desc, HdlStubResult* out) 
 
 IpcStatus PatchCreate(PipeClient& c, uint64_t addr, const uint8_t* bytes, uint32_t size,
                       const char* name, uint64_t* out_handle) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpPatchCreate));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::PatchCreate);
     AppendPod(req, addr);
     AppendPod(req, size);
     AppendString(req, name ? name : "");
@@ -501,8 +525,9 @@ IpcStatus PatchCreate(PipeClient& c, uint64_t addr, const uint8_t* bytes, uint32
 }
 
 IpcStatus PatchEnable(PipeClient& c, uint64_t handle, int enable) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpPatchEnable));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::PatchEnable);
     AppendPod(req, handle);
     AppendPod(req, static_cast<int32_t>(enable));
     if (!c.Request(req, resp)) {
@@ -513,8 +538,9 @@ IpcStatus PatchEnable(PipeClient& c, uint64_t handle, int enable) {
 }
 
 IpcStatus PatchRemove(PipeClient& c, uint64_t handle) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpPatchRemove));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::PatchRemove);
     AppendPod(req, handle);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -524,8 +550,9 @@ IpcStatus PatchRemove(PipeClient& c, uint64_t handle) {
 }
 
 IpcStatus PatchEnum(PipeClient& c, std::vector<HdlPatchInfo>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpPatchEnum));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::PatchEnum);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
     }
@@ -544,8 +571,9 @@ IpcStatus PatchEnum(PipeClient& c, std::vector<HdlPatchInfo>* out) {
 
 IpcStatus WatchHw(PipeClient& c, uint64_t addr, uint32_t size, uint32_t access, uint32_t tid,
                   uint64_t* out_handle) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpWatchHw));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::WatchHw);
     AppendPod(req, addr);
     AppendPod(req, size);
     AppendPod(req, access);
@@ -565,8 +593,9 @@ IpcStatus WatchHw(PipeClient& c, uint64_t addr, uint32_t size, uint32_t access, 
 
 IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode,
                     uint64_t* out_handle) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpWatchPage));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::WatchPage);
     AppendPod(req, addr);
     AppendPod(req, size);
     AppendPod(req, mode);
@@ -584,8 +613,9 @@ IpcStatus WatchPage(PipeClient& c, uint64_t addr, uint64_t size, uint32_t mode,
 }
 
 IpcStatus Unwatch(PipeClient& c, uint64_t handle) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpUnwatch));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::Unwatch);
     AppendPod(req, handle);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -596,8 +626,9 @@ IpcStatus Unwatch(PipeClient& c, uint64_t handle) {
 
 IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name,
                         uint64_t* out_addr) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpResolveExport));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::ResolveExport);
     AppendWString(req, module ? module : L"");
     AppendString(req, name ? name : "");
     if (!c.Request(req, resp)) {
@@ -614,8 +645,9 @@ IpcStatus ResolveExport(PipeClient& c, const wchar_t* module, const char* name,
 }
 
 IpcStatus EnumImports(PipeClient& c, uint64_t module_base, std::vector<HdlImportInfo>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpEnumImports));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::EnumImports);
     AppendPod(req, module_base);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};
@@ -634,8 +666,9 @@ IpcStatus EnumImports(PipeClient& c, uint64_t module_base, std::vector<HdlImport
 }
 
 IpcStatus Fingerprint(PipeClient& c, uint32_t scan_flags, std::vector<HdlFingerprintTag>* out) {
-    std::vector<uint8_t> req, resp;
-    AppendPod(req, static_cast<uint32_t>(OpFingerprint));
+    PreparedRequest req;
+    std::vector<uint8_t> resp;
+    SetMethod(req, hdl::rpc::Method::Fingerprint);
     AppendPod(req, scan_flags ? scan_flags : HDL_FP_SCAN_DEFAULT);
     if (!c.Request(req, resp)) {
         return IpcStatus{HDL_E_FAILED};

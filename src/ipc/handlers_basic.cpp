@@ -17,27 +17,6 @@
 namespace hdl {
 namespace ipc {
 
-bool HandleHello(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, HDL_IPC_PROTO_MAJOR);
-    AppendPod(resp, HDL_IPC_PROTO_MINOR);
-    AppendPod(resp, HDL_IPC_ENDIAN_LE);
-    AppendString(resp, "hdllib");
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleCapabilities(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, DefaultCapabilityBits());
-    return WriteFrame(pipe, resp);
-}
-
 bool HandlePing(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
     (void)r;
@@ -69,7 +48,7 @@ bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
         return WriteFrame(pipe, resp);
     }
     /* The pipe path is untrusted, but the pipe DACL admits only SYSTEM/Admins/owner (see
-     * BuildPipeSa), all of whom can already run arbitrary code via OpWriteMemory/OpCall. Opening an
+     * BuildPipeSa), all of whom can already run arbitrary code via Memory.WriteMemory/Call.Call.
      * append-only log at a caller-chosen path is strictly weaker; SetLogFile still normalizes via
      * GetFullPathNameW and rejects oversized paths. */
     const wchar_t* log_path = path.empty() ? nullptr : path.c_str();
@@ -228,7 +207,7 @@ bool HandleEnumRegions(HANDLE pipe, proto::Reader& r) {
     uint64_t job_id = 0;
     uint32_t timeout_ms = 0;
     uint32_t flags = 0;
-    // Legacy: no trailer. Stream path uses optional trailer after empty body.
+    // Aggregate delivery has no trailer; streamed delivery carries the compact flags tuple.
     TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
     (void)job_id;
     (void)timeout_ms;
@@ -314,50 +293,6 @@ bool HandleFingerprint(HANDLE pipe, proto::Reader& r) {
         for (uint32_t _i = 0; _i < count; ++_i)
             proto::AppendHdlFingerprintTag(resp, tags[_i]);
     }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleJobCreate(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t timeout_ms = 0;
-    if (!r.TakePod(timeout_ms)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    auto job = JobCreate(timeout_ms);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, job->id);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleJobCancel(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t id = 0;
-    if (!r.TakePod(id)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    if (!JobFind(id)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_NOT_FOUND));
-        return WriteFrame(pipe, resp);
-    }
-    JobCancel(id);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleJobClose(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t id = 0;
-    if (!r.TakePod(id)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    JobClose(id);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
     return WriteFrame(pipe, resp);
 }
 

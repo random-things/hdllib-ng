@@ -4,7 +4,7 @@ using namespace cmds_place_detail;
 
 CommandResult CmdCaves(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
     uint32_t min_size = 16;
     uint32_t fill = 0xCC;
@@ -33,7 +33,7 @@ CommandResult CmdCaves(CmdCtx& ctx) {
             flags |= HDL_SEARCH_EXECUTABLE;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpFindCaves));
+    SetMethod(req, hdl::rpc::Method::FindCaves);
     AppendPod(req, min_size);
     AppendPod(req, fill);
     AppendPod(req, flags);
@@ -99,9 +99,9 @@ CommandResult CmdAllocNear(CmdCtx& ctx) {
             dist = _wcstoui64(ctx.argv[++i], nullptr, 0);
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpAllocNear));
+    SetMethod(req, hdl::rpc::Method::AllocNear);
     AppendPod(req, near_addr);
     AppendPod(req, dist);
     AppendPod(req, size);
@@ -142,9 +142,9 @@ CommandResult CmdProtect(CmdCtx& ctx) {
     } else {
         protect = static_cast<uint32_t>(wcstoul(ctx.argv[5], nullptr, 0));
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpProtectMemory));
+    SetMethod(req, hdl::rpc::Method::ProtectMemory);
     AppendPod(req, addr);
     AppendPod(req, size);
     AppendPod(req, protect);
@@ -172,9 +172,9 @@ CommandResult CmdFlushICache(CmdCtx& ctx) {
     }
     const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
     const uint64_t size = _wcstoui64(ctx.argv[4], nullptr, 0);
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpFlushICache));
+    SetMethod(req, hdl::rpc::Method::FlushICache);
     AppendPod(req, addr);
     AppendPod(req, size);
     if (!ctx.client.Request(req, resp)) {

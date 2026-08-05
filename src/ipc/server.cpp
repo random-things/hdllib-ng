@@ -6,9 +6,12 @@
 #include "framing.hpp"
 #include "hdllib/pipe_name.h"
 #include "log.hpp"
+#include "rpc/runtime.hpp"
 #include "win/raii.hpp"
 
+#include <array>
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -116,7 +119,22 @@ void ServeClient(HANDLE pipe) {
         g_client_pipes.push_back(pipe);
     }
 
-    while (!g_stop.load()) {
+    std::array<char, rpc::kConnectionPrefaceSize> preface{};
+    std::vector<uint8_t> hello_frame;
+    ::hdl::rpc::v1::Envelope hello;
+    const bool hello_valid =
+        ReadExact(pipe, preface.data(), static_cast<DWORD>(preface.size())) &&
+        std::memcmp(preface.data(), rpc::kConnectionPreface, preface.size()) == 0 &&
+        ReadFrame(pipe, hello_frame) &&
+        rpc::ParseEnvelope(hello_frame.data(), hello_frame.size(), &hello) &&
+        hello.has_client_hello();
+    // Even on a major mismatch, identify the server version so the client can
+    // report a useful negotiation error before this connection is closed.
+    const bool hello_sent = hello_valid && rpc::WriteServerHello(pipe);
+    const bool negotiated =
+        hello_sent && hello.client_hello().protocol_major() == rpc::kProtocolMajor;
+
+    while (negotiated && !g_stop.load()) {
         std::vector<uint8_t> req;
         if (!ReadFrame(pipe, req)) {
             break;
@@ -287,7 +305,7 @@ void StopNoJoin(void* keep_alive_pipe) {
         }
     }
     /*
-     * Detach so ServeClient OpShutdown path does not join under its own accept thread.
+     * Detach so the ServeClient Control.Shutdown path does not join its own accept thread.
      * Do NOT clear g_running here — ThreadMain owns that flag until it exits.
      * Start() waits on g_accept_alive before spawning a replacement thread.
      */

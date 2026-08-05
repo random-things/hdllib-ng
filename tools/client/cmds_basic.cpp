@@ -18,10 +18,10 @@
 
 CommandResult CmdPing(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
-    AppendPod(req, static_cast<uint32_t>(OpPing));
+    SetMethod(req, hdl::rpc::Method::Ping);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
@@ -41,13 +41,13 @@ CommandResult CmdPing(CmdCtx& ctx) {
 
 CommandResult CmdLog(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
         return FailUsage(ctx);
     }
-    AppendPod(req, static_cast<uint32_t>(OpSetLogLevel));
+    SetMethod(req, hdl::rpc::Method::SetLogLevel);
     AppendPod(req, static_cast<int32_t>(_wtoi(ctx.argv[3])));
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -60,14 +60,14 @@ CommandResult CmdLog(CmdCtx& ctx) {
 
 CommandResult CmdLogFile(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     const wchar_t* path = L"";
     if (ctx.argc >= 4) {
         path = ctx.argv[3];
     }
-    AppendPod(req, static_cast<uint32_t>(OpSetLogFile));
+    SetMethod(req, hdl::rpc::Method::SetLogFile);
     AppendWString(req, path);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -85,7 +85,7 @@ CommandResult CmdLogFile(CmdCtx& ctx) {
 
 CommandResult CmdHealthVeh(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -93,7 +93,7 @@ CommandResult CmdHealthVeh(CmdCtx& ctx) {
     }
     const wchar_t* sub = ctx.argv[3];
     if (_wcsicmp(sub, L"status") == 0) {
-        AppendPod(req, static_cast<uint32_t>(OpGetHealthVeh));
+        SetMethod(req, hdl::rpc::Method::GetHealthVeh);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -119,7 +119,7 @@ CommandResult CmdHealthVeh(CmdCtx& ctx) {
     } else {
         return FailUsage(ctx);
     }
-    AppendPod(req, static_cast<uint32_t>(OpSetHealthVeh));
+    SetMethod(req, hdl::rpc::Method::SetHealthVeh);
     AppendPod(req, enabled);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -139,7 +139,7 @@ CommandResult CmdHealthVeh(CmdCtx& ctx) {
 
 CommandResult CmdModules(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     bool stream = false;
@@ -148,7 +148,7 @@ CommandResult CmdModules(CmdCtx& ctx) {
             stream = true;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpEnumModules));
+    SetMethod(req, hdl::rpc::Method::EnumModules);
     if (stream) {
         AppendPod(req, static_cast<uint64_t>(0));
         AppendPod(req, static_cast<uint32_t>(0));
@@ -241,7 +241,7 @@ CommandResult CmdModules(CmdCtx& ctx) {
 
 CommandResult CmdRegions(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     bool stream = false;
@@ -250,7 +250,7 @@ CommandResult CmdRegions(CmdCtx& ctx) {
             stream = true;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpEnumRegions));
+    SetMethod(req, hdl::rpc::Method::EnumRegions);
     if (stream) {
         AppendPod(req, static_cast<uint64_t>(0));
         AppendPod(req, static_cast<uint32_t>(0));
@@ -346,7 +346,7 @@ CommandResult CmdRegions(CmdCtx& ctx) {
 
 CommandResult CmdThreads(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     bool stream = false;
@@ -355,7 +355,7 @@ CommandResult CmdThreads(CmdCtx& ctx) {
             stream = true;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpEnumThreads));
+    SetMethod(req, hdl::rpc::Method::EnumThreads);
     if (stream) {
         AppendPod(req, static_cast<uint64_t>(0));
         AppendPod(req, static_cast<uint32_t>(0));
@@ -446,10 +446,10 @@ CommandResult CmdThreads(CmdCtx& ctx) {
 
 CommandResult CmdHealth(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
-    AppendPod(req, static_cast<uint32_t>(OpGetHealth));
+    SetMethod(req, hdl::rpc::Method::GetHealth);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
@@ -516,7 +516,7 @@ static const char* FpCategoryNameNarrow(uint32_t cat) {
 
 CommandResult CmdFingerprint(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint32_t scan_flags = HDL_FP_SCAN_DEFAULT;
@@ -531,7 +531,7 @@ CommandResult CmdFingerprint(CmdCtx& ctx) {
         }
     }
 
-    AppendPod(req, static_cast<uint32_t>(OpFingerprint));
+    SetMethod(req, hdl::rpc::Method::Fingerprint);
     AppendPod(req, scan_flags);
     if (stream) {
         AppendPod(req, static_cast<uint64_t>(0));
@@ -638,7 +638,7 @@ CommandResult CmdFingerprint(CmdCtx& ctx) {
 
 CommandResult CmdEvents(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint32_t timeout_ms = 0;
@@ -650,7 +650,7 @@ CommandResult CmdEvents(CmdCtx& ctx) {
             max_events = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpPollEvents));
+    SetMethod(req, hdl::rpc::Method::PollEvents);
     AppendPod(req, max_events);
     AppendPod(req, timeout_ms);
     if (!ctx.client.Request(req, resp)) {
@@ -694,65 +694,9 @@ CommandResult CmdEvents(CmdCtx& ctx) {
     return CmdStatus(L"events", st, w.Take());
 }
 
-CommandResult CmdJob(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    std::vector<uint8_t> req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
-        return FailUsage(ctx);
-    }
-    if (wcscmp(ctx.argv[3], L"create") == 0) {
-        uint32_t timeout_ms = 0;
-        for (int i = 4; i < ctx.argc; ++i) {
-            if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
-                timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-            }
-        }
-        AppendPod(req, static_cast<uint32_t>(OpJobCreate));
-        AppendPod(req, timeout_ms);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        uint64_t id = 0;
-        if (!r.TakePod(st) || !r.TakePod(id)) {
-            return FailBadResp(ctx);
-        }
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("job");
-        w.HexStr(id);
-        w.EndObject();
-        return CmdStatus(L"job", st, w.Take());
-    }
-    if (ctx.argc < 5) {
-        return FailUsage(ctx);
-    }
-    const uint64_t id = _wcstoui64(ctx.argv[4], nullptr, 0);
-    AppendPod(
-        req, static_cast<uint32_t>(wcscmp(ctx.argv[3], L"cancel") == 0 ? OpJobCancel : OpJobClose));
-    AppendPod(req, id);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    r.TakePod(st);
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("job");
-    w.HexStr(id);
-    w.Key("action");
-    w.Str(wcscmp(ctx.argv[3], L"cancel") == 0 ? "cancel" : "close");
-    w.EndObject();
-    return CmdStatus(L"job", st, w.Take());
-}
-
 CommandResult CmdRead(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 5) {
@@ -763,7 +707,7 @@ CommandResult CmdRead(CmdCtx& ctx) {
     if (!ParseHexU64(ctx.argv[3], &address) || !ParseHexU64(ctx.argv[4], &size64)) {
         return CmdFail(L"read", HDL_E_INVALID_ARG, L"bad address/size");
     }
-    AppendPod(req, static_cast<uint32_t>(OpReadMemory));
+    SetMethod(req, hdl::rpc::Method::ReadMemory);
     AppendPod(req, address);
     AppendPod(req, static_cast<uint32_t>(size64));
     if (!ctx.client.Request(req, resp)) {
@@ -809,7 +753,7 @@ CommandResult CmdRead(CmdCtx& ctx) {
 
 CommandResult CmdWrite(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 5) {
@@ -842,7 +786,7 @@ CommandResult CmdWrite(CmdCtx& ctx) {
     } else if (!ParseHexBytes(ctx.argv[4], bytes) || bytes.empty()) {
         return CmdFail(L"write", HDL_E_INVALID_ARG, L"bad hex bytes (or use @file)");
     }
-    AppendPod(req, static_cast<uint32_t>(OpWriteMemory));
+    SetMethod(req, hdl::rpc::Method::WriteMemory);
     AppendPod(req, address);
     AppendPod(req, static_cast<uint32_t>(bytes.size()));
     AppendBytes(req, bytes.data(), bytes.size());

@@ -10,8 +10,6 @@ namespace hdl {
 namespace ipc {
 
 bool HandlePing(HANDLE pipe, proto::Reader& r);
-bool HandleHello(HANDLE pipe, proto::Reader& r);
-bool HandleCapabilities(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r);
 bool HandleSetLogFile(HANDLE pipe, proto::Reader& r);
 bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r);
@@ -25,9 +23,6 @@ bool HandleWriteMemory(HANDLE pipe, proto::Reader& r);
 bool HandleEnumRegions(HANDLE pipe, proto::Reader& r);
 bool HandleEnumModules(HANDLE pipe, proto::Reader& r);
 bool HandleFingerprint(HANDLE pipe, proto::Reader& r);
-bool HandleJobCreate(HANDLE pipe, proto::Reader& r);
-bool HandleJobCancel(HANDLE pipe, proto::Reader& r);
-bool HandleJobClose(HANDLE pipe, proto::Reader& r);
 bool HandleGetHealth(HANDLE pipe, proto::Reader& r);
 bool HandleEnumThreads(HANDLE pipe, proto::Reader& r);
 bool HandlePollEvents(HANDLE pipe, proto::Reader& r);

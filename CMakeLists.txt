@@ -34,7 +34,8 @@ endif()
 if(HDL_BUILD_FUZZERS)
   add_compile_definitions(
     _DISABLE_STRING_ANNOTATION
-    _DISABLE_VECTOR_ANNOTATION)
+    _DISABLE_VECTOR_ANNOTATION
+    _DISABLE_OPTIONAL_ANNOTATION)
   execute_process(
     COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
     RESULT_VARIABLE _HDL_CLANG_RESOURCE_RESULT
@@ -53,6 +54,9 @@ if(HDL_ENABLE_CLANG_TIDY)
 endif()
 
 function(hdl_configure_target target_name)
+  set(_HDL_TARGET_OPTIONS HOST_TOOL)
+  cmake_parse_arguments(HDL_TARGET "${_HDL_TARGET_OPTIONS}" "" "" ${ARGN})
+
   target_compile_options(${target_name} PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:/W4>"
     "$<$<COMPILE_LANGUAGE:CXX>:/W4;/EHsc;/permissive->")
@@ -62,7 +66,9 @@ function(hdl_configure_target target_name)
       "$<$<COMPILE_LANGUAGE:C,CXX>:/WX>")
   endif()
 
-  if(HDL_ENABLE_ASAN)
+  # Build-time host tools link against uninstrumented dependency libraries, so
+  # keep sanitizer and coverage instrumentation off those executables.
+  if(HDL_ENABLE_ASAN AND NOT HDL_TARGET_HOST_TOOL)
     if(NOT MSVC)
       message(FATAL_ERROR "HDL_ENABLE_ASAN currently requires the Microsoft C++ compiler")
     endif()
@@ -95,12 +101,12 @@ function(hdl_configure_target target_name)
       "${HDL_CLANG_TIDY_EXECUTABLE};--quiet")
   endif()
 
-  if(HDL_BUILD_FUZZERS)
+  if(HDL_BUILD_FUZZERS AND NOT HDL_TARGET_HOST_TOOL)
     target_compile_options(${target_name} PRIVATE
       "$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=fuzzer-no-link,address>")
   endif()
 
-  if(HDL_ENABLE_COVERAGE)
+  if(HDL_ENABLE_COVERAGE AND NOT HDL_TARGET_HOST_TOOL)
     target_compile_options(${target_name} PRIVATE
       "$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-instr-generate;-fcoverage-mapping>")
     get_target_property(hdl_target_type ${target_name} TYPE)
@@ -112,6 +118,8 @@ function(hdl_configure_target target_name)
         /INCREMENTAL:NO)
     endif()
   endif()
+
+  unset(_HDL_TARGET_OPTIONS)
 endfunction()
 
 function(hdl_configure_fuzzer target_name)
@@ -211,6 +219,38 @@ if(HDL_DISASM_CAPSTONE)
   FetchContent_MakeAvailable(capstone)
 endif()
 
+# First-release named RPC schema/runtime.  Pin the release commit rather than a
+# mutable tag so DependencyPins and OfflineBuild can reproduce it exactly.
+FetchContent_Declare(absl
+  # 20250512.1, commit 76bb24329e8bf5f39704eb10d21b9a80befa7c81.
+  URL https://github.com/abseil/abseil-cpp/archive/76bb24329e8bf5f39704eb10d21b9a80befa7c81.zip
+  URL_HASH SHA256=8c5dffb59465aed858fd8f9c1207f5963a8f9ada8d39cc15877f762c7b444560
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+set(ABSL_MSVC_STATIC_RUNTIME ${HDL_BUILD_FUZZERS} CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(absl)
+
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+set(protobuf_BUILD_LIBPROTOC ON CACHE BOOL "" FORCE)
+# The fuzz preset intentionally uses the static MSVC CRT. Generated messages,
+# Protobuf itself, and every final fuzz executable must agree on that choice.
+set(protobuf_MSVC_STATIC_RUNTIME ${HDL_BUILD_FUZZERS} CACHE BOOL "" FORCE)
+set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+set(utf8_range_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(utf8_range_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(protobuf
+  # Official v35.0 release archive for commit
+  # e59364c38e10de3686a3305ff11fbfc59a10dbd8.
+  URL https://github.com/protocolbuffers/protobuf/releases/download/v35.0/protobuf-35.0.zip
+  URL_HASH SHA256=20f10bb6ba69c391add381310d10747d4b0c32660ad651932ffcb9d04b748845
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(protobuf)
+
 # Vendored MinHook v1.3.4, upstream commit c3fcafdc10146beb5919319d0683e44e3c30d537.
 # Its upstream CMake package metadata still reports 1.3.3; the source tag is authoritative.
 if(DEFINED BUILD_SHARED_LIBS)
@@ -235,6 +275,89 @@ else()
 endif()
 unset(_HDL_SAVED_CMAKE_POLICY_VERSION_MINIMUM)
 unset(_HDL_CMAKE_POLICY_VERSION_MINIMUM_WAS_DEFINED)
+
+set(HDL_RPC_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
+set(HDL_RPC_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS
+  "${protobuf_SOURCE_DIR}"
+  "${protobuf_SOURCE_DIR}/upb/reflection/cmake"
+  "${absl_SOURCE_DIR}"
+  "${protobuf_SOURCE_DIR}/src"
+  "${protobuf_SOURCE_DIR}/third_party/utf8_range")
+set(HDL_RPC_PROTO_FILES
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/common.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/envelope.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/services.proto")
+set(HDL_RPC_PROTO_SOURCES
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/common.pb.cc"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/envelope.pb.cc"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.pb.cc")
+set(HDL_RPC_PROTO_HEADERS
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/common.pb.h"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/envelope.pb.h"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.pb.h")
+set(HDL_RPC_BINDING_OUTPUTS
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.hpp"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.dispatch.inc")
+
+add_executable(hdl_rpc_codegen tools/rpc_codegen/main.cpp)
+target_link_libraries(hdl_rpc_codegen PRIVATE protobuf::libprotoc protobuf::libprotobuf)
+target_include_directories(hdl_rpc_codegen SYSTEM PRIVATE
+  ${HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS})
+hdl_configure_target(hdl_rpc_codegen HOST_TOOL)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  # MSVC 14.51 reports C4702 from Abseil template expansion even when its
+  # include roots are external; keep that dependency diagnostic out of /WX.
+  target_compile_options(hdl_rpc_codegen PRIVATE /wd4702)
+endif()
+
+add_custom_command(
+  OUTPUT ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS}
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${HDL_RPC_GENERATED_DIR}"
+  COMMAND $<TARGET_FILE:protobuf::protoc>
+    --proto_path=${HDL_RPC_PROTO_ROOT}
+    --cpp_out=${HDL_RPC_GENERATED_DIR}
+    ${HDL_RPC_PROTO_FILES}
+  DEPENDS protobuf::protoc ${HDL_RPC_PROTO_FILES}
+  VERBATIM
+  COMMENT "Generating hdllib Protobuf Lite messages")
+
+add_custom_command(
+  OUTPUT ${HDL_RPC_BINDING_OUTPUTS}
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+    "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1"
+  COMMAND $<TARGET_FILE:protobuf::protoc>
+    --proto_path=${HDL_RPC_PROTO_ROOT}
+    --plugin=protoc-gen-hdl_rpc=$<TARGET_FILE:hdl_rpc_codegen>
+    --hdl_rpc_out=${HDL_RPC_GENERATED_DIR}
+    ${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/services.proto
+  DEPENDS protobuf::protoc hdl_rpc_codegen ${HDL_RPC_PROTO_FILES}
+  VERBATIM
+  COMMENT "Generating hdllib named RPC bindings")
+
+add_custom_target(hdl_rpc_generated
+  DEPENDS ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS} ${HDL_RPC_BINDING_OUTPUTS})
+
+add_library(hdl_rpc_proto STATIC ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS})
+add_dependencies(hdl_rpc_proto hdl_rpc_generated)
+target_include_directories(hdl_rpc_proto PUBLIC
+  "${HDL_RPC_GENERATED_DIR}")
+target_include_directories(hdl_rpc_proto SYSTEM PUBLIC
+  ${HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS})
+target_link_libraries(hdl_rpc_proto PUBLIC protobuf::libprotobuf-lite)
+
+add_library(hdl_rpc_runtime STATIC
+  src/rpc/runtime.cpp
+  src/ipc/framing.cpp)
+add_dependencies(hdl_rpc_runtime hdl_rpc_generated)
+target_include_directories(hdl_rpc_runtime
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR})
+target_compile_definitions(hdl_rpc_runtime PRIVATE UNICODE _UNICODE)
+hdl_configure_target(hdl_rpc_runtime)
+target_link_libraries(hdl_rpc_runtime PUBLIC hdl_rpc_proto advapi32 bcrypt)
 
 set(HDL_INJECT_SOURCES
   src/inject.cpp
@@ -273,10 +396,12 @@ target_include_directories(hdl_inject
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR}
 )
+add_dependencies(hdl_inject hdl_rpc_generated)
 target_compile_definitions(hdl_inject PRIVATE UNICODE _UNICODE)
 hdl_configure_target(hdl_inject)
-target_link_libraries(hdl_inject PUBLIC Psapi Advapi32)
+target_link_libraries(hdl_inject PUBLIC Psapi Advapi32 PRIVATE hdl_rpc_runtime)
 
 set(HDL_DOMAIN_SOURCES
   src/core.cpp
@@ -287,7 +412,6 @@ set(HDL_DOMAIN_SOURCES
   src/hooks.cpp
   src/hooks_trace.asm
   src/ipc_server.cpp
-  src/ipc/framing.cpp
   src/ipc/common.cpp
   src/ipc/server.cpp
   src/ipc/dispatch.cpp
@@ -334,10 +458,12 @@ target_include_directories(hdl_domain_obj
     $<INSTALL_INTERFACE:include>
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR}
 )
+add_dependencies(hdl_domain_obj hdl_rpc_generated)
 target_compile_definitions(hdl_domain_obj PRIVATE UNICODE _UNICODE)
 hdl_configure_target(hdl_domain_obj)
-target_link_libraries(hdl_domain_obj PUBLIC hdl_inject minhook)
+target_link_libraries(hdl_domain_obj PUBLIC hdl_inject minhook hdl_rpc_runtime)
 
 add_library(hdllib SHARED
   src/dllmain.cpp
@@ -355,7 +481,7 @@ target_include_directories(hdllib
 
 target_compile_definitions(hdllib PRIVATE HDL_EXPORTS UNICODE _UNICODE)
 hdl_configure_target(hdllib)
-target_link_libraries(hdllib PRIVATE hdl_inject minhook)
+target_link_libraries(hdllib PRIVATE hdl_inject minhook hdl_rpc_runtime)
 set_target_properties(hdllib PROPERTIES OUTPUT_NAME hdllib)
 
 if(HDL_DISASM_ZYDIS)
@@ -383,7 +509,10 @@ if(HDL_BUILD_FUZZERS)
   add_executable(hdl_fuzz_ipc tests/fuzz/fuzz_ipc.cpp)
   target_include_directories(hdl_fuzz_ipc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR})
+  add_dependencies(hdl_fuzz_ipc hdl_rpc_generated)
+  target_link_libraries(hdl_fuzz_ipc PRIVATE hdl_rpc_proto)
   hdl_configure_fuzzer(hdl_fuzz_ipc)
 
   add_executable(hdl_fuzz_search
@@ -394,7 +523,7 @@ if(HDL_BUILD_FUZZERS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_compile_definitions(hdl_fuzz_search PRIVATE HDL_DOMAIN_TESTS UNICODE _UNICODE)
   hdl_configure_fuzzer(hdl_fuzz_search)
-  target_link_libraries(hdl_fuzz_search PRIVATE hdl_inject minhook advapi32)
+  target_link_libraries(hdl_fuzz_search PRIVATE hdl_inject minhook hdl_rpc_runtime advapi32)
 
   add_executable(hdl_fuzz_pe
     tests/fuzz/fuzz_pe.cpp
@@ -416,7 +545,7 @@ if(HDL_BUILD_FUZZERS)
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/client)
   target_compile_definitions(hdl_fuzz_json PRIVATE HDL_DOMAIN_TESTS UNICODE _UNICODE)
   hdl_configure_fuzzer(hdl_fuzz_json)
-  target_link_libraries(hdl_fuzz_json PRIVATE hdl_inject minhook advapi32)
+  target_link_libraries(hdl_fuzz_json PRIVATE hdl_inject minhook hdl_rpc_runtime advapi32)
 
   add_executable(hdl_fuzz_invocation
     tests/fuzz/fuzz_invocation.cpp
@@ -476,10 +605,12 @@ if(HDL_BUILD_TOOLS)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
+    ${HDL_RPC_GENERATED_DIR}
   )
+  add_dependencies(hdlclient hdl_rpc_generated)
   target_compile_definitions(hdlclient PRIVATE UNICODE _UNICODE)
   hdl_configure_target(hdlclient)
-  target_link_libraries(hdlclient PRIVATE hdl_inject user32 advapi32)
+  target_link_libraries(hdlclient PRIVATE hdl_inject hdl_rpc_runtime user32 advapi32)
 endif()
 
 if(HDL_BUILD_TESTS)
@@ -507,7 +638,7 @@ if(HDL_BUILD_TESTS)
   )
   target_compile_definitions(hdl_tests PRIVATE UNICODE _UNICODE HDL_DOMAIN_TESTS)
   hdl_configure_target(hdl_tests)
-  target_link_libraries(hdl_tests PRIVATE hdl_inject minhook advapi32)
+  target_link_libraries(hdl_tests PRIVATE hdl_inject minhook hdl_rpc_runtime advapi32)
   if(HDL_DISASM_ZYDIS)
     target_compile_definitions(hdl_tests PRIVATE HDL_HAS_ZYDIS)
     target_link_libraries(hdl_tests PRIVATE Zydis)
@@ -623,9 +754,12 @@ if(HDL_BUILD_TESTS)
   target_include_directories(hdl_pe_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR}
   )
+  add_dependencies(hdl_pe_tests hdl_rpc_generated)
   target_compile_definitions(hdl_pe_tests PRIVATE UNICODE _UNICODE)
   hdl_configure_target(hdl_pe_tests)
+  target_link_libraries(hdl_pe_tests PRIVATE hdl_rpc_runtime)
   add_test(NAME hdl_pe_tests COMMAND hdl_pe_tests)
   set_tests_properties(hdl_pe_tests PROPERTIES
     TIMEOUT 30
@@ -656,17 +790,19 @@ if(HDL_BUILD_TESTS)
     TIMEOUT 30
     LABELS "headless;unit;client")
 
-  add_executable(hdl_ops_manifest_tests tests/ops_manifest_test.cpp)
-  target_include_directories(hdl_ops_manifest_tests PRIVATE
+  add_executable(hdl_rpc_schema_tests tests/rpc_schema_test.cpp)
+  target_include_directories(hdl_rpc_schema_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR}
   )
   string(REPLACE "\\" "/" _hdl_handlers_hpp "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc/handlers.hpp")
-  target_compile_definitions(hdl_ops_manifest_tests PRIVATE
+  target_compile_definitions(hdl_rpc_schema_tests PRIVATE
     UNICODE _UNICODE
     "HDL_HANDLERS_HPP=\"${_hdl_handlers_hpp}\"")
-  hdl_configure_target(hdl_ops_manifest_tests)
-  add_test(NAME hdl_ops_manifest_tests COMMAND hdl_ops_manifest_tests)
-  set_tests_properties(hdl_ops_manifest_tests PROPERTIES
+  add_dependencies(hdl_rpc_schema_tests hdl_rpc_generated)
+  hdl_configure_target(hdl_rpc_schema_tests)
+  add_test(NAME hdl_rpc_schema_tests COMMAND hdl_rpc_schema_tests)
+  set_tests_properties(hdl_rpc_schema_tests PROPERTIES
     TIMEOUT 30
     LABELS "headless;unit")
 
@@ -704,7 +840,9 @@ if(HDL_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/client
       ${CMAKE_CURRENT_SOURCE_DIR}/tests
+      ${HDL_RPC_GENERATED_DIR}
     )
+    add_dependencies(hdl_client_tests hdl_rpc_generated)
     target_compile_definitions(hdl_client_tests PRIVATE UNICODE _UNICODE)
     if(HDL_DISASM_ZYDIS)
       target_compile_definitions(hdl_client_tests PRIVATE HDL_HAS_ZYDIS)
@@ -713,7 +851,7 @@ if(HDL_BUILD_TESTS)
       target_compile_definitions(hdl_client_tests PRIVATE HDL_HAS_CAPSTONE)
     endif()
     hdl_configure_target(hdl_client_tests)
-    target_link_libraries(hdl_client_tests PRIVATE hdl_inject advapi32)
+    target_link_libraries(hdl_client_tests PRIVATE hdl_inject hdl_rpc_runtime advapi32)
     add_dependencies(hdl_client_tests hdlclient hdllib hdl_test_target)
     add_custom_command(TARGET hdl_client_tests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -750,7 +888,7 @@ if(HDL_BUILD_TOYS)
     )
     target_compile_definitions(hdl_toy_tests PRIVATE UNICODE _UNICODE)
     hdl_configure_target(hdl_toy_tests)
-    target_link_libraries(hdl_toy_tests PRIVATE hdl_inject advapi32)
+    target_link_libraries(hdl_toy_tests PRIVATE hdl_inject hdl_rpc_runtime advapi32)
     add_dependencies(hdl_toy_tests hdlclient hdllib hdl_toy_arena)
     add_custom_command(TARGET hdl_toy_tests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different

@@ -169,7 +169,7 @@ void CoreOnIpcServerExited() {
 
 void CoreShutdownDetach() {
     /* Loader lock: no locks, joins, MinHook, VirtualProtect, or heap teardown.
-     * Explicit OpShutdown (or CoreShutdown) must have run before FreeLibrary. */
+     * Explicit Control.Shutdown (or CoreShutdown) must have run before FreeLibrary. */
 }
 
 bool CoreIsInitialized() {

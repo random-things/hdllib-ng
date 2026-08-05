@@ -125,4 +125,13 @@ SARIF upload action match `.github/codeql/toolchain.json`.
 `OfflineBuild` first populates the selected FetchContent cache, then configures a
 fresh build tree with `FETCHCONTENT_FULLY_DISCONNECTED=ON`, builds it, and runs
 headless tests. `CodeQL` always uses the same local database/analyze path in CI
-and on a developer machine; GitHub only uploads the resulting SARIF.
+and on a developer machine; GitHub only uploads the resulting SARIF. Its default
+C/C++ `none` build mode scans checked-in runtime, client, test, and toy source
+without compiling large pinned dependencies. The build-only Protobuf generator
+is excluded because buildless extraction cannot resolve its `libprotoc` headers.
+For a configuration-specific traced database, use the manual fallback from a
+configured VS developer shell:
+
+```powershell
+./tools/ci/run-codeql.ps1 -BuildMode manual
+```

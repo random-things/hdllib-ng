@@ -5,8 +5,8 @@
 #include "log.hpp"
 #include "session_modules.hpp"
 
-#include "hdllib/pipe_name.h"
 #include "hdllib/hdllib.h"
+#include "hdllib/pipe_name.h"
 #include "pipe_client.hpp"
 #include "protocol.hpp"
 
@@ -106,15 +106,24 @@ static int MethodFromName(const wchar_t* name) {
 
 static const wchar_t* StatusName(HdlStatus st) {
     switch (st) {
-    case HDL_OK: return L"OK";
-    case HDL_E_INVALID_ARG: return L"INVALID_ARG";
-    case HDL_E_ACCESS: return L"ACCESS";
-    case HDL_E_NOT_FOUND: return L"NOT_FOUND";
-    case HDL_E_NO_MEM: return L"NO_MEM";
-    case HDL_E_BUSY: return L"BUSY";
-    case HDL_E_FAILED: return L"FAILED";
-    case HDL_E_BUFFER_SMALL: return L"BUFFER_SMALL";
-    default: return L"?";
+    case HDL_OK:
+        return L"OK";
+    case HDL_E_INVALID_ARG:
+        return L"INVALID_ARG";
+    case HDL_E_ACCESS:
+        return L"ACCESS";
+    case HDL_E_NOT_FOUND:
+        return L"NOT_FOUND";
+    case HDL_E_NO_MEM:
+        return L"NO_MEM";
+    case HDL_E_BUSY:
+        return L"BUSY";
+    case HDL_E_FAILED:
+        return L"FAILED";
+    case HDL_E_BUFFER_SMALL:
+        return L"BUFFER_SMALL";
+    default:
+        return L"?";
     }
 }
 
@@ -138,8 +147,8 @@ static bool StageStealthDll(const wchar_t* src_full, wchar_t* out_path, size_t o
     if (tlen == 0 || tlen >= MAX_PATH) {
         return false;
     }
-    const uint32_t tag =
-        HdlPipeNameHash(GetCurrentProcessId() ^ GetTickCount() ^ static_cast<uint32_t>(src_full[0]));
+    const uint32_t tag = HdlPipeNameHash(GetCurrentProcessId() ^ GetTickCount() ^
+                                         static_cast<uint32_t>(src_full[0]));
     if (swprintf_s(out_path, out_cch, L"%sdrvstore_%08X.dll", temp, static_cast<unsigned>(tag)) <
         0) {
         return false;
@@ -159,8 +168,8 @@ static void PrintPipe(uint32_t pid) {
     wprintf(L"Pipe: %ls\n", pipe);
 }
 
-static int RunRecommend(const HdlTargetSpec& spec, const wchar_t* dll_path,
-                        const char* hook_export, bool stealth) {
+static int RunRecommend(const HdlTargetSpec& spec, const wchar_t* dll_path, const char* hook_export,
+                        bool stealth) {
     uint32_t pid = 0;
     HWND hwnd = nullptr;
     const HdlStatus rst = hdl::inject::ResolveTarget(&spec, &pid, &hwnd);
@@ -456,7 +465,7 @@ Usage:
 
 Notes:
   Uses CreateRemoteThread(FreeLibrary) (or FreeLibrary in-process for pid 0/self).
-  For hdllib, OpShutdown is sent first (when the pipe is up) so hooks/patches/watches
+  For hdllib, Control.Shutdown is sent first (when the pipe is up) so hooks/patches/watches
   are restored outside the loader lock before FreeLibrary.
   --modules / HDL_SHUTDOWN_UNLOAD_MODULES also FreeLibrary tracked payload DLLs first.
   --reload / the reload subcommand loads the same path again after unload.
@@ -491,9 +500,9 @@ int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
         PipeClient client(pid);
         if (client.Connect(2000)) {
             for (const auto& m : hdlcli::ListInjectedModules(pid)) {
-                std::vector<uint8_t> req;
+                hdl::rpc::PreparedRequest req;
                 std::vector<uint8_t> resp;
-                hdl::proto::AppendPod(req, static_cast<uint32_t>(hdl::proto::OpTrackLoadedDll));
+                hdl::rpc::SetMethod(req, hdl::rpc::Method::TrackLoadedDll);
                 hdl::proto::AppendPod(req, m.base);
                 hdl::proto::AppendWString(req, m.path.c_str());
                 client.Request(req, resp);
