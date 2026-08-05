@@ -16,6 +16,44 @@
 
 namespace hdl {
 namespace ipc {
+namespace {
+
+template <typename T>
+HdlStatus EnumerateAll(HdlStatus (*enumerate)(T*, uint32_t*), std::vector<T>* values) {
+    values->clear();
+    uint32_t required = 0;
+    HdlStatus st = enumerate(nullptr, &required);
+    if (st != HDL_OK && st != HDL_E_BUFFER_SMALL) {
+        return st;
+    }
+
+    constexpr uint32_t kGrowthSlack = 64;
+    constexpr int kMaxAttempts = 4;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (required == 0) {
+            return HDL_OK;
+        }
+        // The collection can grow between the size query and fill call. For regions,
+        // allocating this vector can itself add mappings to the process being queried.
+        const uint32_t capacity =
+            required <= UINT32_MAX - kGrowthSlack ? required + kGrowthSlack : required;
+        values->resize(capacity);
+        uint32_t count = capacity;
+        st = enumerate(values->data(), &count);
+        if (st == HDL_OK) {
+            values->resize(count);
+            return HDL_OK;
+        }
+        values->clear();
+        if (st != HDL_E_BUFFER_SMALL) {
+            return st;
+        }
+        required = count;
+    }
+    return HDL_E_BUFFER_SMALL;
+}
+
+} // namespace
 
 bool HandlePing(HANDLE pipe, proto::Reader& r) {
     using namespace proto;
@@ -212,10 +250,9 @@ bool HandleEnumRegions(HANDLE pipe, proto::Reader& r) {
     (void)job_id;
     (void)timeout_ms;
 
-    uint32_t count = 0;
-    EnumRegions(nullptr, &count);
-    std::vector<HdlRegionInfo> regions(count);
-    const HdlStatus st = count ? EnumRegions(regions.data(), &count) : HDL_OK;
+    std::vector<HdlRegionInfo> regions;
+    const HdlStatus st = EnumerateAll(&EnumRegions, &regions);
+    const uint32_t count = static_cast<uint32_t>(regions.size());
 
     if (flags & HDL_IPC_REQ_STREAM) {
         return WriteStreamed(pipe, st, regions.data(), count, 64);
@@ -240,10 +277,9 @@ bool HandleEnumModules(HANDLE pipe, proto::Reader& r) {
     (void)job_id;
     (void)timeout_ms;
 
-    uint32_t count = 0;
-    EnumModules(nullptr, &count);
-    std::vector<HdlModuleInfo> modules(count);
-    const HdlStatus st = count ? EnumModules(modules.data(), &count) : HDL_OK;
+    std::vector<HdlModuleInfo> modules;
+    const HdlStatus st = EnumerateAll(&EnumModules, &modules);
+    const uint32_t count = static_cast<uint32_t>(modules.size());
 
     if (flags & HDL_IPC_REQ_STREAM) {
         return WriteStreamed(pipe, st, modules.data(), count, 16);
@@ -317,10 +353,9 @@ bool HandleEnumThreads(HANDLE pipe, proto::Reader& r) {
     (void)job_id;
     (void)timeout_ms;
 
-    uint32_t count = 0;
-    EnumThreads(nullptr, &count);
-    std::vector<HdlThreadInfo> threads(count);
-    const HdlStatus st = count ? EnumThreads(threads.data(), &count) : HDL_OK;
+    std::vector<HdlThreadInfo> threads;
+    const HdlStatus st = EnumerateAll(&EnumThreads, &threads);
+    const uint32_t count = static_cast<uint32_t>(threads.size());
 
     if (flags & HDL_IPC_REQ_STREAM) {
         return WriteStreamed(pipe, st, threads.data(), count, 32);

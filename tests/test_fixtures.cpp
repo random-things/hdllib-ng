@@ -69,12 +69,14 @@ static bool EnsureWorldReadable(const wchar_t* path) {
 }
 
 std::wstring PreparePayloadDll(const std::wstring& built_dll) {
-    wchar_t temp[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, temp) == 0) {
+    const size_t separator = built_dll.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) {
         return built_dll;
     }
-    std::wstring dir = std::wstring(temp) + L"hdllib_test_payload";
-    CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring dir = built_dll.substr(0, separator) + L"\\hdl_test_payload";
+    if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        return built_dll;
+    }
     EnsureWorldReadable(dir.c_str());
 
     std::wstring dest = dir + L"\\hdllib.dll";

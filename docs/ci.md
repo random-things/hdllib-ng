@@ -97,6 +97,28 @@ Only trusted `main` code is sent to the persistent interactive machine. Pull
 requests run on GitHub-hosted runners. Restrict the runner group to this
 repository and do not grant the runner account unrelated secrets or admin rights.
 
+### Exclude the injection build tree from antivirus scanning
+
+Live injection deliberately exercises behavior that endpoint protection treats
+as hostile. Microsoft Defender, for example, reports the matrix as
+`Behavior:Win32/DefenseEvasion.A!ml` and quarantines `hdllib.dll` while the tests
+are still running. The later lifecycle and toy tests then fail with misleading
+missing-DLL messages.
+
+Configure a path exclusion only for the checkout's generated `build` directory.
+Payload copies are staged below that directory so source files and unrelated
+runner workspaces remain scanned. From an elevated PowerShell in the persistent
+self-hosted checkout, run this once:
+
+```powershell
+./tools/ci/configure-injection-runner.ps1
+```
+
+The GUI checks verify the registered build root before compiling, while the
+runner itself can continue to run without administrator rights. To remove both
+the Defender exclusion and its machine configuration marker, run the same script
+elevated with `-Remove`.
+
 ## Coverage and fuzzing
 
 `FuzzSmoke` runs each clang-cl/libFuzzer harness for 5,000 iterations;

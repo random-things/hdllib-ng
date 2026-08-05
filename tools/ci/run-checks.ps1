@@ -282,6 +282,11 @@ function Assert-InteractiveDesktop {
     & (Join-Path $PSScriptRoot 'assert-interactive-desktop.ps1')
 }
 
+function Assert-InjectionAntivirus {
+    & (Join-Path $PSScriptRoot 'assert-injection-antivirus.ps1') `
+        -BuildRoot (Join-Path $repoRoot 'build')
+}
+
 function Invoke-FuzzerCheck {
     param([bool]$Extended)
     Import-VisualStudioEnvironment
@@ -361,10 +366,12 @@ function Invoke-RegisteredCheck {
         'ReleaseHeadless' { Invoke-CMakeCheck 'ci-windows' 'ci-windows' 'ci-headless' }
         'GuiSmoke' {
             Assert-InteractiveDesktop
+            Assert-InjectionAntivirus
             Invoke-CMakeCheck 'ci-gui' 'ci-gui' 'ci-gui-smoke'
         }
         'GuiStress' {
             Assert-InteractiveDesktop
+            Assert-InjectionAntivirus
             Invoke-CMakeCheck 'ci-gui' 'ci-gui' $null
             Invoke-Native ctest @('--preset', 'ci-gui-smoke', '--repeat', 'until-fail:3')
             Invoke-Native ctest @('--preset', 'ci-gui-full')
@@ -379,6 +386,7 @@ function Invoke-RegisteredCheck {
         }
         'AsanGuiLifecycle' {
             Assert-InteractiveDesktop
+            Assert-InjectionAntivirus
             Invoke-CMakeCheck 'ci-asan-gui' 'ci-asan-gui' $null
             & (Join-Path $PSScriptRoot 'add-msvc-asan-runtime-to-path.ps1')
             $env:ASAN_OPTIONS = 'halt_on_error=1'
