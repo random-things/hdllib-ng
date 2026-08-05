@@ -8,9 +8,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     if (_wcsicmp(ctx.argv[3], L"refresh") == 0) {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpWatchRefresh));
+        SetMethod(req, hdl::rpc::Method::WatchRefresh);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -29,9 +29,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
                 timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
             }
         }
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPollWatchHits));
+        SetMethod(req, hdl::rpc::Method::PollWatchHits);
         AppendPod(req, max_hits);
         AppendPod(req, timeout_ms);
         if (!ctx.client.Request(req, resp)) {
@@ -84,9 +84,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
         return CmdStatus(ctx.cmd.c_str(), st, w.Take());
     }
     if (_wcsicmp(ctx.argv[3], L"list") == 0) {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpEnumWatches));
+        SetMethod(req, hdl::rpc::Method::EnumWatches);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -132,9 +132,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
     }
     if (_wcsicmp(ctx.argv[3], L"unwatch") == 0 && ctx.argc >= 5) {
         const uint64_t handle = _wcstoui64(ctx.argv[4], nullptr, 0);
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpUnwatch));
+        SetMethod(req, hdl::rpc::Method::Unwatch);
         AppendPod(req, handle);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
@@ -165,9 +165,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
                 tid = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
             }
         }
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpWatchHw));
+        SetMethod(req, hdl::rpc::Method::WatchHw);
         AppendPod(req, addr);
         AppendPod(req, size);
         AppendPod(req, access);
@@ -202,9 +202,9 @@ CommandResult CmdWatch(CmdCtx& ctx) {
                 }
             }
         }
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpWatchPage));
+        SetMethod(req, hdl::rpc::Method::WatchPage);
         AppendPod(req, addr);
         AppendPod(req, size);
         AppendPod(req, mode);

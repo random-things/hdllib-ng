@@ -23,7 +23,6 @@ static const CmdEntry kCommands[] = {
     {L"health", CmdHealth},
     {L"fingerprint", CmdFingerprint},
     {L"events", CmdEvents},
-    {L"job", CmdJob},
     {L"read", CmdRead},
     {L"write", CmdWrite},
     {L"resolve", CmdResolve},

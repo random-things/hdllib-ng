@@ -59,7 +59,8 @@ above are for exploratory developer builds, not CI parity.
 ```mermaid
 flowchart LR
     Types["hdllib.h types/enums"] --> Domain["src domain implementation"]
-    Opcode["protocol.hpp opcode"] --> Dispatch["ipc/dispatch.cpp"]
+    Schema["services.proto named method"] --> Generate["rpc code generator"]
+    Generate --> Dispatch["ipc/dispatch.cpp"]
     Dispatch --> Handler["ipc/handlers_*.cpp"]
     Handler --> Domain
 
@@ -85,11 +86,13 @@ The named pipe is the sole remote control channel. `api.cpp` only exports
    [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) when wire types change.
 2. Implement the operation in its domain `.cpp`/`.hpp`. Keep process mechanics
    out of adapters.
-3. Assign an explicit opcode in [`src/protocol.hpp`](../src/protocol.hpp).
-   Never renumber existing opcodes.
-4. Declare the handler in [`src/ipc/handlers.hpp`](../src/ipc/handlers.hpp),
-   implement it in the matching `handlers_*.cpp`, and register it in
-   [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp).
+3. Declare the named RPC under the appropriate service in
+   [`proto/hdl/rpc/v1/services.proto`](../proto/hdl/rpc/v1/services.proto).
+   Method identity is generated from the schema; do not add a parallel numeric
+   registry or handwritten dispatch entry.
+4. Declare the handler in [`src/ipc/handlers.hpp`](../src/ipc/handlers.hpp) and
+   implement it in the matching `handlers_*.cpp`. The generated dispatch include
+   connects the schema method to the matching `Handle<Method>` function.
 5. Update client serialization or add a `Cmd*` handler in the matching
    [`tools/client/cmds_*.cpp`](../tools/client/) file. Register human-facing
    commands in [`tools/client/main.cpp`](../tools/client/main.cpp) and document
@@ -104,7 +107,7 @@ The named pipe is the sole remote control channel. `api.cpp` only exports
 
 | Operation family | Handler file | Client command file |
 |---|---|---|
-| Lifecycle, injection, memory basics, health, fingerprint, jobs | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp) | [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp), injection in [`local_inject.cpp`](../tools/client/local_inject.cpp) |
+| Lifecycle, injection, memory basics, health, fingerprint | [`handlers_basic.cpp`](../src/ipc/handlers_basic.cpp) | [`cmds_basic.cpp`](../tools/client/cmds_basic.cpp), injection in [`local_inject.cpp`](../tools/client/local_inject.cpp) |
 | Search sessions | [`handlers_search.cpp`](../src/ipc/handlers_search.cpp) | [`cmds_scan.cpp`](../tools/client/cmds_scan.cpp) |
 | Calls, alloc, resolution | [`handlers_call.cpp`](../src/ipc/handlers_call.cpp) | [`cmds_call.cpp`](../tools/client/cmds_call.cpp) |
 | Hooks | [`handlers_hooks.cpp`](../src/ipc/handlers_hooks.cpp) | [`cmds_hooks.cpp`](../tools/client/cmds_hooks.cpp) |
@@ -191,7 +194,7 @@ Long scans and graph/discover traversals should accept a cancel token or job,
 call `JobCheck`/`TokenCheck` inside loops, and preserve
 `HDL_E_CANCELLED`/`HDL_E_TIMEOUT`.
 
-If an opcode supports streaming, keep both modes:
+If a schema method supports streaming, keep both delivery modes:
 
 - Non-streaming callers receive one ordinary response.
 - Streaming callers receive ordered chunks with stable `total`, `offset`, and
@@ -205,7 +208,7 @@ When adding process-local runtime state:
 - Add it to the correct shutdown path in [`core.cpp`](../src/core.cpp)
   (`BeginShutdown` / `CoreShutdownPrepare` + `CoreShutdownFinish`, or
   `CoreShutdownDetach` for loader-lock residual) or IPC server cleanup.
-  Remote prepare is `OpShutdown`; do not rely on `DLL_PROCESS_DETACH` alone for
+  Remote prepare is `Control/Shutdown`; do not rely on `DLL_PROCESS_DETACH` alone for
   MinHook / VEH / IPC join.
 - Define whether handles survive enable/disable and whether removal restores
   target memory/protection.
@@ -247,7 +250,7 @@ Read these files together before editing:
 
 | Change | Required context set |
 |---|---|
-| Opcode or payload | `hdllib.h`, `protocol.hpp`, `dispatch.cpp`, matching handler, client serializer, `capabilities.md`, live tests |
+| RPC method or payload | `services.proto`, generated RPC metadata, `dispatch.cpp`, matching handler, client serializer, `rpc.md`, `capabilities.md`, live tests |
 | Search semantics | `hdllib.h` search enums/structs, `memory.cpp`, `handlers_search.cpp`, `cmds_scan.cpp`, discover scan composition, local/client tests |
 | Address filtering or memory safety | `memory.cpp`, `resolve.cpp`, `locate.cpp`, `place.cpp`, `graph.cpp`, `discover.cpp` |
 | Function-boundary/disassembly logic | `disasm/`, `code.cpp`, `graph.cpp`, discover ranking/synthesis, both backend configurations |
@@ -260,7 +263,8 @@ Read these files together before editing:
 
 When behavior changes:
 
-- Update [capabilities.md](capabilities.md) for ABI/opcode/wire details.
+- Update [rpc.md](rpc.md) and [capabilities.md](capabilities.md) for schema, ABI,
+  or wire details.
 - Update [client.md](client.md) for commands, workflows, recipes, or store schema.
 - Update the injection technique page and index for injection changes.
 - Update this index when ownership or file routing changes.

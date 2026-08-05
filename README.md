@@ -2,7 +2,7 @@
 
 Injectable x64 helper DLL for Windows. Load it into a target process to get memory search, module/region/PE enumeration, passive process fingerprinting (language/runtime/UI/graphics/engine tags), code caves and nearby alloc, pluggable disassembly (Zydis/Capstone), stubs and a reversible patch ledger, function/xref heuristics, vtable/RTTI helpers, hardware and page watchpoints, DLL injection, MinHook-based function hooks (including capture/trace hooks with stack frames), process/thread health, in-process calls (absolute address / export / vtable, floats, UI-thread dispatch), address helpers, durable scratch alloc, and a multi-client named-pipe control channel. The pipe is the sole remote control surface. `hdlclient` adds an interest store and place/stitch/discover recipes on top. The DLL exports only inject-technique callbacks (`HdlHookProc`, `HdlWinEventProc`); shared types live in `hdllib.h`.
 
-Capability reference (opcodes **1…100** from `protocol.hpp`, wire formats, place/code/observe, store/recipes): [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
+Named protobuf RPC contract: [docs/rpc.md](docs/rpc.md). Capability and payload reference: [docs/capabilities.md](docs/capabilities.md). CLI / discover / recipe workflows: [docs/client.md](docs/client.md).
 
 ## Build
 
@@ -121,19 +121,19 @@ Only inject-technique callbacks are exported from `hdllib.dll`:
 | `HdlHookProc` | Default `SetWindowsHookEx` callback |
 | `HdlWinEventProc` | Default `SetWinEventHook` callback |
 
-Shared statuses, enums, and POD shapes for the pipe protocol live in `include/hdllib/hdllib.h` (not a linkable control SDK). Controller inject/recommend helpers are in `hdl_inject` / `hdlclient inject`.
+Shared statuses, enums, and domain shapes live in `include/hdllib/hdllib.h` (not a linkable control SDK). Controller inject/recommend helpers are in `hdl_inject` / `hdlclient inject`.
 
 ## IPC protocol
 
-Length-prefixed frames: `uint32_t size` + payload. Payload starts with `uint32_t opcode`; reply starts with `int32_t status`. Opcodes **1…95** plus parity ops **96…100** (`OpSetLogFile`, `OpSetHealthVeh`, `OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook`). See `src/protocol.hpp` and `src/ipc/` (handlers by domain).
+Connections start with the `HDLRPC1\n` preface and protobuf `ClientHello` / `ServerHello` negotiation. Subsequent length-prefixed protobuf envelopes identify calls by schema-generated names such as `hdl.rpc.v1.Memory/ReadMemory`; there are no numeric opcodes. The first-release schema is under `proto/hdl/rpc/v1/`, and its generated method inventory drives both dispatch and client request construction.
 
-**Full capability reference** (all opcodes, wire layouts, search/locate/discover/call/hook/place/code surfaces): [docs/capabilities.md](docs/capabilities.md).
+**Full capability reference** (all named services, wire layouts, and search/locate/discover/call/hook/place/code surfaces): [docs/capabilities.md](docs/capabilities.md).
 
-The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Administrators, and the process user (not Everyone). Long ops accept an optional trailer: `job_id`, `timeout_ms`, `flags` (`HDL_IPC_REQ_STREAM` yields chunked replies with `HDL_IPC_MORE`).
+The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Administrators, and the process user (not Everyone). `Request.timeout_ms` is optional; search methods have no default deadline. Streaming is represented by a sequence of `Response` envelopes with the same request ID and an explicit `end_stream` marker.
 
-`OpInjectDll` payload: `pid`, `method`, `dll_path`, `exe_path`, `hook_export`. Reply: `status`, `base`, `out_pid`.
+`hdl.rpc.v1.Injection/InjectDll` carries `pid`, `method`, `dll_path`, `exe_path`, and `hook_export`. Its reply carries `status`, `base`, and `out_pid`.
 
-`OpUnloadDll` payload: `pid`, `reload`, `dll_path`. Reply: `status`, `base` (set when reloading).
+`hdl.rpc.v1.Injection/UnloadDll` carries `pid`, `reload`, and `dll_path`. Its reply carries `status` and `base` (set when reloading).
 
 `hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, `session`/`store`/`recipe`/`stabilize`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan scope: `--image` `--executable` `--module NAME`.
 

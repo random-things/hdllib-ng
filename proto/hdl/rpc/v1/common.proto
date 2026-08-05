@@ -1,0 +1,52 @@
+edition = "2023";
+
+package hdl.rpc.v1;
+
+option optimize_for = LITE_RUNTIME;
+
+enum RpcCode {
+  RPC_CODE_OK = 0;
+  RPC_CODE_CANCELLED = 1;
+  RPC_CODE_UNKNOWN = 2;
+  RPC_CODE_INVALID_ARGUMENT = 3;
+  RPC_CODE_DEADLINE_EXCEEDED = 4;
+  RPC_CODE_NOT_FOUND = 5;
+  RPC_CODE_ALREADY_EXISTS = 6;
+  RPC_CODE_PERMISSION_DENIED = 7;
+  RPC_CODE_RESOURCE_EXHAUSTED = 8;
+  RPC_CODE_FAILED_PRECONDITION = 9;
+  RPC_CODE_ABORTED = 10;
+  RPC_CODE_OUT_OF_RANGE = 11;
+  RPC_CODE_UNIMPLEMENTED = 12;
+  RPC_CODE_INTERNAL = 13;
+  RPC_CODE_UNAVAILABLE = 14;
+  RPC_CODE_DATA_LOSS = 15;
+  RPC_CODE_UNAUTHENTICATED = 16;
+}
+
+message RpcStatus {
+  RpcCode code = 1;
+  string reason = 2;
+  string message = 3;
+  int32 hdl_status = 4;
+  bool outcome_unknown = 5;
+}
+
+message MethodInfo {
+  string name = 1;
+  bool server_streaming = 2;
+  uint32 default_timeout_ms = 3;
+  uint32 max_timeout_ms = 4;
+}
+
+message TransportLimits {
+  uint32 max_frame_bytes = 1;
+  uint32 max_in_flight = 2;
+  uint32 max_stream_chunk_bytes = 3;
+}
+
+// Domain fields use hdllib's compact field codec inside this protobuf message.
+// Method identity is generated from services.proto and is never encoded here.
+message Payload {
+  bytes value = 1;
+}

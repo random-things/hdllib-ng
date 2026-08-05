@@ -4,10 +4,10 @@ using namespace cmds_place_detail;
 
 CommandResult CmdDisasmBackend(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
     if (ctx.argc >= 4 && _wcsicmp(ctx.argv[3], L"list") == 0) {
-        AppendPod(req, static_cast<uint32_t>(OpDisasmEnumBackends));
+        SetMethod(req, hdl::rpc::Method::DisasmEnumBackends);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -50,7 +50,7 @@ CommandResult CmdDisasmBackend(CmdCtx& ctx) {
         return CmdStatus(ctx.cmd.c_str(), st, w.Take());
     }
     if (ctx.argc >= 4 && _wcsicmp(ctx.argv[3], L"get") == 0) {
-        AppendPod(req, static_cast<uint32_t>(OpDisasmGetBackend));
+        SetMethod(req, hdl::rpc::Method::DisasmGetBackend);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -69,7 +69,7 @@ CommandResult CmdDisasmBackend(CmdCtx& ctx) {
     }
     if (ctx.argc >= 5 && _wcsicmp(ctx.argv[3], L"set") == 0) {
         const int32_t id = _wtoi(ctx.argv[4]);
-        AppendPod(req, static_cast<uint32_t>(OpDisasmSetBackend));
+        SetMethod(req, hdl::rpc::Method::DisasmSetBackend);
         AppendPod(req, id);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
@@ -96,9 +96,9 @@ CommandResult CmdDisasm(CmdCtx& ctx) {
             max_insns = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpDisasm));
+    SetMethod(req, hdl::rpc::Method::Disasm);
     AppendPod(req, addr);
     AppendPod(req, max_insns);
     if (!ctx.client.Request(req, resp)) {
@@ -155,9 +155,9 @@ CommandResult CmdInstrLen(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpInstrLen));
+    SetMethod(req, hdl::rpc::Method::InstrLen);
     AppendPod(req, addr);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);

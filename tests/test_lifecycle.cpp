@@ -175,8 +175,9 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
         uint64_t search_id = 0;
         uint64_t disc_id = 0;
         {
-            std::vector<uint8_t> req, resp;
-            AppendPod(req, static_cast<uint32_t>(OpSearchCreate));
+            PreparedRequest req;
+            std::vector<uint8_t> resp;
+            SetMethod(req, hdl::rpc::Method::SearchCreate);
             if (!hdltest::PipeRequest(self_pid, req, resp)) {
                 faults.fetch_add(1);
                 break;
@@ -189,8 +190,9 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
             }
         }
         {
-            std::vector<uint8_t> req, resp;
-            AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
+            PreparedRequest req;
+            std::vector<uint8_t> resp;
+            SetMethod(req, hdl::rpc::Method::DiscoverCreate);
             if (!hdltest::PipeRequest(self_pid, req, resp)) {
                 faults.fetch_add(1);
                 break;
@@ -210,8 +212,9 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
             workers.emplace_back([&, search_id, disc_id] {
                 while (!stop.load(std::memory_order_relaxed)) {
                     {
-                        std::vector<uint8_t> req, resp;
-                        AppendPod(req, static_cast<uint32_t>(OpSearchReset));
+                        PreparedRequest req;
+                        std::vector<uint8_t> resp;
+                        SetMethod(req, hdl::rpc::Method::SearchReset);
                         AppendPod(req, search_id);
                         if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
                             Reader r(resp);
@@ -222,8 +225,9 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
                         }
                     }
                     {
-                        std::vector<uint8_t> req, resp;
-                        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetCandidates));
+                        PreparedRequest req;
+                        std::vector<uint8_t> resp;
+                        SetMethod(req, hdl::rpc::Method::DiscoverGetCandidates);
                         AppendPod(req, disc_id);
                         AppendPod(req, static_cast<uint32_t>(8));
                         if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
@@ -240,14 +244,16 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
         }
         Sleep(5);
         {
-            std::vector<uint8_t> req, resp;
-            AppendPod(req, static_cast<uint32_t>(OpSearchClose));
+            PreparedRequest req;
+            std::vector<uint8_t> resp;
+            SetMethod(req, hdl::rpc::Method::SearchClose);
             AppendPod(req, search_id);
             hdltest::PipeRequest(self_pid, req, resp, 2000);
         }
         {
-            std::vector<uint8_t> req, resp;
-            AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
+            PreparedRequest req;
+            std::vector<uint8_t> resp;
+            SetMethod(req, hdl::rpc::Method::DiscoverClose);
             AppendPod(req, disc_id);
             hdltest::PipeRequest(self_pid, req, resp, 2000);
         }
@@ -358,30 +364,25 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
     const HdlStatus sst = hdl::InjectDll(target.pid, sys, &secondary);
     Report(c, sst == HDL_OK && secondary != 0, true, "clean_unload/inject secondary", "");
     if (sst == HDL_OK && secondary != 0) {
-        /* OpTrackLoadedDll: opcode 95, base u64, wstring path */
-        std::vector<uint8_t> treq;
-        const uint32_t op = 95;
-        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&op),
-                    reinterpret_cast<const uint8_t*>(&op) + 4);
-        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&secondary),
-                    reinterpret_cast<const uint8_t*>(&secondary) + 8);
-        const uint32_t nbytes = static_cast<uint32_t>((wcslen(sys) + 1) * sizeof(wchar_t));
-        treq.insert(treq.end(), reinterpret_cast<const uint8_t*>(&nbytes),
-                    reinterpret_cast<const uint8_t*>(&nbytes) + 4);
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(sys);
-        treq.insert(treq.end(), p, p + nbytes);
+        /* Register the secondary DLL with the injected server before shutdown. */
+        hdl::rpc::PreparedRequest treq;
+        hdl::rpc::SetMethod(treq, hdl::rpc::Method::TrackLoadedDll);
+        hdl::proto::AppendPod(treq, secondary);
+        hdl::proto::AppendWString(treq, sys);
+        std::vector<uint8_t> response;
         int32_t track_st = HDL_E_FAILED;
-        Report(c,
-               hdltest::PipeRequest(target.pid, treq.data(), static_cast<uint32_t>(treq.size()),
-                                    &track_st) &&
-                   track_st == HDL_OK,
-               false, "clean_unload/track secondary", "");
+        const bool tracked =
+            hdltest::PipeRequest(target.pid, treq, response) && response.size() >= sizeof(track_st);
+        if (tracked) {
+            memcpy(&track_st, response.data(), sizeof(track_st));
+        }
+        Report(c, tracked && track_st == HDL_OK, false, "clean_unload/track secondary", "");
     }
 
     int32_t shut_st = HDL_E_FAILED;
     const bool shut_ok = hdltest::PipeShutdown(target.pid, HDL_SHUTDOWN_UNLOAD_MODULES, &shut_st) &&
                          shut_st == HDL_OK;
-    Report(c, shut_ok, false, "clean_unload/OpShutdown modules", "");
+    Report(c, shut_ok, false, "clean_unload/Control.Shutdown modules", "");
 
     Sleep(300);
     Report(c, !hdltest::PingPipe(target.pid, 500), false, "clean_unload/pipe dead after shutdown",

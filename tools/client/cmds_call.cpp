@@ -162,7 +162,7 @@ static CommandResult PrintCallReply(CmdCtx& ctx, const wchar_t* verb,
 
 CommandResult CmdResolve(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     std::wstring module;
@@ -179,7 +179,7 @@ CommandResult CmdResolve(CmdCtx& ctx) {
     }
     char name[256];
     WideCharToMultiByte(CP_UTF8, 0, export_name, -1, name, sizeof(name), nullptr, nullptr);
-    AppendPod(req, static_cast<uint32_t>(OpResolveExport));
+    SetMethod(req, hdl::rpc::Method::ResolveExport);
     AppendWString(req, module.c_str());
     AppendString(req, name);
     if (!ctx.client.Request(req, resp)) {
@@ -201,7 +201,7 @@ CommandResult CmdResolve(CmdCtx& ctx) {
 
 CommandResult CmdCall(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     std::wstring module;
@@ -210,7 +210,6 @@ CommandResult CmdCall(CmdCtx& ctx) {
     bool have_addr = false;
     bool main_thread = false;
     uint32_t timeout_ms = 0;
-    uint64_t job_id = 0;
     std::vector<std::wstring> arg_texts;
     for (int i = 3; i < ctx.argc; ++i) {
         if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
@@ -222,8 +221,6 @@ CommandResult CmdCall(CmdCtx& ctx) {
             main_thread = true;
         } else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
             timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--job") == 0 && i + 1 < ctx.argc) {
-            job_id = _wcstoui64(ctx.argv[++i], nullptr, 0);
         } else if (!have_addr && !export_name) {
             export_name = ctx.argv[i];
         } else {
@@ -235,22 +232,24 @@ CommandResult CmdCall(CmdCtx& ctx) {
     }
 
     if (have_addr) {
-        AppendPod(req, static_cast<uint32_t>(OpCall));
+        SetMethod(req, hdl::rpc::Method::Call);
+        req.timeout_ms = timeout_ms;
         AppendPod(req, addr);
         AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
         AppendPod(req, static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN
                                                          : HDL_CALL_THREAD_WORKER));
         AppendPod(req, timeout_ms);
-        AppendPod(req, job_id);
+        AppendPod(req, static_cast<uint64_t>(0));
     } else {
         char name[256];
         WideCharToMultiByte(CP_UTF8, 0, export_name, -1, name, sizeof(name), nullptr, nullptr);
-        AppendPod(req, static_cast<uint32_t>(OpCallExport));
+        SetMethod(req, hdl::rpc::Method::CallExport);
+        req.timeout_ms = timeout_ms;
         AppendWString(req, module.c_str());
         AppendString(req, name);
         AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
         AppendPod(req, timeout_ms);
-        AppendPod(req, job_id);
+        AppendPod(req, static_cast<uint64_t>(0));
     }
     for (const auto& t : arg_texts) {
         int32_t kind = 0;
@@ -265,7 +264,7 @@ CommandResult CmdCall(CmdCtx& ctx) {
             AppendPod(req, size);
             AppendPod(req, u64);
         } else {
-            AppendCallArg(req, kind, size, u64, blob);
+            AppendCallArg(req.payload, kind, size, u64, blob);
         }
     }
     if (!ctx.client.Request(req, resp)) {
@@ -276,7 +275,7 @@ CommandResult CmdCall(CmdCtx& ctx) {
 
 CommandResult CmdVcall(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 5) {
@@ -287,7 +286,6 @@ CommandResult CmdVcall(CmdCtx& ctx) {
     bool main_thread = false;
     int32_t prepend_this = 1;
     uint32_t timeout_ms = 0;
-    uint64_t job_id = 0;
     std::vector<std::wstring> arg_texts;
     for (int i = 5; i < ctx.argc; ++i) {
         if (wcscmp(ctx.argv[i], L"--main") == 0) {
@@ -296,13 +294,12 @@ CommandResult CmdVcall(CmdCtx& ctx) {
             prepend_this = 0;
         } else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
             timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--job") == 0 && i + 1 < ctx.argc) {
-            job_id = _wcstoui64(ctx.argv[++i], nullptr, 0);
         } else {
             arg_texts.push_back(ctx.argv[i]);
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpCallVtable));
+    SetMethod(req, hdl::rpc::Method::CallVtable);
+    req.timeout_ms = timeout_ms;
     AppendPod(req, obj);
     AppendPod(req, index);
     AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
@@ -310,7 +307,7 @@ CommandResult CmdVcall(CmdCtx& ctx) {
     AppendPod(req,
               static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN : HDL_CALL_THREAD_WORKER));
     AppendPod(req, timeout_ms);
-    AppendPod(req, job_id);
+    AppendPod(req, static_cast<uint64_t>(0));
     for (const auto& t : arg_texts) {
         int32_t kind = 0;
         uint32_t size = 0;
@@ -324,7 +321,7 @@ CommandResult CmdVcall(CmdCtx& ctx) {
             AppendPod(req, size);
             AppendPod(req, u64);
         } else {
-            AppendCallArg(req, kind, size, u64, blob);
+            AppendCallArg(req.payload, kind, size, u64, blob);
         }
     }
     if (!ctx.client.Request(req, resp)) {
@@ -335,7 +332,7 @@ CommandResult CmdVcall(CmdCtx& ctx) {
 
 CommandResult CmdAlloc(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -353,7 +350,7 @@ CommandResult CmdAlloc(CmdCtx& ctx) {
             }
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpAlloc));
+    SetMethod(req, hdl::rpc::Method::Alloc);
     AppendPod(req, size);
     AppendPod(req, protect);
     if (!ctx.client.Request(req, resp)) {
@@ -375,14 +372,14 @@ CommandResult CmdAlloc(CmdCtx& ctx) {
 
 CommandResult CmdFree(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
         return FailUsage(ctx);
     }
     const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    AppendPod(req, static_cast<uint32_t>(OpFree));
+    SetMethod(req, hdl::rpc::Method::Free);
     AppendPod(req, addr);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);

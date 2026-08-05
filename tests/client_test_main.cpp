@@ -3,6 +3,7 @@
 #include "hdllib/pipe_name.h"
 #include "pipe_client.hpp"
 #include "protocol.hpp"
+#include "rpc/runtime.hpp"
 #include "store.hpp"
 #include "support.hpp"
 #include "json/json.hpp"
@@ -52,6 +53,39 @@ bool LoadFileUtf8(const char* path, std::string* out) {
         out->append(buf, n);
     }
     fclose(f);
+    return true;
+}
+
+bool ValidateCandidateFile(const wchar_t* path, uint64_t* out_count) {
+    if (!path || !out_count) {
+        return false;
+    }
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    uint8_t header[24]{};
+    DWORD read = 0;
+    LARGE_INTEGER file_size{};
+    const bool read_ok = ReadFile(file, header, sizeof(header), &read, nullptr) &&
+                         read == sizeof(header) && GetFileSizeEx(file, &file_size);
+    CloseHandle(file);
+    if (!read_ok || std::memcmp(header, "HDLCAND1", 8) != 0) {
+        return false;
+    }
+    uint32_t version = 0;
+    uint32_t record_size = 0;
+    uint64_t count = 0;
+    std::memcpy(&version, header + 8, sizeof(version));
+    std::memcpy(&record_size, header + 12, sizeof(record_size));
+    std::memcpy(&count, header + 16, sizeof(count));
+    if (version != 1 || record_size != sizeof(uint64_t) ||
+        count > (INT64_MAX - sizeof(header)) / sizeof(uint64_t) ||
+        file_size.QuadPart != static_cast<LONGLONG>(sizeof(header) + count * sizeof(uint64_t))) {
+        return false;
+    }
+    *out_count = count;
     return true;
 }
 
@@ -490,9 +524,8 @@ bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
     return true;
 }
 
-/* Peer that answers OpHello with an incompatible major so PipeClient::Negotiate rejects. */
+/* Peer that answers ClientHello with an incompatible major so PipeClient::Negotiate rejects. */
 void RunNegotiateMismatch(Counters& c) {
-    using namespace hdl::proto;
     const uint32_t pid = 0x71C0FFEEu;
     wchar_t name[128];
     if (HdlFormatPipeName(pid, name, 128) != 0) {
@@ -515,6 +548,11 @@ void RunNegotiateMismatch(Counters& c) {
         if (!connected) {
             return;
         }
+        char preface[hdl::rpc::kConnectionPrefaceSize]{};
+        if (!PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) ||
+            std::memcmp(preface, hdl::rpc::kConnectionPreface, sizeof(preface)) != 0) {
+            return;
+        }
         uint32_t rsize = 0;
         if (!PipeReadExact(pipe, &rsize, sizeof(rsize))) {
             return;
@@ -523,17 +561,21 @@ void RunNegotiateMismatch(Counters& c) {
         if (rsize && !PipeReadExact(pipe, req.data(), rsize)) {
             return;
         }
-        Reader r(req);
-        uint32_t op = 0;
-        if (!r.TakePod(op) || op != OpHello) {
+        hdl::rpc::v1::Envelope request;
+        if (!hdl::rpc::ParseEnvelope(req.data(), req.size(), &request) ||
+            !request.has_client_hello()) {
             return;
         }
+        hdl::rpc::v1::Envelope response;
+        auto* hello = response.mutable_server_hello();
+        hello->set_protocol_major(99); /* incompatible major */
+        hello->set_protocol_minor(0);
+        hello->set_server_name("mismatch-peer");
+        hello->set_server_build("test");
         std::vector<uint8_t> resp;
-        AppendPod(resp, static_cast<int32_t>(HDL_OK));
-        AppendPod(resp, static_cast<uint32_t>(99)); /* incompatible major */
-        AppendPod(resp, static_cast<uint32_t>(0));
-        AppendPod(resp, HDL_IPC_ENDIAN_LE);
-        AppendString(resp, "mismatch-peer");
+        if (!hdl::rpc::SerializeEnvelope(response, &resp)) {
+            return;
+        }
         const uint32_t wsize = static_cast<uint32_t>(resp.size());
         if (!PipeWriteExact(pipe, &wsize, sizeof(wsize)) ||
             !PipeWriteExact(pipe, resp.data(), wsize)) {
@@ -862,20 +904,6 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         }
     }
 
-    /* Jobs */
-    uint64_t job = 0;
-    {
-        auto r = Cli(ctx, {L"job", L"create", L"--timeout", L"5000"});
-        ExpectOk(c, "client job create", r);
-        ParseU64After(r.out, L"job=", &job);
-    }
-    if (job) {
-        wchar_t j[32];
-        swprintf_s(j, L"%llu", static_cast<unsigned long long>(job));
-        ExpectOk(c, "client job cancel", Cli(ctx, {L"job", L"cancel", j}));
-        ExpectOk(c, "client job close", Cli(ctx, {L"job", L"close", j}));
-    }
-
     /* Locate CLI */
     ExpectOk(c, "client resolve-pattern",
              Cli(ctx, {L"resolve-pattern", L"31 4C 44 48", L"--module", L"hdl_test_target.exe",
@@ -919,6 +947,27 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
                            L"hdl_test_target.exe", L"--image", L"--max", L"8"});
         ExpectOk(c, "client scan pattern", r);
     }
+    {
+        wchar_t temp[MAX_PATH]{};
+        wchar_t candidates[MAX_PATH]{};
+        const DWORD temp_size = GetTempPathW(MAX_PATH, temp);
+        const bool have_path = temp_size != 0 && temp_size < MAX_PATH &&
+                               swprintf_s(candidates, L"%shdl_client_candidates_%lu.bin", temp,
+                                          GetCurrentProcessId()) > 0;
+        if (have_path) {
+            DeleteFileW(candidates);
+            auto r = Cli(ctx, {L"scan", L"--pattern", L"31 4C 44 48", L"--module",
+                               L"hdl_test_target.exe", L"--image", L"--max", L"0", L"--candidates",
+                               candidates});
+            ExpectOk(c, "client scan candidate file", r);
+            uint64_t candidate_count = 0;
+            Report(c, ValidateCandidateFile(candidates, &candidate_count) && candidate_count != 0,
+                   false, "client scan candidate file format", "");
+            DeleteFileW(candidates);
+        } else {
+            Report(c, false, false, "client scan candidate file path", "GetTempPath failed");
+        }
+    }
     uint64_t scan_sess = 0;
     {
         auto r = Cli(ctx, {L"scan", L"--type", L"i32", L"--value", L"80", L"--module",
@@ -960,7 +1009,7 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             ExpectOk(c, "client unhook", Cli(ctx, {L"unhook", h}));
         }
 
-        /* Pipe-native OpHook: place a stub that jumps to leaf, then hook fn -> stub. */
+        /* Pipe-native Hook.Hook: place a stub that jumps to leaf, then hook fn -> stub. */
         if (leaf) {
             wchar_t tgt_s[32], leaf_s[32];
             swprintf_s(tgt_s, L"0x%llx", static_cast<unsigned long long>(fn));
@@ -1610,7 +1659,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wprintf(L"client=%ls\ndll=%ls\ntarget=%ls\n", client_full, dll_full, target_full);
 
     Counters c;
-    Report(c, hdl::proto::HDL_IPC_PROTO_MAJOR == 1, false, "ipc/proto_major_v1", "");
+    Report(c, hdl::rpc::kProtocolMajor == 1, false, "ipc/proto_major_v1", "");
 
     /* HDL_PIPE must stay under \\.\pipe\; reject file/device path overrides. */
     {

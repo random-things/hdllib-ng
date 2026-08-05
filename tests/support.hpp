@@ -1,12 +1,14 @@
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
 #include <TlHelp32.h>
+#include <Windows.h>
 #include <sddl.h>
 
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
+#include "protocol.hpp"
+#include "rpc/runtime.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -94,30 +96,44 @@ struct Counters {
 
 inline const wchar_t* StatusName(HdlStatus st) {
     switch (st) {
-    case HDL_OK: return L"OK";
-    case HDL_E_INVALID_ARG: return L"INVALID_ARG";
-    case HDL_E_ACCESS: return L"ACCESS";
-    case HDL_E_NOT_FOUND: return L"NOT_FOUND";
-    case HDL_E_NO_MEM: return L"NO_MEM";
-    case HDL_E_BUSY: return L"BUSY";
-    case HDL_E_FAILED: return L"FAILED";
-    case HDL_E_BUFFER_SMALL: return L"BUFFER_SMALL";
-    case HDL_E_CANCELLED: return L"CANCELLED";
-    case HDL_E_NOT_INIT: return L"NOT_INIT";
-    default: return L"?";
+    case HDL_OK:
+        return L"OK";
+    case HDL_E_INVALID_ARG:
+        return L"INVALID_ARG";
+    case HDL_E_ACCESS:
+        return L"ACCESS";
+    case HDL_E_NOT_FOUND:
+        return L"NOT_FOUND";
+    case HDL_E_NO_MEM:
+        return L"NO_MEM";
+    case HDL_E_BUSY:
+        return L"BUSY";
+    case HDL_E_FAILED:
+        return L"FAILED";
+    case HDL_E_BUFFER_SMALL:
+        return L"BUFFER_SMALL";
+    case HDL_E_CANCELLED:
+        return L"CANCELLED";
+    case HDL_E_NOT_INIT:
+        return L"NOT_INIT";
+    default:
+        return L"?";
     }
 }
 
 inline void Report(Counters& c, bool ok, bool soft, const char* name, const char* detail) {
     if (ok) {
         ++c.passed;
-        std::printf("[PASS] %s%s%s\n", name, detail && detail[0] ? " - " : "", detail ? detail : "");
+        std::printf("[PASS] %s%s%s\n", name, detail && detail[0] ? " - " : "",
+                    detail ? detail : "");
     } else if (soft) {
         ++c.soft_failed;
-        std::printf("[SOFT] %s%s%s\n", name, detail && detail[0] ? " - " : "", detail ? detail : "");
+        std::printf("[SOFT] %s%s%s\n", name, detail && detail[0] ? " - " : "",
+                    detail ? detail : "");
     } else {
         ++c.failed;
-        std::printf("[FAIL] %s%s%s\n", name, detail && detail[0] ? " - " : "", detail ? detail : "");
+        std::printf("[FAIL] %s%s%s\n", name, detail && detail[0] ? " - " : "",
+                    detail ? detail : "");
     }
 }
 
@@ -182,7 +198,8 @@ inline bool CreateLowIlToken(HANDLE* out_token) {
     *out_token = nullptr;
     HANDLE proc_token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(),
-                          TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_ASSIGN_PRIMARY,
+                          TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT |
+                              TOKEN_ASSIGN_PRIMARY,
                           &proc_token)) {
         return false;
     }
@@ -204,8 +221,8 @@ inline bool CreateLowIlToken(HANDLE* out_token) {
     TOKEN_MANDATORY_LABEL label{};
     label.Label.Attributes = SE_GROUP_INTEGRITY;
     label.Label.Sid = low_sid;
-    const BOOL ok =
-        SetTokenInformation(token, TokenIntegrityLevel, &label, sizeof(label) + GetLengthSid(low_sid));
+    const BOOL ok = SetTokenInformation(token, TokenIntegrityLevel, &label,
+                                        sizeof(label) + GetLengthSid(low_sid));
     LocalFree(low_sid);
     if (!ok) {
         CloseHandle(token);
@@ -230,8 +247,7 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
     }
 
     wchar_t cmd[1024];
-    swprintf_s(cmd,
-               L"\"%ls\" --ready-handle %llu --exit-handle %llu%s%s%s", target_exe,
+    swprintf_s(cmd, L"\"%ls\" --ready-handle %llu --exit-handle %llu%s%s%s", target_exe,
                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(out.ready_event)),
                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(out.exit_event)),
                profile.window ? L" --window" : L"", profile.alertable ? L" --alertable" : L"",
@@ -252,7 +268,8 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
                                        nullptr, &si, &pi);
         CloseHandle(low_token);
     } else {
-        created = CreateProcessW(nullptr, cmd, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi);
+        created =
+            CreateProcessW(nullptr, cmd, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi);
     }
 
     if (!created) {
@@ -272,122 +289,35 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
     return true;
 }
 
+inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
+                        std::vector<uint8_t>& resp, DWORD timeout_ms = 15000);
+
 inline bool PingPipe(uint32_t pid, DWORD timeout_ms = 8000) {
-    const DWORD start = GetTickCount();
-    HANDLE pipe = INVALID_HANDLE_VALUE;
-    for (;;) {
-        pipe = HdlOpenLocalPipe(pid);
-        if (pipe != INVALID_HANDLE_VALUE) {
-            break;
-        }
-        if (GetLastError() != ERROR_PIPE_BUSY && GetLastError() != ERROR_FILE_NOT_FOUND) {
-            return false;
-        }
-        if (GetTickCount() - start > timeout_ms) {
-            return false;
-        }
-        HdlWaitLocalPipe(pid, 200);
-        Sleep(50);
-    }
-
-    DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
-    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
-
-    uint32_t opcode = 1;  // OpPing
-    uint32_t size = sizeof(opcode);
-    DWORD wrote = 0;
-    if (!WriteFile(pipe, &size, sizeof(size), &wrote, nullptr) || wrote != sizeof(size) ||
-        !WriteFile(pipe, &opcode, sizeof(opcode), &wrote, nullptr) || wrote != sizeof(opcode)) {
-        CloseHandle(pipe);
+    hdl::rpc::PreparedRequest request;
+    hdl::rpc::SetMethod(request, hdl::rpc::Method::Ping);
+    std::vector<uint8_t> response;
+    if (!PipeRequest(pid, request, response, timeout_ms) || response.size() < sizeof(int32_t)) {
         return false;
     }
-
-    uint32_t resp_size = 0;
-    DWORD got = 0;
-    if (!ReadFile(pipe, &resp_size, sizeof(resp_size), &got, nullptr) || got != sizeof(resp_size) ||
-        resp_size < sizeof(int32_t) || resp_size > (1u << 20)) {
-        CloseHandle(pipe);
-        return false;
-    }
-    std::vector<uint8_t> body(resp_size);
-    size_t off = 0;
-    while (off < body.size()) {
-        if (!ReadFile(pipe, body.data() + off, static_cast<DWORD>(body.size() - off), &got, nullptr) ||
-            got == 0) {
-            CloseHandle(pipe);
-            return false;
-        }
-        off += got;
-    }
-    CloseHandle(pipe);
-
-    int32_t status = -1;
-    memcpy(&status, body.data(), sizeof(status));
+    int32_t status = HDL_E_FAILED;
+    memcpy(&status, response.data(), sizeof(status));
     return status == HDL_OK;
 }
 
-/* One-shot framed request. Returns false on transport failure; *out_status from reply body. */
-inline bool PipeRequest(uint32_t pid, const void* req, uint32_t req_size, int32_t* out_status,
-                        DWORD timeout_ms = 8000) {
-    if (out_status) {
-        *out_status = HDL_E_FAILED;
-    }
-    const DWORD start = GetTickCount();
-    HANDLE pipe = INVALID_HANDLE_VALUE;
-    for (;;) {
-        pipe = HdlOpenLocalPipe(pid);
-        if (pipe != INVALID_HANDLE_VALUE) {
-            break;
-        }
-        if (GetLastError() != ERROR_PIPE_BUSY && GetLastError() != ERROR_FILE_NOT_FOUND) {
-            return false;
-        }
-        if (GetTickCount() - start > timeout_ms) {
-            return false;
-        }
-        HdlWaitLocalPipe(pid, 200);
-        Sleep(50);
-    }
-    DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
-    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
-    DWORD wrote = 0;
-    if (!WriteFile(pipe, &req_size, sizeof(req_size), &wrote, nullptr) || wrote != sizeof(req_size) ||
-        !WriteFile(pipe, req, req_size, &wrote, nullptr) || wrote != req_size) {
-        CloseHandle(pipe);
+inline bool PipeShutdown(uint32_t pid, uint32_t flags, int32_t* out_status = nullptr) {
+    hdl::rpc::PreparedRequest request;
+    hdl::rpc::SetMethod(request, hdl::rpc::Method::Shutdown);
+    hdl::proto::AppendPod(request, flags);
+    std::vector<uint8_t> response;
+    if (!PipeRequest(pid, request, response) || response.size() < sizeof(int32_t)) {
         return false;
     }
-    uint32_t resp_size = 0;
-    DWORD got = 0;
-    if (!ReadFile(pipe, &resp_size, sizeof(resp_size), &got, nullptr) || got != sizeof(resp_size) ||
-        resp_size < sizeof(int32_t) || resp_size > (1u << 20)) {
-        CloseHandle(pipe);
-        return false;
-    }
-    std::vector<uint8_t> body(resp_size);
-    size_t off = 0;
-    while (off < body.size()) {
-        if (!ReadFile(pipe, body.data() + off, static_cast<DWORD>(body.size() - off), &got, nullptr) ||
-            got == 0) {
-            CloseHandle(pipe);
-            return false;
-        }
-        off += got;
-    }
-    CloseHandle(pipe);
-    int32_t status = -1;
-    memcpy(&status, body.data(), sizeof(status));
+    int32_t status = HDL_E_FAILED;
+    memcpy(&status, response.data(), sizeof(status));
     if (out_status) {
         *out_status = status;
     }
     return true;
-}
-
-inline bool PipeShutdown(uint32_t pid, uint32_t flags, int32_t* out_status = nullptr) {
-    uint8_t req[8];
-    uint32_t op = 94; /* OpShutdown */
-    memcpy(req, &op, 4);
-    memcpy(req + 4, &flags, 4);
-    return PipeRequest(pid, req, sizeof(req), out_status);
 }
 
 inline bool VerifyInjected(uint32_t pid, const wchar_t* dll_path, int method, uint64_t base) {
@@ -409,17 +339,28 @@ inline bool VerifyInjected(uint32_t pid, const wchar_t* dll_path, int method, ui
 
 inline const char* StatusNameA(HdlStatus st) {
     switch (st) {
-    case HDL_OK: return "OK";
-    case HDL_E_INVALID_ARG: return "INVALID_ARG";
-    case HDL_E_ACCESS: return "ACCESS";
-    case HDL_E_NOT_FOUND: return "NOT_FOUND";
-    case HDL_E_NO_MEM: return "NO_MEM";
-    case HDL_E_BUSY: return "BUSY";
-    case HDL_E_FAILED: return "FAILED";
-    case HDL_E_BUFFER_SMALL: return "BUFFER_SMALL";
-    case HDL_E_CANCELLED: return "CANCELLED";
-    case HDL_E_NOT_INIT: return "NOT_INIT";
-    default: return "?";
+    case HDL_OK:
+        return "OK";
+    case HDL_E_INVALID_ARG:
+        return "INVALID_ARG";
+    case HDL_E_ACCESS:
+        return "ACCESS";
+    case HDL_E_NOT_FOUND:
+        return "NOT_FOUND";
+    case HDL_E_NO_MEM:
+        return "NO_MEM";
+    case HDL_E_BUSY:
+        return "BUSY";
+    case HDL_E_FAILED:
+        return "FAILED";
+    case HDL_E_BUFFER_SMALL:
+        return "BUFFER_SMALL";
+    case HDL_E_CANCELLED:
+        return "CANCELLED";
+    case HDL_E_NOT_INIT:
+        return "NOT_INIT";
+    default:
+        return "?";
     }
 }
 
@@ -460,32 +401,53 @@ inline Expect ExpectFor(int method, const TargetProfile& profile) {
 
 inline const char* MethodName(int method) {
     switch (method) {
-    case HDL_INJECT_CREATE_REMOTE_THREAD: return "create_remote_thread";
-    case HDL_INJECT_NT_CREATE_THREAD_EX: return "nt_create_thread_ex";
-    case HDL_INJECT_RTL_CREATE_USER_THREAD: return "rtl_create_user_thread";
-    case HDL_INJECT_QUEUE_USER_APC: return "queue_user_apc";
-    case HDL_INJECT_SET_WINDOWS_HOOK_EX: return "set_windows_hook_ex";
-    case HDL_INJECT_THREAD_HIJACK: return "thread_hijack";
-    case HDL_INJECT_MANUAL_MAP: return "manual_map";
-    case HDL_INJECT_EARLY_BIRD_APC: return "early_bird_apc";
-    case HDL_INJECT_ATOM_BOMBING: return "atom_bombing";
-    case HDL_INJECT_MODULE_STOMP: return "module_stomp";
-    case HDL_INJECT_SECTION_MAP: return "section_map";
-    case HDL_INJECT_WINDOW_SUBCLASS: return "window_subclass";
-    case HDL_INJECT_INSTRUMENTATION_CALLBACK: return "instrumentation_callback";
-    case HDL_INJECT_KERNEL_CALLBACK_TABLE: return "kernel_callback_table";
-    case HDL_INJECT_VEH: return "veh";
-    case HDL_INJECT_SET_WIN_EVENT_HOOK: return "set_win_event_hook";
-    case HDL_INJECT_RTL_REMOTE_CALL: return "rtl_remote_call";
-    case HDL_INJECT_SPECIAL_USER_APC: return "special_user_apc";
-    case HDL_INJECT_THREAD_POOL: return "thread_pool";
-    case HDL_INJECT_ETW_CALLBACK: return "etw_callback";
-    default: return "?";
+    case HDL_INJECT_CREATE_REMOTE_THREAD:
+        return "create_remote_thread";
+    case HDL_INJECT_NT_CREATE_THREAD_EX:
+        return "nt_create_thread_ex";
+    case HDL_INJECT_RTL_CREATE_USER_THREAD:
+        return "rtl_create_user_thread";
+    case HDL_INJECT_QUEUE_USER_APC:
+        return "queue_user_apc";
+    case HDL_INJECT_SET_WINDOWS_HOOK_EX:
+        return "set_windows_hook_ex";
+    case HDL_INJECT_THREAD_HIJACK:
+        return "thread_hijack";
+    case HDL_INJECT_MANUAL_MAP:
+        return "manual_map";
+    case HDL_INJECT_EARLY_BIRD_APC:
+        return "early_bird_apc";
+    case HDL_INJECT_ATOM_BOMBING:
+        return "atom_bombing";
+    case HDL_INJECT_MODULE_STOMP:
+        return "module_stomp";
+    case HDL_INJECT_SECTION_MAP:
+        return "section_map";
+    case HDL_INJECT_WINDOW_SUBCLASS:
+        return "window_subclass";
+    case HDL_INJECT_INSTRUMENTATION_CALLBACK:
+        return "instrumentation_callback";
+    case HDL_INJECT_KERNEL_CALLBACK_TABLE:
+        return "kernel_callback_table";
+    case HDL_INJECT_VEH:
+        return "veh";
+    case HDL_INJECT_SET_WIN_EVENT_HOOK:
+        return "set_win_event_hook";
+    case HDL_INJECT_RTL_REMOTE_CALL:
+        return "rtl_remote_call";
+    case HDL_INJECT_SPECIAL_USER_APC:
+        return "special_user_apc";
+    case HDL_INJECT_THREAD_POOL:
+        return "thread_pool";
+    case HDL_INJECT_ETW_CALLBACK:
+        return "etw_callback";
+    default:
+        return "?";
     }
 }
 
-inline bool PipeRequest(uint32_t pid, const std::vector<uint8_t>& req, std::vector<uint8_t>& resp,
-                        DWORD timeout_ms = 15000) {
+inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
+                        std::vector<uint8_t>& resp, DWORD timeout_ms) {
     const DWORD start = GetTickCount();
     HANDLE pipe = INVALID_HANDLE_VALUE;
     for (;;) {
@@ -502,33 +464,82 @@ inline bool PipeRequest(uint32_t pid, const std::vector<uint8_t>& req, std::vect
     DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
     SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
 
-    const uint32_t size = static_cast<uint32_t>(req.size());
-    DWORD wrote = 0;
-    if (!WriteFile(pipe, &size, sizeof(size), &wrote, nullptr) || wrote != sizeof(size) ||
-        !WriteFile(pipe, req.data(), size, &wrote, nullptr) || wrote != size) {
+    auto write_exact = [pipe](const void* data, DWORD size) {
+        const auto* cursor = static_cast<const uint8_t*>(data);
+        while (size != 0) {
+            DWORD wrote = 0;
+            if (!WriteFile(pipe, cursor, size, &wrote, nullptr) || wrote == 0)
+                return false;
+            cursor += wrote;
+            size -= wrote;
+        }
+        return true;
+    };
+    auto read_frame = [pipe](std::vector<uint8_t>* frame) {
+        uint32_t size = 0;
+        DWORD got = 0;
+        if (!ReadFile(pipe, &size, sizeof(size), &got, nullptr) || got != sizeof(size) ||
+            size > hdl::rpc::kMaxFrameBytes)
+            return false;
+        frame->resize(size);
+        size_t offset = 0;
+        while (offset < frame->size()) {
+            if (!ReadFile(pipe, frame->data() + offset, static_cast<DWORD>(frame->size() - offset),
+                          &got, nullptr) ||
+                got == 0)
+                return false;
+            offset += got;
+        }
+        return true;
+    };
+
+    if (!write_exact(hdl::rpc::kConnectionPreface,
+                     static_cast<DWORD>(hdl::rpc::kConnectionPrefaceSize))) {
+        CloseHandle(pipe);
+        return false;
+    }
+    hdl::rpc::v1::Envelope hello;
+    hello.mutable_client_hello()->set_protocol_major(hdl::rpc::kProtocolMajor);
+    hello.mutable_client_hello()->set_protocol_minor(hdl::rpc::kProtocolMinor);
+    hello.mutable_client_hello()->set_client_name("hdl_tests");
+    std::vector<uint8_t> frame;
+    if (!hdl::rpc::SerializeEnvelope(hello, &frame)) {
+        CloseHandle(pipe);
+        return false;
+    }
+    uint32_t frame_size = static_cast<uint32_t>(frame.size());
+    if (!write_exact(&frame_size, sizeof(frame_size)) || !write_exact(frame.data(), frame_size) ||
+        !read_frame(&frame) || !hdl::rpc::ParseEnvelope(frame.data(), frame.size(), &hello) ||
+        !hello.has_server_hello() ||
+        hello.server_hello().protocol_major() != hdl::rpc::kProtocolMajor) {
         CloseHandle(pipe);
         return false;
     }
 
-    uint32_t resp_size = 0;
-    DWORD got = 0;
-    if (!ReadFile(pipe, &resp_size, sizeof(resp_size), &got, nullptr) || got != sizeof(resp_size) ||
-        resp_size > (16u << 20)) {
+    hdl::rpc::v1::Payload payload;
+    payload.set_value(req.payload.data(), req.payload.size());
+    hdl::rpc::v1::Envelope envelope;
+    auto* request = envelope.mutable_request();
+    request->set_request_id(1);
+    const std::string_view method = hdl::rpc::MethodName(req.method);
+    request->set_method(method.data(), method.size());
+    request->set_timeout_ms(req.timeout_ms);
+    if (!req.has_method || !payload.SerializeToString(request->mutable_payload()) ||
+        !hdl::rpc::SerializeEnvelope(envelope, &frame)) {
         CloseHandle(pipe);
         return false;
     }
-    resp.resize(resp_size);
-    size_t off = 0;
-    while (off < resp.size()) {
-        if (!ReadFile(pipe, resp.data() + off, static_cast<DWORD>(resp.size() - off), &got, nullptr) ||
-            got == 0) {
-            CloseHandle(pipe);
-            return false;
-        }
-        off += got;
+    frame_size = static_cast<uint32_t>(frame.size());
+    if (!write_exact(&frame_size, sizeof(frame_size)) || !write_exact(frame.data(), frame_size) ||
+        !read_frame(&frame) || !hdl::rpc::ParseEnvelope(frame.data(), frame.size(), &envelope) ||
+        !envelope.has_response() || envelope.response().request_id() != 1 ||
+        !payload.ParseFromString(envelope.response().payload())) {
+        CloseHandle(pipe);
+        return false;
     }
+    resp.assign(payload.value().begin(), payload.value().end());
     CloseHandle(pipe);
     return true;
 }
 
-}  // namespace hdltest
+} // namespace hdltest

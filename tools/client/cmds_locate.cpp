@@ -19,7 +19,7 @@
 
 CommandResult CmdRip(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -35,7 +35,7 @@ CommandResult CmdRip(CmdCtx& ctx) {
             len = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpResolveRip));
+    SetMethod(req, hdl::rpc::Method::ResolveRip);
     AppendPod(req, addr);
     AppendPod(req, disp);
     AppendPod(req, len);
@@ -58,7 +58,7 @@ CommandResult CmdRip(CmdCtx& ctx) {
 
 CommandResult CmdPtrchain(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -69,7 +69,7 @@ CommandResult CmdPtrchain(CmdCtx& ctx) {
     for (int i = 4; i < ctx.argc; ++i) {
         offsets.push_back(_wcstoi64(ctx.argv[i], nullptr, 0));
     }
-    AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+    SetMethod(req, hdl::rpc::Method::FollowPointers);
     AppendPod(req, base);
     AppendPod(req, static_cast<uint32_t>(offsets.size()));
     for (int64_t o : offsets) {
@@ -94,7 +94,7 @@ CommandResult CmdPtrchain(CmdCtx& ctx) {
 
 CommandResult CmdModbase(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     std::wstring module;
@@ -103,7 +103,7 @@ CommandResult CmdModbase(CmdCtx& ctx) {
             module = ctx.argv[++i];
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpModuleBase));
+    SetMethod(req, hdl::rpc::Method::ModuleBase);
     AppendWString(req, module.c_str());
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -124,7 +124,7 @@ CommandResult CmdModbase(CmdCtx& ctx) {
 
 CommandResult CmdResolvePattern(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -159,7 +159,7 @@ CommandResult CmdResolvePattern(CmdCtx& ctx) {
             flags |= HDL_SEARCH_EXECUTABLE;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpResolvePattern));
+    SetMethod(req, hdl::rpc::Method::ResolvePattern);
     AppendString(req, pattern);
     AppendPod(req, hit);
     AppendPod(req, off);
@@ -197,7 +197,7 @@ CommandResult CmdResolvePattern(CmdCtx& ctx) {
 
 CommandResult CmdXrefs(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -235,7 +235,7 @@ CommandResult CmdXrefs(CmdCtx& ctx) {
         blob.assign(reinterpret_cast<uint8_t*>(narrow),
                     reinterpret_cast<uint8_t*>(narrow) + strlen(narrow));
     }
-    AppendPod(req, static_cast<uint32_t>(OpFindStringXrefs));
+    SetMethod(req, hdl::rpc::Method::FindStringXrefs);
     AppendPod(req, static_cast<uint32_t>(blob.size()));
     AppendPod(req, static_cast<int32_t>(is_wide));
     AppendPod(req, xref_flags);
@@ -277,7 +277,7 @@ CommandResult CmdXrefs(CmdCtx& ctx) {
 
 CommandResult CmdPtrscan(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -301,7 +301,7 @@ CommandResult CmdPtrscan(CmdCtx& ctx) {
             flags |= HDL_SEARCH_MODULE;
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpPointerScan));
+    SetMethod(req, hdl::rpc::Method::PointerScan);
     AppendPod(req, target);
     AppendPod(req, depth);
     AppendPod(req, max_off);
@@ -388,7 +388,7 @@ CommandResult CmdPtrscan(CmdCtx& ctx) {
 
 CommandResult CmdProbe(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -401,7 +401,7 @@ CommandResult CmdProbe(CmdCtx& ctx) {
             size = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpProbeStruct));
+    SetMethod(req, hdl::rpc::Method::ProbeStruct);
     AppendPod(req, addr);
     AppendPod(req, size);
     AppendPod(req, static_cast<uint32_t>(64));

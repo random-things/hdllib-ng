@@ -2,6 +2,7 @@
 #include "inject/pe_relocs.hpp"
 #include "ipc/wire.hpp"
 #include "protocol.hpp"
+#include "rpc/runtime.hpp"
 
 #include "hdllib/hdllib.h"
 
@@ -229,9 +230,8 @@ void TestWireRoundTrip() {
                path_out.offsets[0] == path.offsets[0] && path_out.offsets[1] == path.offsets[1],
            "wire/pointer_path_roundtrip");
 
-    /* Major mismatch helper: client expects HDL_IPC_PROTO_MAJOR. */
-    Expect(HDL_IPC_PROTO_MAJOR == 1, "wire/proto_major_is_1");
-    Expect(HDL_IPC_PROTO_MAJOR != 99, "wire/forced_mismatch_constant");
+    Expect(hdl::rpc::kProtocolMajor == 1, "wire/proto_major_is_1");
+    Expect(hdl::rpc::kProtocolMajor != 99, "wire/forced_mismatch_constant");
 }
 
 } // namespace

@@ -14,9 +14,9 @@ CommandResult CmdVtable(CmdCtx& ctx) {
             is_object = 0;
         }
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpWalkVtable));
+    SetMethod(req, hdl::rpc::Method::WalkVtable);
     AppendPod(req, addr);
     AppendPod(req, is_object);
     if (!ctx.client.Request(req, resp)) {
@@ -58,9 +58,9 @@ CommandResult CmdRtti(CmdCtx& ctx) {
     }
     const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
     int32_t is_object = 1;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpQueryRttiName));
+    SetMethod(req, hdl::rpc::Method::QueryRttiName);
     AppendPod(req, addr);
     AppendPod(req, is_object);
     if (!ctx.client.Request(req, resp)) {

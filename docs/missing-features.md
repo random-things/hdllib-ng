@@ -11,17 +11,16 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 
 ---
 
-## 1. IPC protocol versioning / capability handshake — **done**
+## 1. Named RPC negotiation and capability discovery — **done**
 
-Implemented: `HDL_IPC_PROTO_MAJOR/MINOR`, `OpHello` (101), `OpCapabilities` (102),
-`PipeClient::Negotiate()` on connect (refuse major mismatch), feature bitfield
-(`HDL_CAP_*`), field-wise codecs in `src/ipc/wire.hpp`. Contract checks:
-`hdl_client_tests` spins a mismatched-major peer and asserts `Connect`/`Negotiate`
-rejects it; `hdl_pe_tests` covers wire codecs and malformed base-reloc apply.
-See [capabilities.md](capabilities.md).
+Implemented: the `HDLRPC1\n` preface, protobuf `ClientHello` / `ServerHello`,
+major-version rejection, generated named-method inventory, and advertised
+transport limits. `hdl_client_tests` covers mismatched-major rejection;
+`hdl_rpc_schema_tests` checks schema/generated-dispatch parity. See
+[rpc.md](rpc.md) and [capabilities.md](capabilities.md).
 
-Follow-ups: warn/disable individual client verbs when a capability bit is
-missing; fuzz `Reader` / wire codecs.
+Follow-ups: warn/disable individual client verbs when the advertised method is
+missing; fuzz envelope parsing and compact payload adapters.
 
 ---
 
@@ -47,7 +46,7 @@ elsewhere; calls are not joined after abandon.
    the same target until the orphan completes or is explicitly acknowledged.
 3. Prefer join-with-deadline where possible; if abort is impossible without
    suspending the target thread, document that and expose `call status` /
-   `OpCallEnumOrphans` for IPC.
+   a named `Call/EnumOrphans` RPC.
 4. For `HDL_CALL_THREAD_MAIN`, define behavior when the UI thread never pumps
    (hung GUI): distinguish “no HWND” (`HDL_E_NOT_FOUND`) from “posted but not
    run” (timeout + orphan).
@@ -62,8 +61,8 @@ acknowledgment.
 
 ## 3. Remote surface parity for operator-critical controls — DONE
 
-Landed as pipe ops **96…100**: `OpSetLogFile`, `OpSetHealthVeh` /
-`OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook` (target/detour VA). Client
+Landed as named RPC methods: `SetLogFile`, `SetHealthVeh` /
+`GetHealthVeh`, `DiscoverScanValue`, and `Hook` (target/detour VA). Client
 verbs: `log-file`, `health-veh`, `discover-scan`, `hook`. Custom disasm backend
 registration is intentionally not remote (built-in Enum/Get/Set only). The
 exported C control ABI was removed; only inject callbacks remain.
@@ -134,7 +133,7 @@ typed-scan or discover state; disconnect cleans up by default.
 
 ## 6. Durable import redirection (IAT rewrite)
 
-**Why it matters:** `HdlHookImport` / `OpHookImport` resolve a PE import and
+**Why it matters:** `HdlHookImport` / `Hook/HookImport` resolve a PE import and
 install `HookTrace` on the current IAT `bound_va`. Docs say “no IAT rewrite in
 v1.” Tracing observes calls; it does not redirect them, and a rebound IAT slot
 leaves the hook on a stale target.
@@ -145,7 +144,7 @@ leaves the hook on a stale target.
 
 **What needs to be done:**
 
-1. Add an optional mode (flag on `HdlHookImport` / opcode): **trace-at-bound**
+1. Add an optional mode (flag on `HdlHookImport` / its RPC request): **trace-at-bound**
    (current) vs **rewrite-IAT** (write thunk / detour pointer into the IAT slot
    with protect flip + restore on unhook).
 2. Record original `bound_va` and slot address for undo; integrate with existing
@@ -199,7 +198,7 @@ structured output and preferably a binding thicker than hand-rolled pipe frames.
 **Current state:** CLI `--json` is implemented (envelope via
 [`EmitEnvelope`](../tools/client/json_out.cpp); see [client.md](client.md) and
 [missing-usability.md](missing-usability.md) §1). Public surfaces remain
-`hdllib.h` and the raw opcode protocol; there is no thicker SDK/binding yet.
+`hdllib.h` and the named protobuf RPC protocol; there is no thicker SDK/binding yet.
 
 **What needs to be done:**
 
@@ -237,7 +236,7 @@ assembler.”
 2. Medium term: expand templates (call/pop stubs, push-ret, short vs long jump
    selection, steal-length auto based on `InstrLen`).
 3. Longer term: optional text assembler backend (Keystone or a tiny in-tree
-   subset) behind `HdlBuildStub` / a new `OpAssemble`, still producing bytes for
+   subset) behind `HdlBuildStub` / a new `Code/Assemble` RPC, still producing bytes for
    the patch ledger.
 4. Ensure stolen prologues with multiple RIP-rel insns remain correct after
    relocate (extend existing fixup loop; add tests with RIP-relative LEA/MOV).
@@ -266,7 +265,7 @@ imports, patterns, and paths ([`src/resolve.cpp`](../src/resolve.cpp),
 2. New APIs: resolve module+symbol → VA/RVA; enumerate symbols matching a glob;
    optional offline PDB path override.
 3. New interest locator type `symbol` with revalidate via dbghelp.
-4. IPC opcodes only if symbol resolution runs **in-target** (usual) or document
+4. Add named RPC methods only if symbol resolution runs **in-target** (usual), or document
    controller-side resolution using a local copy of the module/PDB (often
    better for stealth and dependency weight).
 5. Graceful degrade when PDBs are absent; never require symbols for existing

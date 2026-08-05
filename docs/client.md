@@ -1,13 +1,13 @@
 # hdlclient workflows
 
-How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Full opcode / wire reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
+How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Protocol reference: [rpc.md](rpc.md); capability and payload reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
 
 ## Modes
 
 | Mode | Invocation | Best for |
 |------|------------|----------|
 | Local inject | `hdlclient inject …` | Load the DLL (no pipe yet) |
-| One-shot pipe | `hdlclient <pid> <verb> …` | All pipe ops; each process exits |
+| One-shot pipe | `hdlclient <pid> <verb> …` | All named RPC commands; each process exits |
 | Controller | `hdlclient --store PATH <pid> session\|store\|recipe\|stabilize …` | Interests + recipes across processes |
 
 Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>`. Override with env `HDL_PIPE`.
@@ -73,7 +73,7 @@ rem Prepare only: restore hooks/patches/watches, optional tracked payload DLLs, 
 hdlclient <pid> shutdown
 hdlclient <pid> shutdown --modules
 
-rem Preferred eject: OpShutdown (when the helper exports HdlShutdown) then FreeLibrary
+rem Preferred eject: Control/Shutdown (when the helper exports HdlShutdown) then FreeLibrary
 hdlclient unload <pid> C:\full\path\to\hdllib.dll
 hdlclient unload <pid> C:\full\path\to\hdllib.dll --modules
 ```
@@ -107,7 +107,7 @@ hdlclient <pid> write 0x7FF6ABCD0000 90 90 90 90
 
 `--type`: `bytes`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `f32`, `f64`, `string`, `wstring`.  
 `--cmp`: `exact`, `unknown`, `changed`, `unchanged`, `increased`, `decreased`, `increased_by`, `decreased_by`, `greater`, `less`.  
-Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`. Typed scans use natural alignment by default; `--unaligned` uses a byte stride. Search replies are always streamed; `--max 0` (default) is unlimited. The DLL pauses the scan when its 4096-hit buffer is full until the client reads.
+Scope: `--image`, `--executable`, `--module NAME`. First typed scan prints a session id for `--next` / `--hits` / `--close`. Typed scans use natural alignment by default; `--unaligned` uses a byte stride. Search replies are always streamed; `--max 0` (default) is unlimited. Unlimited results are written to a controller-owned binary candidate file and only a 64-hit preview is printed; use `--candidates FILE` to choose the path. The DLL pauses the scan when its 4096-hit buffer is full until the client reads.
 
 ### Locate (signatures → addresses)
 
@@ -392,4 +392,4 @@ hdlclient --store interests.json <pid> stabilize <field_or_fn_cand>
 | [`tools/client/cmds_controller.cpp`](../tools/client/cmds_controller.cpp) | session/store/recipe/stabilize |
 | [`tools/client/session_persist.cpp`](../tools/client/session_persist.cpp) | Session sidecar / env resolution |
 | [`tools/client/store.cpp`](../tools/client/store.cpp) / [`recipes.cpp`](../tools/client/recipes.cpp) | Interest JSON + recipes |
-| [`docs/capabilities.md`](capabilities.md) | Opcodes and wire |
+| [`docs/rpc.md`](rpc.md) / [`docs/capabilities.md`](capabilities.md) | Named RPC transport and payload details |

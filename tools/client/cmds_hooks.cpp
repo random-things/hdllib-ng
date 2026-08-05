@@ -18,7 +18,7 @@
 
 CommandResult CmdHooktrace(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -31,7 +31,7 @@ CommandResult CmdHooktrace(CmdCtx& ctx) {
             arg_count = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpHookTrace));
+    SetMethod(req, hdl::rpc::Method::HookTrace);
     AppendPod(req, target);
     AppendPod(req, arg_count);
     if (!ctx.client.Request(req, resp)) {
@@ -53,7 +53,7 @@ CommandResult CmdHooktrace(CmdCtx& ctx) {
 
 CommandResult CmdHook(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 5) {
@@ -70,7 +70,7 @@ CommandResult CmdHook(CmdCtx& ctx) {
     if (flags != 0) {
         return FailUsage(ctx);
     }
-    AppendPod(req, static_cast<uint32_t>(OpHook));
+    SetMethod(req, hdl::rpc::Method::Hook);
     AppendPod(req, target);
     AppendPod(req, detour);
     AppendPod(req, flags);
@@ -96,14 +96,14 @@ CommandResult CmdHook(CmdCtx& ctx) {
 
 CommandResult CmdUnhook(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
         return FailUsage(ctx);
     }
     const uint64_t handle = _wcstoui64(ctx.argv[3], nullptr, 0);
-    AppendPod(req, static_cast<uint32_t>(OpUnhook));
+    SetMethod(req, hdl::rpc::Method::Unhook);
     AppendPod(req, handle);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -116,7 +116,7 @@ CommandResult CmdUnhook(CmdCtx& ctx) {
 
 CommandResult CmdHookEnable(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 5) {
@@ -124,7 +124,7 @@ CommandResult CmdHookEnable(CmdCtx& ctx) {
     }
     const uint64_t handle = _wcstoui64(ctx.argv[3], nullptr, 0);
     const int32_t enable = _wtoi(ctx.argv[4]);
-    AppendPod(req, static_cast<uint32_t>(OpEnableHook));
+    SetMethod(req, hdl::rpc::Method::EnableHook);
     AppendPod(req, handle);
     AppendPod(req, enable);
     if (!ctx.client.Request(req, resp)) {
@@ -138,7 +138,7 @@ CommandResult CmdHookEnable(CmdCtx& ctx) {
 
 CommandResult CmdHookhits(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint32_t timeout_ms = 0;
@@ -150,7 +150,7 @@ CommandResult CmdHookhits(CmdCtx& ctx) {
             max_n = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpPollHookHits));
+    SetMethod(req, hdl::rpc::Method::PollHookHits);
     AppendPod(req, max_n);
     AppendPod(req, timeout_ms);
     if (!ctx.client.Request(req, resp)) {
@@ -250,9 +250,9 @@ CommandResult CmdHookImport(CmdCtx& ctx) {
         return CmdFail(L"hook-import", HDL_E_INVALID_ARG,
                        L"need hook-import DLL!Name or --dll X --import Y");
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpHookImport));
+    SetMethod(req, hdl::rpc::Method::HookImport);
     AppendWString(req, module.c_str());
     AppendString(req, dll.c_str());
     AppendString(req, import_name.c_str());

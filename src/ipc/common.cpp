@@ -2,10 +2,12 @@
 
 #include "discover.hpp"
 #include "memory.hpp"
+#include "rpc/runtime.hpp"
 
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace hdl {
 namespace ipc {
@@ -18,6 +20,7 @@ std::atomic<uint64_t> g_next_session_id{1};
 std::mutex g_discover_mu;
 std::unordered_map<uint64_t, std::shared_ptr<DiscoverSessionHolder>> g_discover;
 std::atomic<uint64_t> g_next_discover_id{1};
+thread_local std::shared_ptr<Job> g_request_job;
 
 void CloseSearchHolder(const std::shared_ptr<SearchSessionHolder>& holder) {
     if (!holder) {
@@ -43,8 +46,20 @@ void CloseDiscoverHolder(const std::shared_ptr<DiscoverSessionHolder>& holder) {
 
 } // namespace
 
+RequestJobScope::RequestJobScope(std::shared_ptr<Job> job) : previous_(std::move(g_request_job)) {
+    g_request_job = std::move(job);
+}
+
+RequestJobScope::~RequestJobScope() {
+    g_request_job = std::move(previous_);
+}
+
+std::shared_ptr<Job> CurrentRequestJob() {
+    return g_request_job;
+}
+
 bool WriteFrame(HANDLE pipe, const std::vector<uint8_t>& resp) {
-    return WriteFrameBytes(pipe, resp.data(), static_cast<uint32_t>(resp.size()));
+    return rpc::WriteHandlerResponse(pipe, resp.data(), static_cast<uint32_t>(resp.size()));
 }
 
 void TakeOptionalJobTimeoutFlags(proto::Reader& r, uint64_t* job_id, uint32_t* timeout_ms,
@@ -70,6 +85,13 @@ void TakeOptionalJobTimeoutFlags(proto::Reader& r, uint64_t* job_id, uint32_t* t
 }
 
 std::shared_ptr<Job> BindJob(uint64_t job_id, uint32_t timeout_ms) {
+    if (auto current = CurrentRequestJob()) {
+        if (timeout_ms && current->deadline_tick == 0) {
+            current->timeout_ms = timeout_ms;
+            current->deadline_tick = GetTickCount64() + timeout_ms;
+        }
+        return current;
+    }
     if (job_id) {
         auto existing = JobFind(job_id);
         if (existing && timeout_ms && existing->deadline_tick == 0) {

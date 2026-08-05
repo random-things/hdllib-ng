@@ -28,6 +28,21 @@ struct DiscoverSessionHolder {
     HdlDiscoverSession* session = nullptr;
 };
 
+// Makes the transport deadline available to existing domain handlers without
+// putting transport fields back into each method payload.
+class RequestJobScope {
+  public:
+    explicit RequestJobScope(std::shared_ptr<Job> job);
+    ~RequestJobScope();
+    RequestJobScope(const RequestJobScope&) = delete;
+    RequestJobScope& operator=(const RequestJobScope&) = delete;
+
+  private:
+    std::shared_ptr<Job> previous_;
+};
+
+std::shared_ptr<Job> CurrentRequestJob();
+
 bool WriteFrame(HANDLE pipe, const std::vector<uint8_t>& resp);
 
 // Optional trailer: job_id (u64), timeout_ms (u32), flags (u32). Missing fields default to 0.
@@ -96,14 +111,14 @@ inline bool WriteSearchStreamError(HANDLE pipe, HdlStatus st) {
     using namespace proto;
     std::vector<uint8_t> frame;
     AppendPod(frame, static_cast<int32_t>(st));
-    AppendPod(frame, 0u); /* flags */
-    AppendPod(frame, 0u); /* total */
-    AppendPod(frame, 0u); /* count */
+    AppendPod(frame, 0u);          /* flags */
+    AppendPod(frame, uint64_t{0}); /* total */
+    AppendPod(frame, 0u);          /* count */
     return WriteFrame(pipe, frame);
 }
 
 inline bool WriteSearchHitsStreamed(HANDLE pipe, HdlStatus st, const uint64_t* items,
-                                    uint32_t total, uint32_t stream_count, uint32_t chunk) {
+                                    uint64_t total, uint32_t stream_count, uint32_t chunk) {
     using namespace proto;
     if (stream_count == 0 || !items) {
         return WriteSearchStreamError(pipe, st);
@@ -127,7 +142,7 @@ inline bool WriteSearchHitsStreamed(HANDLE pipe, HdlStatus st, const uint64_t* i
 struct SearchHitStreamer {
     HANDLE pipe = nullptr;
     std::vector<uint64_t> buf;
-    uint32_t emitted = 0;
+    uint64_t emitted = 0;
     bool failed = false;
 
     explicit SearchHitStreamer(HANDLE p) : pipe(p) { buf.reserve(kSearchStreamCap); }
@@ -158,7 +173,7 @@ struct SearchHitStreamer {
         std::vector<uint8_t> frame;
         AppendPod(frame, static_cast<int32_t>(HDL_OK));
         AppendPod(frame, more ? static_cast<uint32_t>(HDL_IPC_MORE) : 0u);
-        AppendPod(frame, 0u); /* total unknown until Finish */
+        AppendPod(frame, uint64_t{0}); /* total unknown until Finish */
         AppendPod(frame, static_cast<uint32_t>(buf.size()));
         if (!buf.empty()) {
             AppendBytes(frame, buf.data(), buf.size() * sizeof(uint64_t));
@@ -167,7 +182,7 @@ struct SearchHitStreamer {
             failed = true;
             return HDL_E_FAILED;
         }
-        emitted += static_cast<uint32_t>(buf.size());
+        emitted += static_cast<uint64_t>(buf.size());
         buf.clear();
         return HDL_OK;
     }
@@ -177,7 +192,7 @@ struct SearchHitStreamer {
         if (failed) {
             return false;
         }
-        const uint32_t total = emitted + static_cast<uint32_t>(buf.size());
+        const uint64_t total = emitted + static_cast<uint64_t>(buf.size());
         std::vector<uint8_t> frame;
         AppendPod(frame, static_cast<int32_t>(st));
         AppendPod(frame, 0u); /* final */

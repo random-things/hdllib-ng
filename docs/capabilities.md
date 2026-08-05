@@ -1,12 +1,12 @@
 # hdllib capabilities
 
-Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](../src/protocol.hpp). The named-pipe protocol is the sole remote control surface for an injected `hdllib.dll`. Shared types/enums live in [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h).
+Capability reference organized around the named protobuf RPC services in [`services.proto`](../proto/hdl/rpc/v1/services.proto). The named-pipe protocol is the sole remote control surface for an injected `hdllib.dll`. Shared domain types/enums live in [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h); the complete transport contract is in [rpc.md](rpc.md).
 
-**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, passive process fingerprinting, allocation, and further DLL injection—controllable from outside via a multi-client named pipe (the sole remote control channel). The companion `hdlclient` adds an interest store and orchestration recipes on top of those ops.
+**What it is:** an injectable x64 Windows helper DLL. Once loaded in a target process it provides memory R/W and search, locate/discovery tooling (including reverse xrefs, function resolution, import hooks, access-shaped watch hits, frame-aware ranking, accumulating heat, and session export/import), placement (caves / nearby alloc / protect), pluggable disassembly, stubs and a reversible patch ledger, PE/graph/vtable helpers, hardware and page watchpoints, in-process calls and hooks, health/events, passive process fingerprinting, allocation, and further DLL injection—controllable from outside via a multi-client named pipe (the sole remote control channel). The companion `hdlclient` adds an interest store and orchestration recipes on top of those RPC methods.
 
 **Client workflows** (CLI groups, `discover-*` pipelines, recipes / store): [client.md](client.md).
 
-**Platform:** x64 only (no Wow64 helper). Opcodes: **1…91**, **`OpUnloadDll` = 92**, **`OpFingerprint` = 93**, **`OpShutdown` = 94**, **`OpTrackLoadedDll` = 95** (`enum Op` in [`src/protocol.hpp`](../src/protocol.hpp)).
+**Platform:** x64 only (no Wow64 helper). This is the first release protocol: there are no legacy numeric operation identifiers or compatibility modes.
 
 ---
 
@@ -15,8 +15,8 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 ```
 ┌─────────────────┐     named pipe      ┌──────────────────────────┐
 │ hdlclient.exe / │ ◄──────────────────► │ hdllib.dll (in target)   │
-│ custom client   │  length-prefixed     │  IPC server → Op handlers│
-└─────────────────┘  frames              │  C API / MinHook / search│
+│ custom client   │  protobuf envelopes  │  named RPC handlers      │
+└─────────────────┘  + bounded frames    │  C API / MinHook / search│
          │                               └──────────────────────────┘
          │ inject (hdlclient inject / HdlInjectDllEx)
          ▼
@@ -28,7 +28,8 @@ Capability reference organized around the IPC opcodes in [`src/protocol.hpp`](..
 | `hdllib.dll` | Loaded in-target; runs IPC server, memory/search/call/hook/place/code/discover logic |
 | `hdlclient.exe` | CLI: local multi-technique inject + pipe protocol + interest store & recipes |
 | `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
-| `protocol.hpp` | Opcode enum + POD/string encode helpers used by server and client |
+| `proto/hdl/rpc/v1` | Protobuf envelopes and named service/method declarations |
+| `protocol.hpp` | Compact domain payload codecs; never method identity |
 
 Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or the same with one literal pid placeholder such as `%lu` / `%08X`, expanded by replacement — never used as a `swprintf` format). Non-pipe paths and unknown `%` sequences are rejected; the path passed to `CreateFileW` is always rebuilt as `\\.\pipe\` + sanitized name. ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
 
@@ -38,23 +39,20 @@ Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_nam
 
 ### Handshake
 
-On connect, `PipeClient` sends `OpHello` then `OpCapabilities` before other work.
-
-| Op | Reply fields |
-|----|----------------|
-| `OpHello` (101) | `status`, `major` (`HDL_IPC_PROTO_MAJOR`), `minor`, `endian` (`HDL_IPC_ENDIAN_LE=1`), build id string |
-| `OpCapabilities` (102) | `status`, `uint32_t` feature bits (`HDL_CAP_SEARCH`, `HDL_CAP_DISCOVER`, …) |
-
-Incompatible major ⇒ connect fails with a clear negotiate error. `OpPing` remains liveness-only.
+The client writes `HDLRPC1\n` followed by a framed protobuf `ClientHello`. The
+server returns `ServerHello` with protocol `1.0`, a random 128-bit server
+instance ID that is stable for the loaded server lifetime, generated method
+inventory, streaming metadata, and transport limits. An incompatible major fails
+negotiation with a clear error.
 
 ### Frame layout
 
-Every request and response is a length-prefixed byte frame:
+Every post-preface message is a length-prefixed protobuf `Envelope`:
 
 | Field | Type | Notes |
 |-------|------|--------|
 | `size` | `uint32_t` | Payload byte count |
-| `payload` | `size` bytes | Request: starts with `uint32_t opcode`. Reply: starts with `int32_t status` (`HdlStatus`) |
+| `payload` | `size` bytes | Serialized `Envelope` containing a hello, named request, response, or `GoAway` |
 
 Implementation: `PipeReadFrame` / `PipeWriteFrame` in `src/ipc/` (facade in `ipc_server.cpp`); client mirror in `tools/client/pipe_client.cpp`.
 
@@ -68,19 +66,23 @@ Implementation: `PipeReadFrame` / `PipeWriteFrame` in `src/ipc/` (facade in `ipc
 | `AppendBytes` | Raw bytes |
 | `AppendHdl*` / `TakeHdl*` (`wire.hpp`) | Field-wise LE codecs for public `Hdl*` reply structs (no struct padding on the wire) |
 
-### Optional request trailer
+### Compact payload adapter fields
 
-Many long-running or bulk ops accept an optional trailing triple (missing fields default to 0):
+The envelope owns the caller deadline and delivery mode. The current domain
+adapter retains a trailing tuple because the in-process handlers share the same
+compact field codec:
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `job_id` | `uint64_t` | Bind to an existing cooperative job (`OpJobCreate`) |
-| `timeout_ms` | `uint32_t` | Deadline; if no `job_id`, a transient job may be created |
-| `flags` | `uint32_t` | `HDL_IPC_REQ_STREAM` (1) requests chunked replies |
+| reserved | `uint64_t` | Must be zero; remote jobs do not exist |
+| `timeout_ms` | `uint32_t` | Handler-adapter mirror of `Request.timeout_ms`; zero means no deadline |
+| `flags` | `uint32_t` | Handler-adapter streaming flag |
 
 ### Streaming replies
 
-When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **multiple frames**. Each chunk (regions/modules/threads/…):
+When `Request.stream_response` and the compact adapter's `HDL_IPC_REQ_STREAM`
+mirror are set for a schema-streaming method, the server writes **multiple
+`Response` envelopes**. Each compact chunk (regions/modules/threads/…):
 
 | Field | Type |
 |-------|------|
@@ -89,9 +91,10 @@ When `HDL_IPC_REQ_STREAM` is set on a supporting request, the server writes **mu
 | `total` | `uint32_t` |
 | `offset` | `uint32_t` |
 | `count` | `uint32_t` |
-| items | `count` records (type depends on op) |
+| items | `count` records (type depends on the method) |
 
-**Search** streams omit `offset`: `status`, `flags`, `total`, `count`, `u64[count]`.
+**Search** streams omit `offset` and use a 64-bit total: `status`, `flags`,
+`uint64_t total`, `uint32_t count`, `u64[count]`.
 
 Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`).
 
@@ -100,59 +103,60 @@ Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStrea
 | Code | Name | Meaning |
 |------|------|---------|
 | 0 | `HDL_OK` | Success |
-| 1 | `HDL_E_INVALID_ARG` | Bad payload / unsupported opcode |
+| 1 | `HDL_E_INVALID_ARG` | Bad payload or method argument |
 | 2 | `HDL_E_ACCESS` | Access denied |
 | 3 | `HDL_E_NOT_FOUND` | Missing session, module, window, etc. |
 | 4 | `HDL_E_NO_MEM` | Allocation failure |
 | 5 | `HDL_E_BUSY` | Ambiguous target, action already open, etc. |
 | 6 | `HDL_E_FAILED` | Generic failure |
 | 7 | `HDL_E_BUFFER_SMALL` | Caller buffer too small (C API: `*inout_count` = needed) |
-| 8 | `HDL_E_CANCELLED` | Cancelled via job / cancel flag |
+| 8 | `HDL_E_CANCELLED` | Cancelled by a local job/token or abandoned streaming request |
 | 9 | `HDL_E_NOT_INIT` | Library not initialized |
 | 10 | `HDL_E_TIMEOUT` | Deadline exceeded (callee may still be running on calls) |
 
 ---
 
-## Capability map (opcodes → features)
+## Capability map (RPC methods → features)
 
-Opcodes are `enum Op : uint32_t` in `protocol.hpp` (1…91, plus `OpUnloadDll` = 92, `OpFingerprint` = 93, `OpShutdown` = 94, `OpTrackLoadedDll` = 95). Groups below match product capabilities.
+Method identity comes from `services.proto`. Tables below use the generated
+method short name; the fully qualified form is `hdl.rpc.v1.Service/Method`.
 
 ### 1. Lifecycle, connectivity, logging
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpPing` | 1 | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
-| `OpSetLogLevel` | 8 | Set log verbosity | `HdlSetLogLevel` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `Ping` | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
+| `SetLogLevel` | Set log verbosity | `HdlSetLogLevel` |
 
-**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `OpShutdown`. Log file and health VEH are pipe ops (`OpSetLogFile`, `OpSetHealthVeh` / `OpGetHealthVeh`).
+**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `Shutdown`. Log file and health VEH are named RPC methods (`SetLogFile`, `SetHealthVeh` / `GetHealthVeh`).
 
 Default after inject: log level **off**; health VEH **off** until enabled or first `PollEvents`; IPC starts unless `HDL_NO_IPC`.
 
-**`OpPing` reply:** `status`, `uint32_t pid`.
+**`Ping` reply:** `status`, `uint32_t pid`.
 
-**`OpSetLogLevel` request:** `int32_t level` (`HDL_LOG_OFF`…`HDL_LOG_DEBUG`).
+**`SetLogLevel` request:** `int32_t level` (`HDL_LOG_OFF`…`HDL_LOG_DEBUG`).
 
 ---
 
 ### 2. DLL injection
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpInjectDll` | 2 | Inject another DLL into a process (or self / early-bird) | `HdlInjectDll`, `HdlInjectDllEx` |
-| `OpUnloadDll` | 92 | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` / `HdlUnloadDllEx` |
-| `OpShutdown` | 94 | Restore hooks/patches/watches; optional unload tracked DLLs; stop IPC (DLL stays mapped) | `HdlShutdown` / `HdlShutdownEx` |
-| `OpTrackLoadedDll` | 95 | Register a module-list DLL for later `UNLOAD_MODULES` shutdown | `HdlTrackLoadedDll` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `InjectDll` | Inject another DLL into a process (or self / early-bird) | `HdlInjectDll`, `HdlInjectDllEx` |
+| `UnloadDll` | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` / `HdlUnloadDllEx` |
+| `Shutdown` | Restore hooks/patches/watches; optional unload tracked DLLs; stop IPC (DLL stays mapped) | `HdlShutdown` / `HdlShutdownEx` |
+| `TrackLoadedDll` | Register a module-list DLL for later `UNLOAD_MODULES` shutdown | `HdlTrackLoadedDll` |
 
-**`OpInjectDll` request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.  
+**`InjectDll` request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.
 **Reply:** `status`, `uint64_t base`, `uint32_t out_pid`.
 
-**`OpUnloadDll` request:** `uint32_t pid`, `int32_t reload`, `wstring dll_path`.  
+**`UnloadDll` request:** `uint32_t pid`, `int32_t reload`, `wstring dll_path`.
 **Reply:** `status`, `uint64_t base` (new base when `reload != 0`, else 0).  
-Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shutdown_flags)` so instrumentation is restored outside the loader lock.
+Remote unload of a module that exports `HdlShutdown` first sends `Shutdown(shutdown_flags)` so instrumentation is restored outside the loader lock.
 
-**`OpShutdown` request:** `uint32_t flags` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Reply `status`; then the server signals IPC stop without joining the accept thread from the worker. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
+**`Shutdown` request:** `uint32_t flags` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Reply `status`; then the server signals IPC stop without joining the accept thread from the worker. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
 
-**`OpTrackLoadedDll` request:** `uint64_t base`, `wstring dll_path`.
+**`TrackLoadedDll` request:** `uint64_t base`, `wstring dll_path`.
 
 **Techniques** (`HDL_INJECT_*`, see [inject/](inject/README.md)):
 
@@ -178,7 +182,7 @@ Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shu
 | Special user APC | 17 | `NtQueueApcThreadEx2` |
 | Thread pool | 18 | `TpAllocWork` / `TpPostWork` |
 | ETW callback | 19 | `EtwEventRegister` enable-callback |
-| Auto | −1 | `HdlRecommendInject` ranking (C API / `hdlclient inject`; not a separate opcode) |
+| Auto | −1 | `HdlRecommendInject` ranking (C API / `hdlclient inject`; not a separate RPC method) |
 
 **Controller-local (not target-pipe):** target resolve and inject recommend live in `hdl_inject` / `hdlclient inject`. Injector `--stealth` stages a bland temp copy and prefers stealthier techniques on auto.
 
@@ -186,16 +190,16 @@ Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shu
 
 ### 3. Memory read / write / enumerate
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpReadMemory` | 3 | SEH-safe read (max 16 MiB per request) | `HdlReadMemory` |
-| `OpWriteMemory` | 4 | SEH-safe write (max 16 MiB) | `HdlWriteMemory` |
-| `OpEnumRegions` | 5 | Virtual memory regions | `HdlEnumRegions` |
-| `OpEnumModules` | 6 | Loaded modules | `HdlEnumModules` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `ReadMemory` | SEH-safe read (max 16 MiB per request) | `HdlReadMemory` |
+| `WriteMemory` | SEH-safe write (max 16 MiB) | `HdlWriteMemory` |
+| `EnumRegions` | Virtual memory regions | `HdlEnumRegions` |
+| `EnumModules` | Loaded modules | `HdlEnumModules` |
 
 **Read request:** `uint64_t address`, `uint32_t size` → reply `status`, `uint32_t got`, bytes.  
 **Write request:** `address`, `size`, raw bytes → `status`, `uint32_t wrote`.  
-**Enum regions/modules:** optional trailer; non-stream reply `status`, `count`, array of `HdlRegionInfo` / `HdlModuleInfo`. Stream chunks as above (regions chunk 64, modules 16).
+**Enum regions/modules:** non-stream reply `status`, `count`, array of `HdlRegionInfo` / `HdlModuleInfo`. Stream chunks as above (regions chunk 64, modules 16).
 
 `HdlRegionInfo`: base, size, protect, state, type.  
 `HdlModuleInfo`: base, size, path\[260\].
@@ -204,15 +208,15 @@ Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shu
 
 ### 4. Memory search (AOB + Cheat Engine–style incremental)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpSearchMemory` | 7 | One-shot AOB scan | `HdlSearchMemory` |
-| `OpSearchCreate` | 9 | Open incremental session | `HdlSearchCreate` |
-| `OpSearchClose` | 10 | Destroy session | `HdlSearchClose` |
-| `OpSearchFirst` | 11 | First scan (typed / AOB) | `HdlSearchFirst` |
-| `OpSearchNext` | 12 | Refine candidates | `HdlSearchNext` |
-| `OpSearchGetHits` | 13 | Dump hit addresses | `HdlSearchGetHits` / `HdlSearchGetCount` |
-| `OpSearchReset` | 14 | Clear session state | `HdlSearchReset` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `SearchMemory` | One-shot AOB scan | `HdlSearchMemory` |
+| `SearchCreate` | Open incremental session | `HdlSearchCreate` |
+| `SearchClose` | Destroy session | `HdlSearchClose` |
+| `SearchFirst` | First scan (typed / AOB) | `HdlSearchFirst` |
+| `SearchNext` | Refine candidates | `HdlSearchNext` |
+| `SearchGetHits` | Dump hit addresses | `HdlSearchGetHits` / `HdlSearchGetCount` |
+| `SearchReset` | Clear session state | `HdlSearchReset` |
 
 **AOB syntax:** `"48 8B ?? ?? 90"` (spaces optional; `??` / `?` = wildcard). `start==0 && size==0` ⇒ all committed readable regions.
 
@@ -222,50 +226,45 @@ Remote unload of a module that exports `HdlShutdown` first sends `OpShutdown(shu
 
 **Scope flags (`HDL_SEARCH_*`):** `IMAGE`, `EXECUTABLE`, `MODULE` (+ module name).
 
-**IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). Cancel/timeout via optional job trailer.
+**IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). The request envelope supplies an optional cooperative deadline; zero means unlimited.
 
-**`OpSearchMemory` / `OpSearchFirst` / `OpSearchGetHits` always stream.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on `WriteFile` until the client drains the pipe. Search frames: `status`, `flags(MORE)`, `total` (0 until final), `count`, `u64[count]` (no `offset` — append in order). Final frame has `MORE=0` and the true `total`. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.  
-**`OpSearchNext`:** `session`, `cmp`, `value_len` + bytes \[+ trailer\] → `status`, `count` (then use GetHits to stream survivors).
+**`SearchMemory` / `SearchFirst` / `SearchGetHits` support response streaming.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on pipe backpressure until the client drains it. Compact chunks carry `status`, `flags(MORE)`, `total:u64` (0 until final), `count`, and `u64[count]` (append in order). The final chunk clears `MORE` and carries the true total. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. `hdlclient` writes unlimited results to a controller-owned candidate file and retains only a 64-address preview in memory. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.
+**`SearchNext`:** `session`, `cmp`, `value_len` + bytes plus compact adapter fields → `status`, `count` (then use GetHits to stream survivors).
 
 ---
 
-### 5. Cooperative jobs
+### 5. Cooperative deadlines
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpJobCreate` | 15 | Create cancel/timeout token | `HdlJobCreate` |
-| `OpJobCancel` | 16 | Cancel job | `HdlJobCancel` |
-| `OpJobClose` | 17 | Release job | `HdlJobClose` |
-
-Jobs bind to long ops (search, call, pattern resolve, …) so one client can cancel another’s work or enforce a deadline. Completion can surface as `HDL_EVENT_JOB_DONE` via `OpPollEvents`.
-
-**Create:** `uint32_t timeout_ms` → `status`, `uint64_t job_id`.
+`Request.timeout_ms` applies a cooperative deadline to the named RPC. Zero means
+no deadline, including for all search methods. The local C API retains
+`HdlJobCreate` / `HdlJobCancel` / `HdlJobClose` for in-process composition, but
+jobs are not remotely addressable and are not RPC methods.
 
 ---
 
 ### 6. Process / thread health and events
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpGetHealth` | 18 | Snapshot: CPU, WS, hang, last exception | `HdlGetHealth` |
-| `OpEnumThreads` | 19 | Thread list | `HdlEnumThreads` |
-| `OpPollEvents` | 20 | Drain exception / health / job / hook wake-ups | `HdlPollEvents` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `GetHealth` | Snapshot: CPU, WS, hang, last exception | `HdlGetHealth` |
+| `EnumThreads` | Thread list | `HdlEnumThreads` |
+| `PollEvents` | Drain exception / health / job / hook wake-ups | `HdlPollEvents` |
 
 **Health flags:** `GUI_HUNG`, `HIGH_CPU`, `RECENT_EXCEPTION`. Optional VEH (`HdlSetHealthVeh` / `HDL_HEALTH_VEH`) feeds exception events.
 
-**Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK` (wake only; full payload via `OpPollHookHits`), `WATCH` (wake only; full payload via `OpPollWatchHits` when armed).
+**Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK` (wake only; full payload via `PollHookHits`), `WATCH` (wake only; full payload via `PollWatchHits` when armed).
 
-**`OpPollEvents`:** `max_events`, `timeout_ms` (0 = non-blocking) → `status`, `count`, `HdlEvent[]` (max clamped to 64).
+**`PollEvents`:** `max_events`, `timeout_ms` (0 = non-blocking) → `status`, `count`, `HdlEvent[]` (max clamped to 64).
 
 ---
 
 ### 6b. Process fingerprint
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpFingerprint` | 93 | Passive tags: language/runtime/UI/graphics/engine/… from modules + main IAT + PE subsystem | `HdlEnumFingerprintTags`, `HdlClassifyFingerprint` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `Fingerprint` | Passive tags: language/runtime/UI/graphics/engine/… from modules + main IAT + PE subsystem | `HdlEnumFingerprintTags`, `HdlClassifyFingerprint` |
 
-**Request:** `uint32_t scan_flags` (`HDL_FP_SCAN_MODULES` / `IMPORTS` / `PE`; `0` or omit → `HDL_FP_SCAN_DEFAULT`) + optional stream trailer.
+**Request:** `uint32_t scan_flags` (`HDL_FP_SCAN_MODULES` / `IMPORTS` / `PE`; `0` or omit → `HDL_FP_SCAN_DEFAULT`). Streaming delivery is selected by the request envelope.
 
 **Response:** `status`, `count`, `HdlFingerprintTag[]` (or streamed like modules). Each tag: `category`, `confidence` 0–100, `flags` (`FROM_MODULE` / `FROM_IMPORT` / `FROM_PE` / `PRIMARY`), `id`, `evidence`.
 
@@ -277,12 +276,12 @@ CLI: `hdlclient <pid> fingerprint`; `hdlclient --store PATH <pid> recipe suggest
 
 ### 7. Address resolution helpers
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpResolveExport` | 21 | `GetProcAddress`-style resolve | `HdlResolveExport` |
-| `OpResolveRip` | 26 | RIP-relative decode | `HdlResolveRipRelative` |
-| `OpFollowPointers` | 27 | Multilevel pointer chain | `HdlFollowPointers` |
-| `OpModuleBase` | 28 | Module base (null/empty = main EXE) | `HdlModuleBase` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `ResolveExport` | `GetProcAddress`-style resolve | `HdlResolveExport` |
+| `ResolveRip` | RIP-relative decode | `HdlResolveRipRelative` |
+| `FollowPointers` | Multilevel pointer chain | `HdlFollowPointers` |
+| `ModuleBase` | Module base (null/empty = main EXE) | `HdlModuleBase` |
 
 Typical LEA/CALL/JMP: `disp_offset=3`, `instr_len=7` (or 1/5 for near call/jmp). Pointer follow: start at `base`, repeatedly read pointer and add `offsets[i]` (IPC allows up to 64 offsets).
 
@@ -290,11 +289,11 @@ Typical LEA/CALL/JMP: `disp_offset=3`, `instr_len=7` (or 1/5 for near call/jmp).
 
 ### 8. In-process calls (export / absolute / vtable)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpCallExport` | 22 | Resolve export + call (worker thread) | `HdlCallExport` |
-| `OpCall` | 23 | Absolute address call | `HdlCall` |
-| `OpCallVtable` | 29 | `(*obj)[index]` then call | `HdlCallVtable` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `CallExport` | Resolve export + call (worker thread) | `HdlCallExport` |
+| `Call` | Absolute address call | `HdlCall` |
+| `CallVtable` | `(*obj)[index]` then call | `HdlCallVtable` |
 
 Microsoft x64 ABI, up to **16** arguments. Arg kinds (`HDL_CALL_ARG_*`): `U64`, `I64`, `PTR`, `BUF` (copy-in/out), `CSTR`, `WSTR`, `F32`, `F64` (IEEE bits in `u64`).
 
@@ -304,16 +303,16 @@ Thread modes: `WORKER` (default helper thread) or `MAIN` (sync on primary UI HWN
 
 **Call reply:** `status`, `HdlCallResult` (`return_value`, `last_error`), then for Call/CallExport: `buf_n` and per-BUF `(index, size, bytes)` copy-outs. On timeout/cancel the callee may still be running.
 
-**`OpCallVtable` extras:** `obj`, `index`, `arg_count`, `prepend_this`, `thread_mode`, `timeout_ms`, `job_id`, then args. When `prepend_this != 0`, a synthetic `this` is prepended if missing.
+**`CallVtable` extras:** `obj`, `index`, `arg_count`, `prepend_this`, `thread_mode`, `timeout_ms`, a reserved zero field, then args. When `prepend_this != 0`, a synthetic `this` is prepended if missing. The envelope deadline is authoritative for remote calls.
 
 ---
 
 ### 9. Durable scratch allocation
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpAlloc` | 24 | Tracked `VirtualAlloc` | `HdlAlloc` |
-| `OpFree` | 25 | Free prior alloc | `HdlFree` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `Alloc` | Tracked `VirtualAlloc` | `HdlAlloc` |
+| `Free` | Free prior alloc | `HdlFree` |
 
 **Alloc:** `uint64_t size`, `uint32_t protect` (`PAGE_*`) → `status`, `addr`. Useful for remote call buffers that must outlive a single call’s temp copies.
 
@@ -321,15 +320,15 @@ Thread modes: `WORKER` (default helper thread) or `MAIN` (sync on primary UI HWN
 
 ### 10. Hooks (MinHook + capture/trace)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpHookTrace` | 30 | Install capture-only hook (≤8 int-view args + return + caller) | `HdlHookTrace` |
-| `OpEnableHook` | 31 | Enable/disable | `HdlEnableHook` |
-| `OpUnhook` | 32 | Remove hook | `HdlUnhook` |
-| `OpPollHookHits` | 33 | Drain hit queue | `HdlPollHookHits` |
-| `OpHookImport` | 83 | Resolve PE import (DLL+name) → `HookTrace` on `bound_va` | `HdlHookImport` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `HookTrace` | Install capture-only hook (≤8 int-view args + return + caller) | `HdlHookTrace` |
+| `EnableHook` | Enable/disable | `HdlEnableHook` |
+| `Unhook` | Remove hook | `HdlUnhook` |
+| `PollHookHits` | Drain hit queue | `HdlPollHookHits` |
+| `HookImport` | Resolve PE import (DLL+name) → `HookTrace` on `bound_va` | `HdlHookImport` |
 
-**Custom detours over the pipe:** `OpHook` (`target_va`, `detour_va` → handle + trampoline). Default exports for inject: `HdlHookProc`, `HdlWinEventProc`.
+**Custom detours over the pipe:** `Hook` (`target_va`, `detour_va` → handle + trampoline). Default exports for inject: `HdlHookProc`, `HdlWinEventProc`.
 
 Trace hooks call the original, enqueue `HdlHookHit` (incl. `frame_count` + `frames[8]`), and wake `PollEvents` with `HDL_EVENT_HOOK`. Handle is the target address as `uint64_t`. Trampolines live while `hdllib.dll` remains loaded.
 
@@ -339,12 +338,12 @@ Trace hooks call the original, enqueue `HdlHookHit` (incl. `frame_count` + `fram
 
 ### 11. Locate (signatures, xrefs, pointer scan, struct probe)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpResolvePattern` | 34 | AOB → optional RIP + multilevel follow → abs/RVA | `HdlResolvePattern` |
-| `OpFindStringXrefs` | 35 | String → absolute / RIP-relative xrefs | `HdlFindStringXrefs` |
-| `OpPointerScan` | 36 | CE-style static pointer paths to a target | `HdlPointerScan` |
-| `OpProbeStruct` | 37 | Heuristic field kinds over a byte range (≤4096) | `HdlProbeStruct` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `ResolvePattern` | AOB → optional RIP + multilevel follow → abs/RVA | `HdlResolvePattern` |
+| `FindStringXrefs` | String → absolute / RIP-relative xrefs | `HdlFindStringXrefs` |
+| `PointerScan` | CE-style static pointer paths to a target | `HdlPointerScan` |
+| `ProbeStruct` | Heuristic field kinds over a byte range (≤4096) | `HdlProbeStruct` |
 
 **Pattern resolve:** pick Nth AOB hit, add `pattern_offset`, optionally decode RIP (`rip_disp_offset` / `rip_instr_len`), then follow offsets. Scope via `HDL_SEARCH_*`. Result: `match_addr`, `resolved_addr`, `module_base`, `rva`.
 
@@ -360,31 +359,31 @@ Trace hooks call the original, enqueue `HdlHookHit` (incl. `frame_count` + `fram
 
 Session-based pipeline: seed candidates → constraint / action evidence → stabilize with AOB synthesis or pointer-path consensus → cluster related objects → optional JSON export/import and field promotion from watches.
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpDiscoverCreate` | 38 | Open discover session | `HdlDiscoverCreate` |
-| `OpDiscoverClose` | 39 | Close session | `HdlDiscoverClose` |
-| `OpDiscoverAddCandidate` | 40 | Manually seed address/function/object/field | `HdlDiscoverAddCandidate` |
-| `OpDiscoverConstraintScan` | 41 | Find object bases matching field predicates | `HdlDiscoverConstraintScan` |
-| `OpDiscoverSynthesizePattern` | 42 | Build module-unique AOB for a candidate | `HdlDiscoverSynthesizePattern` |
-| `OpDiscoverPathConsensus` | 43 | Pointer-scan + keep paths that still resolve | `HdlDiscoverPathConsensus` |
-| `OpDiscoverPathValidate` | 44 | Filter path list against expected target | `HdlDiscoverPathValidate` |
-| `OpDiscoverWatch` | 45 | HookTrace a function for action ranking | `HdlDiscoverWatch` |
-| `OpDiscoverUnwatchAll` | 46 | Remove watches | `HdlDiscoverUnwatchAll` |
-| `OpDiscoverActionBegin` | 47 | Open named action window | `HdlDiscoverActionBegin` |
-| `OpDiscoverActionEnd` | 48 | Close action; associate hits / diffs | `HdlDiscoverActionEnd` |
-| `OpDiscoverWatchRegion` | 49 | Register region for change-heat | `HdlDiscoverWatchRegion` |
-| `OpDiscoverGetHeat` | 50 | Per-offset change heat after actions | `HdlDiscoverGetHeat` |
-| `OpDiscoverRankFunctions` | 51 | Rank functions seen during an action | `HdlDiscoverRankFunctions` |
-| `OpDiscoverClusterType` | 52 | Find other objects with same vtable@0 | `HdlDiscoverClusterType` |
-| `OpDiscoverGetCandidates` | 53 | Dump candidate list | `HdlDiscoverGetCandidates` |
-| `OpDiscoverWatchImport` | 84 | HookImport + register on session watches | `HdlDiscoverWatchImport` |
-| `OpDiscoverResetHeat` | 86 | Clear accumulated heat for a watched base | `HdlDiscoverResetHeat` |
-| `OpDiscoverExport` | 87 | Serialize session → UTF-8 JSON (≤4 MiB) | `HdlDiscoverExport` |
-| `OpDiscoverImport` | 88 | Best-effort restore candidates from JSON | `HdlDiscoverImport` |
-| `OpDiscoverDiffObjects` | 89 | Bytewise multi-instance field diffs | `HdlDiscoverDiffObjects` |
-| `OpDiscoverApplyWatchHits` | 90 | Promote watch hits in a range → `FIELD` cands | `HdlDiscoverApplyWatchHits` |
-| `OpDiscoverGetEvidence` | 91 | UTF-8 provenance string for a candidate id | `HdlDiscoverGetCandidateEvidence` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `DiscoverCreate` | Open discover session | `HdlDiscoverCreate` |
+| `DiscoverClose` | Close session | `HdlDiscoverClose` |
+| `DiscoverAddCandidate` | Manually seed address/function/object/field | `HdlDiscoverAddCandidate` |
+| `DiscoverConstraintScan` | Find object bases matching field predicates | `HdlDiscoverConstraintScan` |
+| `DiscoverSynthesizePattern` | Build module-unique AOB for a candidate | `HdlDiscoverSynthesizePattern` |
+| `DiscoverPathConsensus` | Pointer-scan + keep paths that still resolve | `HdlDiscoverPathConsensus` |
+| `DiscoverPathValidate` | Filter path list against expected target | `HdlDiscoverPathValidate` |
+| `DiscoverWatch` | HookTrace a function for action ranking | `HdlDiscoverWatch` |
+| `DiscoverUnwatchAll` | Remove watches | `HdlDiscoverUnwatchAll` |
+| `DiscoverActionBegin` | Open named action window | `HdlDiscoverActionBegin` |
+| `DiscoverActionEnd` | Close action; associate hits / diffs | `HdlDiscoverActionEnd` |
+| `DiscoverWatchRegion` | Register region for change-heat | `HdlDiscoverWatchRegion` |
+| `DiscoverGetHeat` | Per-offset change heat after actions | `HdlDiscoverGetHeat` |
+| `DiscoverRankFunctions` | Rank functions seen during an action | `HdlDiscoverRankFunctions` |
+| `DiscoverClusterType` | Find other objects with same vtable@0 | `HdlDiscoverClusterType` |
+| `DiscoverGetCandidates` | Dump candidate list | `HdlDiscoverGetCandidates` |
+| `DiscoverWatchImport` | HookImport + register on session watches | `HdlDiscoverWatchImport` |
+| `DiscoverResetHeat` | Clear accumulated heat for a watched base | `HdlDiscoverResetHeat` |
+| `DiscoverExport` | Serialize session → UTF-8 JSON (≤4 MiB) | `HdlDiscoverExport` |
+| `DiscoverImport` | Best-effort restore candidates from JSON | `HdlDiscoverImport` |
+| `DiscoverDiffObjects` | Bytewise multi-instance field diffs | `HdlDiscoverDiffObjects` |
+| `DiscoverApplyWatchHits` | Promote watch hits in a range → `FIELD` cands | `HdlDiscoverApplyWatchHits` |
+| `DiscoverGetEvidence` | UTF-8 provenance string for a candidate id | `HdlDiscoverGetCandidateEvidence` |
 
 **Candidate kinds:** `ADDRESS`, `FUNCTION`, `OBJECT`, `FIELD` (with confidence 0–100, address, module/RVA, tag).
 
@@ -405,32 +404,32 @@ Session-based pipeline: seed candidates → constraint / action evidence → sta
 
 Concrete `hdlclient` command sequences for these pipelines (and recipes that wrap them): [client.md § Discover](client.md#3-discover-sessions-discover-).
 
-**Discover typed scan:** `OpDiscoverScanValue` (opcode 99); `hdlclient discover-scan` uses it.
+**Discover typed scan:** the named `Discover/DiscoverScanValue` method backs `hdlclient discover-scan`.
 
 ---
 
 ### 13. Place (caves, nearby alloc, protect)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpFindCaves` | 54 | Search for fill-byte padding near a VA | `HdlFindCaves` |
-| `OpAllocNear` | 55 | `VirtualAlloc` within ±`max_distance` of a hint | `HdlAllocNear` |
-| `OpProtectMemory` | 56 | `VirtualProtect` wrapper | `HdlProtectMemory` |
-| `OpFlushICache` | 57 | Flush instruction cache for a range | `HdlFlushICache` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `FindCaves` | Search for fill-byte padding near a VA | `HdlFindCaves` |
+| `AllocNear` | `VirtualAlloc` within ±`max_distance` of a hint | `HdlAllocNear` |
+| `ProtectMemory` | `VirtualProtect` wrapper | `HdlProtectMemory` |
+| `FlushICache` | Flush instruction cache for a range | `HdlFlushICache` |
 
 **Cave query:** `min_size`, `fill_byte` (often `0xCC` / `0x00`), `near_addr`, `max_distance`, `search_flags` / module, `max_results`. Reply: cave `addr` + `size` list. Client recipes score caves (nearer first, then larger size).
 
-**AllocNear:** `near`, `max_distance`, `size`, `protect` → tracked address (free with `OpFree`).
+**AllocNear:** `near`, `max_distance`, `size`, `protect` → tracked address (free with `Free`).
 
 ---
 
 ### 14. Disassembly backends
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpDisasmEnumBackends` | 58 | List registered engines | `HdlDisasmEnumBackends` |
-| `OpDisasmGetBackend` | 59 | Active backend id | `HdlDisasmGetBackend` |
-| `OpDisasmSetBackend` | 60 | Select Zydis / Capstone / custom | `HdlDisasmSetBackend` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `DisasmEnumBackends` | List registered engines | `HdlDisasmEnumBackends` |
+| `DisasmGetBackend` | Active backend id | `HdlDisasmGetBackend` |
+| `DisasmSetBackend` | Select Zydis / Capstone / custom | `HdlDisasmSetBackend` |
 
 Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set only (no custom-engine registration over the pipe).
 
@@ -438,15 +437,15 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ### 15. Code (instr length, disasm, stubs, patch ledger)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpInstrLen` | 61 | Length of one insn at VA | `HdlInstrLen` |
-| `OpDisasm` | 62 | Decode up to N insns | `HdlDisasm` |
-| `OpBuildStub` | 63 | Emit trampoline / jmp template | `HdlBuildStub` |
-| `OpPatchCreate` | 64 | Record bytes + original for undo | `HdlPatchCreate` |
-| `OpPatchEnable` | 65 | Apply / restore patch | `HdlPatchEnable` |
-| `OpPatchRemove` | 66 | Drop ledger entry | `HdlPatchRemove` |
-| `OpPatchEnum` | 67 | List patches | `HdlPatchEnum` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `InstrLen` | Length of one insn at VA | `HdlInstrLen` |
+| `Disasm` | Decode up to N insns | `HdlDisasm` |
+| `BuildStub` | Emit trampoline / jmp template | `HdlBuildStub` |
+| `PatchCreate` | Record bytes + original for undo | `HdlPatchCreate` |
+| `PatchEnable` | Apply / restore patch | `HdlPatchEnable` |
+| `PatchRemove` | Drop ledger entry | `HdlPatchRemove` |
+| `PatchEnum` | List patches | `HdlPatchEnum` |
 
 **Stub kinds (`HDL_STUB_*`):** `ABS_JMP`, `REL_JMP32`, `MOV_RAX_JMP`, `RAW` (caller hex). Optional `steal_from` / `steal_min_bytes` copies prologue bytes; `alloc_rx` allocates an RX stub VA.
 
@@ -456,11 +455,11 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ### 16. PE metadata
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpEnumSections` | 68 | Section table for a module | `HdlEnumSections` |
-| `OpEnumExports` | 69 | Export names / RVAs | `HdlEnumExports` |
-| `OpEnumImports` | 70 | Import DLL+name / IAT | `HdlEnumImports` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `EnumSections` | Section table for a module | `HdlEnumSections` |
+| `EnumExports` | Export names / RVAs | `HdlEnumExports` |
+| `EnumImports` | Import DLL+name / IAT | `HdlEnumImports` |
 
 `module_base_or_0 == 0` ⇒ main EXE image.
 
@@ -468,13 +467,13 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ### 17. Bounded function / xref graph
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpEnumFunctions` | 71 | Heuristic function starts in a range / module | `HdlEnumFunctions` |
-| `OpXrefsFrom` | 72 | Outgoing call/jmp(/data) edges from a seed | `HdlXrefsFrom` |
-| `OpResolveFunction` | 79 | Align any interior VA → containing function (`start`/`end`/confidence/flags) | `HdlResolveFunction` |
-| `OpXrefsTo` | 80 | Incoming call/jmp(/data) sites targeting an address | `HdlXrefsTo` |
-| `OpInvalidateFnIndex` | 85 | Drop process-local function index cache | `HdlInvalidateFunctionIndex` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `EnumFunctions` | Heuristic function starts in a range / module | `HdlEnumFunctions` |
+| `XrefsFrom` | Outgoing call/jmp(/data) edges from a seed | `HdlXrefsFrom` |
+| `ResolveFunction` | Align any interior VA → containing function (`start`/`end`/confidence/flags) | `HdlResolveFunction` |
+| `XrefsTo` | Incoming call/jmp(/data) sites targeting an address | `HdlXrefsTo` |
+| `InvalidateFnIndex` | Drop process-local function index cache | `HdlInvalidateFunctionIndex` |
 
 `ResolveFunction` prefers compiler-authored x64 unwind ranges (confidence **100**) and accepts any interior byte address, including a post-watchpoint RIP. Its fallback and `EnumFunctions` use the active disassembler: export **90** (`HDL_FN_EXPORT`), call target **75** (`HDL_FN_CALLED`), and narrowly matched prologue **45** (`HDL_FN_PROLOGUE`); conditional/local jump targets are not function starts. Heuristic ends prefer ret / `int3` padding / next start, and the fallback index is cached per `(module_base, SizeOfImage)`.
 
@@ -484,10 +483,10 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ### 18. Observe (vtable / RTTI)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpWalkVtable` | 73 | Walk slots until non-code | `HdlWalkVtable` |
-| `OpQueryRttiName` | 74 | Best-effort MSVC type name | `HdlQueryRttiName` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `WalkVtable` | Walk slots until non-code | `HdlWalkVtable` |
+| `QueryRttiName` | Best-effort MSVC type name | `HdlQueryRttiName` |
 
 `is_object != 0` treats the address as an object (read vptr at +0); else as a vtable pointer. RTTI may return `HDL_E_NOT_FOUND` when COL / type_info is absent.
 
@@ -495,14 +494,14 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ### 19. Watchpoints (hardware + page)
 
-| Op | Value | Capability | C API |
-|----|------:|------------|-------|
-| `OpWatchHw` | 75 | DR0–3 breakpoint (tracked free-slot allocation) | `HdlWatchHw` |
-| `OpWatchPage` | 76 | `PAGE_GUARD` or `PAGE_NOACCESS` | `HdlWatchPage` |
-| `OpUnwatch` | 77 | Remove watch (clears stored DR index) | `HdlUnwatch` |
-| `OpEnumWatches` | 78 | List active watches | `HdlEnumWatches` |
-| `OpWatchRefresh` | 81 | Re-apply all HW watches to current threads | `HdlWatchRefresh` |
-| `OpPollWatchHits` | 82 | Drain `HdlWatchHit` queue (cap 256) | `HdlPollWatchHits` |
+| RPC method | Capability | C API |
+|------------|------------|-------|
+| `WatchHw` | DR0–3 breakpoint (tracked free-slot allocation) | `HdlWatchHw` |
+| `WatchPage` | `PAGE_GUARD` or `PAGE_NOACCESS` | `HdlWatchPage` |
+| `Unwatch` | Remove watch (clears stored DR index) | `HdlUnwatch` |
+| `EnumWatches` | List active watches | `HdlEnumWatches` |
+| `WatchRefresh` | Re-apply all HW watches to current threads | `HdlWatchRefresh` |
+| `PollWatchHits` | Drain `HdlWatchHit` queue (cap 256) | `HdlPollWatchHits` |
 
 **HW:** size `1|2|4|8`, access `exec|write|rw`, optional `tid` (0 = best-effort all threads). At most **4** concurrent HW watches.  
 **Page:** size region + mode `guard|noaccess`.  
@@ -510,66 +509,27 @@ Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set o
 
 ---
 
-## Opcode quick index
+## RPC service index
 
-| # | Op | Capability group |
-|--:|----|------------------|
-| 1 | Ping | Connectivity |
-| 2 | InjectDll | Injection |
-| 3–4 | Read/WriteMemory | Memory |
-| 5–6 | EnumRegions/Modules | Memory |
-| 7 | SearchMemory | Search |
-| 8 | SetLogLevel | Logging |
-| 9–14 | Search* session | Search |
-| 15–17 | Job* | Jobs |
-| 18–20 | Health / Threads / Events | Health |
-| 21 | ResolveExport | Resolve |
-| 22–23 | CallExport / Call | Call |
-| 24–25 | Alloc / Free | Alloc |
-| 26–28 | ResolveRip / FollowPointers / ModuleBase | Resolve |
-| 29 | CallVtable | Call |
-| 30–33 | HookTrace / Enable / Unhook / PollHits | Hooks |
-| 34–37 | ResolvePattern / Xrefs / PointerScan / Probe | Locate |
-| 38–53 | Discover* | Discover |
-| 54–57 | FindCaves / AllocNear / Protect / FlushICache | Place |
-| 58–60 | DisasmEnum/Get/SetBackend | Disasm |
-| 61–67 | InstrLen / Disasm / BuildStub / Patch* | Code |
-| 68–70 | EnumSections / Exports / Imports | PE |
-| 71–72 | EnumFunctions / XrefsFrom | Graph |
-| 73–74 | WalkVtable / QueryRttiName | Observe |
-| 75–78 | WatchHw / WatchPage / Unwatch / EnumWatches | Watch |
-| 79–80 | ResolveFunction / XrefsTo | Graph |
-| 81–82 | WatchRefresh / PollWatchHits | Watch |
-| 83 | HookImport | Hooks |
-| 84 | DiscoverWatchImport | Discover |
-| 85 | InvalidateFnIndex | Graph |
-| 86–91 | DiscoverResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence | Discover |
-| 92 | UnloadDll | Injection |
-| 93 | Fingerprint | Process fingerprint |
-| 94 | Shutdown | Lifecycle |
-| 95 | TrackLoadedDll | Lifecycle |
+The schema groups methods by domain. Method names, rather than assigned numbers, are the public protocol identity.
 
-### Opcodes 79–91 (graph / watch / discover extensions)
-
-| Opcode | ID | Role |
-|--------|-----|------|
-| `OpResolveFunction` | 79 | Map address to function bounds |
-| `OpXrefsTo` | 80 | Incoming call/jmp/data refs to target |
-| `OpWatchRefresh` | 81 | Re-arm DR/page watches after thread churn |
-| `OpPollWatchHits` | 82 | Drain watch hit queue |
-| `OpHookImport` | 83 | HookTrace on a PE import by DLL+name |
-| `OpDiscoverWatchImport` | 84 | Discover session: trace import for action ranking |
-| `OpInvalidateFnIndex` | 85 | Drop cached function index |
-| `OpDiscoverResetHeat` | 86 | Clear change-heat for a watched region |
-| `OpDiscoverExport` | 87 | Serialize discover session to JSON |
-| `OpDiscoverImport` | 88 | Load discover session JSON |
-| `OpDiscoverDiffObjects` | 89 | Diff candidate object snapshots |
-| `OpDiscoverApplyWatchHits` | 90 | Promote watch hits into field candidates |
-| `OpDiscoverGetEvidence` | 91 | Fetch UTF-8 evidence string for candidate |
+| Service | Capability group |
+|---------|------------------|
+| `Control` | Connectivity, logging, health, lifecycle, events |
+| `Process` | Process fingerprint, modules, regions, threads |
+| `Memory` | Read, write, allocate, protect, and placement |
+| `Search` | Stateless and stateful memory search |
+| `Call` | Exports, calls, and vtable calls |
+| `Hook` | Function/import hooks and hit polling |
+| `Locate` | Patterns, pointer paths, xrefs, and probes |
+| `Discover` | Discovery sessions, ranking, evidence, and import/export |
+| `Code` | Disassembly, stubs, patches, PE metadata, and function graph |
+| `Watch` | Hardware/page watches and hit polling |
+| `Injection` | DLL injection, unload, and tracking |
 
 ---
 
-## Place / code / PE / graph / watch (54–91)
+## Place / code / PE / graph / watch
 
 In-process placement and analysis surface:
 
@@ -580,21 +540,19 @@ In-process placement and analysis surface:
 - **EnumFunctions / XrefsFrom / ResolveFunction / XrefsTo / InvalidateFunctionIndex** — unwind-aligned x64 resolution plus bounded fallback index (export/call/prologue confidence, ret-based ends, process-local cache) and outbound/inbound edges (`HDL_XREF_CALL|JMP|DATA|FUNC`)
 - **WalkVtable / QueryRttiName** — MSVC RTTI best-effort
 - **WatchHw / WatchPage / Unwatch / EnumWatches / WatchRefresh / PollWatchHits** — DR breakpoints (tracked slots) and page guards; `HDL_EVENT_WATCH` is wake-only; full `HdlWatchHit` payload via `PollWatchHits`
-- **HookImport** — one-shot IAT sink tracing (opcode 83)
-- **Discover WatchImport / ResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence** — import watches, layout heat, session JSON, field promotion (opcodes 84, 86–91)
+- **HookImport** — one-shot IAT sink tracing
+- **Discover WatchImport / ResetHeat / Export / Import / DiffObjects / ApplyWatchHits / GetEvidence** — import watches, layout heat, session JSON, field promotion
 
 Hook hits include `frame_count` + `frames[8]` (stack capture) for frame-aware discover ranking.
 
-Controller-local (not target-pipe opcodes):
+Controller-local (not target-pipe RPC methods):
 
 - **Inject method ranking** — `hdlclient inject --recommend` / `--method auto` (`hdl_inject`)
 - **Target resolution** — pid + window title substring / class (`hdl_inject`)
 
-Pipe parity ops **96…100:** `OpSetLogFile`, `OpSetHealthVeh` / `OpGetHealthVeh`, `OpDiscoverScanValue`, `OpHook`.
+In-process lifecycle prepare is on the pipe: `Shutdown` / `hdlclient <pid> shutdown [--modules]`.
 
-In-process lifecycle prepare is on the pipe: `OpShutdown` / `hdlclient <pid> shutdown [--modules]`.
-
-**Client-side orchestration (no new DLL opcode):**
+**Client-side orchestration (no new DLL RPC method):**
 
 - **Interest store + recipes** — JSON locators and `recipe place` / `stitch` / `expand` / discover recipes (see [Interest store and recipes](#interest-store-and-recipes-client-only))
 
@@ -604,29 +562,29 @@ Full inject technique notes: [docs/inject/](inject/README.md). Future ideas: [do
 
 ## CLI ↔ capability mapping (`hdlclient`)
 
-| Command area | Ops used |
-|--------------|----------|
+| Command area | RPC methods used |
+|--------------|------------------|
 | `ping`, `log`, `log-file`, `health-veh` | Ping, SetLogLevel, SetLogFile, Set/GetHealthVeh |
-| `hook` | OpHook (target_va + detour_va) |
+| `hook` | Hook (target_va + detour_va) |
 | `shutdown` | Shutdown (optional `--modules`) |
 | `inject` (pipe + `hdlclient inject`) | InjectDll / local inject |
 | `read`, `write` | ReadMemory, WriteMemory |
 | `regions`, `modules`, `threads` | Enum* (+ stream) |
 | `scan` / `--next` / `--hits` | SearchMemory or Search* session |
-| `health`, `fingerprint`, `events`, `job` | GetHealth, Fingerprint, PollEvents, Job* |
+| `health`, `fingerprint`, `events` | GetHealth, Fingerprint, PollEvents |
 | `call` / `vcall` / `resolve` | Call, CallExport, CallVtable, ResolveExport |
 | `alloc` / `free` / `alloc-near` | Alloc, Free, AllocNear |
-| `caves` / `protect` / `flush-icache` / `alloc-near` | Place ops 54–57 |
-| `disasm-backend` / `disasm` / `instrlen` / `stub` | Disasm 58–60 + InstrLen / Disasm / BuildStub |
-| `patch` (`list`/`create`/`enable`/`disable`/`remove`) | Patch ledger 64–67 |
-| `sections` / `exports` / `imports` | PE 68–70 |
-| `functions` / `xrefs-from` / `resolve-function` / `xrefs-to` / `invalidate-fn-index` | Graph 71–72, 79–80, 85 |
-| `vtable` / `rtti` | Observe 73–74 |
-| `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`) | Watch 75–78, 81–82 |
+| `caves` / `protect` / `flush-icache` / `alloc-near` | FindCaves, Protect, FlushICache, AllocNear |
+| `disasm-backend` / `disasm` / `instrlen` / `stub` | Enum/Get/SetDisasmBackend, InstrLen, Disasm, BuildStub |
+| `patch` (`list`/`create`/`enable`/`disable`/`remove`) | Patch ledger methods |
+| `sections` / `exports` / `imports` | EnumSections, EnumExports, EnumImports |
+| `functions` / `xrefs-from` / `resolve-function` / `xrefs-to` / `invalidate-fn-index` | Function graph methods |
+| `vtable` / `rtti` | WalkVtable, QueryRttiName |
+| `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`) | Watch methods |
 | `rip`, `ptrchain`, `modbase` | ResolveRip, FollowPointers, ModuleBase |
 | `hooktrace`, `hook-import`, `hook-enable`/`enablehook`, `unhook`, `hookhits` | HookTrace, HookImport, EnableHook, Unhook, PollHookHits |
-| `resolve-pattern`, `xrefs`, `ptrscan`, `probe` | Locate ops |
-| `discover-*` (incl. `discover-pathvalidate`, `discover-scan`, `discover-watch-import`, `discover-reset-heat`, `discover-export`/`import`, `discover-diff`, `discover-apply-watch`, `discover-evidence`) | Discover ops 38–53 + 84, 86–91 (+ scan compose) |
+| `resolve-pattern`, `xrefs`, `ptrscan`, `probe` | Locate methods |
+| `discover-*` (incl. `discover-pathvalidate`, `discover-scan`, `discover-watch-import`, `discover-reset-heat`, `discover-export`/`import`, `discover-diff`, `discover-apply-watch`, `discover-evidence`) | Discover methods (+ scan composition) |
 | `hdlclient <pid> <verb>` / `session` / `store` / `recipe` / `stabilize` | One-shot controller (all pipe cmds + store/recipes) |
 | `store` / `recipe` / `stabilize` | Interest JSON + discover recipes (`--store` required for mutators) |
 
@@ -670,7 +628,7 @@ Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` 
 
 | File | Contents |
 |------|----------|
-| [`src/protocol.hpp`](../src/protocol.hpp) | Opcode enum, stream flags, encode/decode |
+| [`src/protocol.hpp`](../src/protocol.hpp) | RPC method enum, stream flags, encode/decode |
 | [`src/ipc_server.hpp`](../src/ipc_server.hpp) / [`src/ipc_server.cpp`](../src/ipc_server.cpp) | Public IPC start/stop + frame helpers |
 | [`src/ipc/`](../src/ipc/) | Server loop, framing, dispatch, handlers by domain |
 | [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) | C API, structs, enums |

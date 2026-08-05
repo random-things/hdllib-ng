@@ -197,10 +197,10 @@ static bool ApplyStoreAddPath(CmdCtx& ctx, const HdlPointerPath& path,
 
 CommandResult CmdDiscoverCreate(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverCreate));
+    SetMethod(req, hdl::rpc::Method::DiscoverCreate);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
@@ -225,7 +225,7 @@ CommandResult CmdDiscoverCreate(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverClose(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint64_t id = 0;
@@ -235,7 +235,7 @@ CommandResult CmdDiscoverClose(CmdCtx& ctx) {
         }
     }
     id = SessionOrFallback(ctx, id);
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverClose));
+    SetMethod(req, hdl::rpc::Method::DiscoverClose);
     AppendPod(req, id);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -258,7 +258,7 @@ CommandResult CmdDiscoverClose(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint64_t id = 0;
@@ -284,7 +284,7 @@ CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
         }
     }
     id = SessionOrFallback(ctx, id);
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverAddCandidate));
+    SetMethod(req, hdl::rpc::Method::DiscoverAddCandidate);
     AppendPod(req, id);
     AppendPod(req, kind);
     AppendPod(req, addr);
@@ -307,7 +307,7 @@ CommandResult CmdDiscoverAdd(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint64_t id = 0;
@@ -340,7 +340,7 @@ CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
         }
     }
     id = SessionOrFallback(ctx, id);
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverConstraintScan));
+    SetMethod(req, hdl::rpc::Method::DiscoverConstraintScan);
     AppendPod(req, id);
     AppendPod(req, size);
     AppendPod(req, static_cast<uint32_t>(preds.size()));
@@ -349,7 +349,7 @@ CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
     AppendWString(req, module.c_str());
     AppendString(req, tag.c_str());
     for (const auto& p : preds) {
-        hdl::proto::AppendHdlFieldPred(req, p);
+        hdl::proto::AppendHdlFieldPred(req.payload, p);
     }
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -362,7 +362,7 @@ CommandResult CmdDiscoverConstraint(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint64_t id = 0;
@@ -386,7 +386,7 @@ CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
         }
     }
     id = SessionOrFallback(ctx, id);
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverSynthesizePattern));
+    SetMethod(req, hdl::rpc::Method::DiscoverSynthesizePattern);
     AppendPod(req, id);
     AppendPod(req, cand);
     AppendPod(req, before);
@@ -418,7 +418,7 @@ CommandResult CmdDiscoverSynth(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverPathscan(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -444,7 +444,7 @@ CommandResult CmdDiscoverPathscan(CmdCtx& ctx) {
             ++i; /* consumed by TakeStoreAddName */
         }
     }
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverPathConsensus));
+    SetMethod(req, hdl::rpc::Method::DiscoverPathConsensus);
     AppendPod(req, target);
     AppendPod(req, depth);
     AppendPod(req, max_off);
@@ -504,7 +504,7 @@ CommandResult CmdDiscoverPathscan(CmdCtx& ctx) {
 
 CommandResult CmdDiscoverPathValidate(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -540,10 +540,10 @@ CommandResult CmdDiscoverPathValidate(CmdCtx& ctx) {
     for (uint32_t i = 0; i < depth; ++i) {
         path.offsets[i] = offs[i];
     }
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverPathValidate));
+    SetMethod(req, hdl::rpc::Method::DiscoverPathValidate);
     AppendPod(req, expected);
     AppendPod(req, static_cast<uint32_t>(1));
-    hdl::proto::AppendHdlPointerPath(req, path);
+    hdl::proto::AppendHdlPointerPath(req.payload, path);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
     }
@@ -626,9 +626,9 @@ CommandResult CmdDiscoverScan(CmdCtx& ctx) {
         return FailArg(ctx, L"Bad --value");
     }
 
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpDiscoverScanValue));
+    SetMethod(req, hdl::rpc::Method::DiscoverScanValue);
     AppendPod(req, disc_id);
     AppendPod(req, static_cast<uint64_t>(0));
     AppendPod(req, static_cast<uint64_t>(0));
@@ -676,7 +676,7 @@ static bool OpenOutWide(const wchar_t* path, std::ofstream* out) {
 
 CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     uint64_t id = 0;
@@ -730,38 +730,38 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
     }
     id = SessionOrFallback(ctx, id);
     if (ctx.cmd == L"discover-watch") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverWatch));
+        SetMethod(req, hdl::rpc::Method::DiscoverWatch);
         AppendPod(req, id);
         AppendPod(req, addr);
         AppendPod(req, args_n);
     } else if (ctx.cmd == L"discover-unwatch") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverUnwatchAll));
+        SetMethod(req, hdl::rpc::Method::DiscoverUnwatchAll);
         AppendPod(req, id);
     } else if (ctx.cmd == L"discover-action-begin") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverActionBegin));
+        SetMethod(req, hdl::rpc::Method::DiscoverActionBegin);
         AppendPod(req, id);
         AppendString(req, name.c_str());
     } else if (ctx.cmd == L"discover-action-end") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverActionEnd));
+        SetMethod(req, hdl::rpc::Method::DiscoverActionEnd);
         AppendPod(req, id);
     } else if (ctx.cmd == L"discover-watch-region") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverWatchRegion));
+        SetMethod(req, hdl::rpc::Method::DiscoverWatchRegion);
         AppendPod(req, id);
         AppendPod(req, addr);
         AppendPod(req, size);
     } else if (ctx.cmd == L"discover-heat") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetHeat));
+        SetMethod(req, hdl::rpc::Method::DiscoverGetHeat);
         AppendPod(req, id);
         AppendPod(req, addr);
         AppendPod(req, size ? size : static_cast<uint32_t>(64));
     } else if (ctx.cmd == L"discover-rank") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverRankFunctions));
+        SetMethod(req, hdl::rpc::Method::DiscoverRankFunctions);
         AppendPod(req, id);
         AppendString(req, name.c_str());
         AppendPod(req, rank_flags);
         AppendPod(req, static_cast<uint32_t>(64));
     } else if (ctx.cmd == L"discover-cluster") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverClusterType));
+        SetMethod(req, hdl::rpc::Method::DiscoverClusterType);
         AppendPod(req, id);
         AppendPod(req, addr);
         AppendPod(req, size);
@@ -769,7 +769,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         AppendPod(req, static_cast<uint32_t>(64));
         AppendWString(req, module.c_str());
     } else if (ctx.cmd == L"discover-cands") {
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetCandidates));
+        SetMethod(req, hdl::rpc::Method::DiscoverGetCandidates);
         AppendPod(req, id);
         AppendPod(req, static_cast<uint32_t>(256));
     } else if (ctx.cmd == L"discover-watch-import") {
@@ -777,7 +777,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
             return FailArg(ctx,
                            L"Need --session ID --dll NAME --import NAME [--args N] [--module MOD]");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverWatchImport));
+        SetMethod(req, hdl::rpc::Method::DiscoverWatchImport);
         AppendPod(req, id);
         AppendWString(req, module.c_str());
         AppendString(req, dll.c_str());
@@ -787,14 +787,14 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         if (!id || !addr) {
             return FailArg(ctx, L"Need --session ID --addr HEX");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverResetHeat));
+        SetMethod(req, hdl::rpc::Method::DiscoverResetHeat);
         AppendPod(req, id);
         AppendPod(req, addr);
     } else if (ctx.cmd == L"discover-export") {
         if (!id || out_path.empty()) {
             return FailArg(ctx, L"Need --session ID --out PATH");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverExport));
+        SetMethod(req, hdl::rpc::Method::DiscoverExport);
         AppendPod(req, id);
         AppendPod(req, static_cast<uint32_t>(65536));
     } else if (ctx.cmd == L"discover-import") {
@@ -806,14 +806,14 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
             return FailArg(ctx, L"Cannot read --in file");
         }
         std::string json((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverImport));
+        SetMethod(req, hdl::rpc::Method::DiscoverImport);
         AppendPod(req, id);
         AppendString(req, json.c_str());
     } else if (ctx.cmd == L"discover-diff") {
         if (!id || diff_addrs.size() < 2) {
             return FailArg(ctx, L"Need --session ID --addr A --addr B ... [--size N]");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverDiffObjects));
+        SetMethod(req, hdl::rpc::Method::DiscoverDiffObjects);
         AppendPod(req, id);
         AppendPod(req, static_cast<uint32_t>(diff_addrs.size()));
         AppendPod(req, size ? size : static_cast<uint32_t>(64));
@@ -825,7 +825,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         if (!id || !addr) {
             return FailArg(ctx, L"Need --session ID --addr HEX [--size N]");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverApplyWatchHits));
+        SetMethod(req, hdl::rpc::Method::DiscoverApplyWatchHits);
         AppendPod(req, id);
         AppendPod(req, addr);
         AppendPod(req, size ? size : static_cast<uint32_t>(64));
@@ -833,7 +833,7 @@ CommandResult CmdDiscoverMisc(CmdCtx& ctx) {
         if (!id || !cand_id) {
             return FailArg(ctx, L"Need --session ID --id CAND_ID");
         }
-        AppendPod(req, static_cast<uint32_t>(OpDiscoverGetEvidence));
+        SetMethod(req, hdl::rpc::Method::DiscoverGetEvidence);
         AppendPod(req, id);
         AppendPod(req, cand_id);
         AppendPod(req, static_cast<uint32_t>(160));

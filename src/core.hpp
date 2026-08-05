@@ -12,7 +12,7 @@ void CoreShutdownPrepare(uint32_t flags);
 /* Signal IPC stop without join. Alloc/registry finish runs after the accept thread
  * joins workers (CoreOnIpcServerExited). keep_alive_pipe: leave connected for reply. */
 void CoreShutdownFinish(void* keep_alive_pipe = nullptr);
-/* Loader-lock safe: FreeLibrary detach must do nothing. Tear down via OpShutdown first. */
+/* Loader-lock safe: FreeLibrary detach must do nothing. Tear down via Control.Shutdown first. */
 void CoreShutdownDetach();
 /* Called from IPC ThreadMain after workers are joined — runs pending FinishShutdownResources. */
 void CoreOnIpcServerExited();

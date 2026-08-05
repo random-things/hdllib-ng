@@ -8,9 +8,9 @@ CommandResult CmdPatch(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     if (_wcsicmp(ctx.argv[3], L"list") == 0) {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPatchEnum));
+        SetMethod(req, hdl::rpc::Method::PatchEnum);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
         }
@@ -77,9 +77,9 @@ CommandResult CmdPatch(CmdCtx& ctx) {
                 name = buf;
             }
         }
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPatchCreate));
+        SetMethod(req, hdl::rpc::Method::PatchCreate);
         AppendPod(req, addr);
         AppendPod(req, static_cast<uint32_t>(bytes.size()));
         AppendString(req, name.c_str());
@@ -104,9 +104,9 @@ CommandResult CmdPatch(CmdCtx& ctx) {
         ctx.argc >= 5) {
         const uint64_t handle = _wcstoui64(ctx.argv[4], nullptr, 0);
         const int32_t en = _wcsicmp(ctx.argv[3], L"enable") == 0 ? 1 : 0;
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPatchEnable));
+        SetMethod(req, hdl::rpc::Method::PatchEnable);
         AppendPod(req, handle);
         AppendPod(req, en);
         if (!ctx.client.Request(req, resp)) {
@@ -119,9 +119,9 @@ CommandResult CmdPatch(CmdCtx& ctx) {
     }
     if (_wcsicmp(ctx.argv[3], L"remove") == 0 && ctx.argc >= 5) {
         const uint64_t handle = _wcstoui64(ctx.argv[4], nullptr, 0);
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPatchRemove));
+        SetMethod(req, hdl::rpc::Method::PatchRemove);
         AppendPod(req, handle);
         if (!ctx.client.Request(req, resp)) {
             return FailIpc(ctx);
@@ -174,9 +174,9 @@ CommandResult CmdStub(CmdCtx& ctx) {
     if (kind != HDL_STUB_RAW && !target && !steal_from) {
         return FailUsage(ctx);
     }
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpBuildStub));
+    SetMethod(req, hdl::rpc::Method::BuildStub);
     AppendPod(req, kind);
     AppendPod(req, 0u);
     AppendPod(req, target);

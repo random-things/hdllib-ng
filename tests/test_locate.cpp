@@ -43,9 +43,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
     }
 
     auto resolve_export = [&](const char* name, uint64_t* out) -> bool {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpResolveExport));
+        SetMethod(req, hdl::rpc::Method::ResolveExport);
         AppendWString(req, L"");
         AppendString(req, name);
         if (!hdltest::PipeRequest(target.pid, req, resp)) {
@@ -80,9 +80,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* Module-scoped AOB for HDL1 immediate */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpResolvePattern));
+        SetMethod(req, hdl::rpc::Method::ResolvePattern);
         AppendString(req, "31 4C 44 48");
         AppendPod(req, static_cast<uint32_t>(0));
         AppendPod(req, static_cast<int32_t>(0));
@@ -108,10 +108,10 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* Absolute xref to string */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
         const char* s = "HDL_LOCATE_STRING_v1";
-        AppendPod(req, static_cast<uint32_t>(OpFindStringXrefs));
+        SetMethod(req, hdl::rpc::Method::FindStringXrefs);
         AppendPod(req, static_cast<uint32_t>(strlen(s)));
         AppendPod(req, static_cast<int32_t>(0));
         AppendPod(req, static_cast<uint32_t>(HDL_XREF_ABSOLUTE));
@@ -143,10 +143,10 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* RIP xref */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
         const char* s = "HDL_LOCATE_STRING_v1";
-        AppendPod(req, static_cast<uint32_t>(OpFindStringXrefs));
+        SetMethod(req, hdl::rpc::Method::FindStringXrefs);
         AppendPod(req, static_cast<uint32_t>(strlen(s)));
         AppendPod(req, static_cast<int32_t>(0));
         AppendPod(req, static_cast<uint32_t>(HDL_XREF_RIP_REL));
@@ -167,9 +167,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* Pointer scan from leaf */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpPointerScan));
+        SetMethod(req, hdl::rpc::Method::PointerScan);
         AppendPod(req, truth_leaf);
         AppendPod(req, static_cast<uint32_t>(2));
         AppendPod(req, static_cast<uint32_t>(0x100));
@@ -204,9 +204,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* Struct probe on LocateObj */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpProbeStruct));
+        SetMethod(req, hdl::rpc::Method::ProbeStruct);
         AppendPod(req, truth_obj);
         AppendPod(req, static_cast<uint32_t>(40));
         AppendPod(req, static_cast<uint32_t>(16));
@@ -234,9 +234,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* FollowPointers: *HdlTestLocateStringPtr (+0) => string address */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+        SetMethod(req, hdl::rpc::Method::FollowPointers);
         AppendPod(req, truth_str_ptr);
         AppendPod(req, static_cast<uint32_t>(1));
         AppendPod(req, static_cast<int64_t>(0));
@@ -253,9 +253,9 @@ void RunLocateTargetTests(Counters& c, const wchar_t* target_path, const wchar_t
 
     /* Two-level: *Root (+0) => &mid, *mid (+0) => &leaf */
     {
-        std::vector<uint8_t> req;
+        PreparedRequest req;
         std::vector<uint8_t> resp;
-        AppendPod(req, static_cast<uint32_t>(OpFollowPointers));
+        SetMethod(req, hdl::rpc::Method::FollowPointers);
         AppendPod(req, truth_root);
         AppendPod(req, static_cast<uint32_t>(2));
         AppendPod(req, static_cast<int64_t>(0));

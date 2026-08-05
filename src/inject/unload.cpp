@@ -5,6 +5,7 @@
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
 #include "protocol.hpp"
+#include "rpc/runtime.hpp"
 
 #include <cstring>
 #include <vector>
@@ -81,29 +82,58 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
         return false;
     }
 
-    std::vector<uint8_t> req;
-    proto::AppendPod(req, static_cast<uint32_t>(proto::OpShutdown));
-    proto::AppendPod(req, flags);
-    const uint32_t size = static_cast<uint32_t>(req.size());
-    if (!PipeWriteExact(pipe.get(), &size, sizeof(size)) ||
-        !PipeWriteExact(pipe.get(), req.data(), size)) {
+    if (!PipeWriteExact(pipe.get(), rpc::kConnectionPreface,
+                        static_cast<DWORD>(rpc::kConnectionPrefaceSize))) {
+        return false;
+    }
+    auto write_envelope = [&pipe](const rpc::v1::Envelope& envelope) {
+        std::vector<uint8_t> bytes;
+        if (!rpc::SerializeEnvelope(envelope, &bytes))
+            return false;
+        const uint32_t size = static_cast<uint32_t>(bytes.size());
+        return PipeWriteExact(pipe.get(), &size, sizeof(size)) &&
+               PipeWriteExact(pipe.get(), bytes.data(), size);
+    };
+    auto read_envelope = [&pipe](rpc::v1::Envelope* envelope) {
+        uint32_t size = 0;
+        if (!PipeReadExact(pipe.get(), &size, sizeof(size)) || size > rpc::kMaxFrameBytes)
+            return false;
+        std::vector<uint8_t> bytes(size);
+        return PipeReadExact(pipe.get(), bytes.data(), size) &&
+               rpc::ParseEnvelope(bytes.data(), bytes.size(), envelope);
+    };
+
+    rpc::v1::Envelope envelope;
+    envelope.mutable_client_hello()->set_protocol_major(rpc::kProtocolMajor);
+    envelope.mutable_client_hello()->set_protocol_minor(rpc::kProtocolMinor);
+    envelope.mutable_client_hello()->set_client_name("hdllib-unload");
+    if (!write_envelope(envelope) || !read_envelope(&envelope) || !envelope.has_server_hello() ||
+        envelope.server_hello().protocol_major() != rpc::kProtocolMajor) {
         return false;
     }
 
-    uint32_t rsize = 0;
-    if (!PipeReadExact(pipe.get(), &rsize, sizeof(rsize)) || rsize < sizeof(int32_t)) {
-        return false;
-    }
-    std::vector<uint8_t> resp(rsize);
-    if (!PipeReadExact(pipe.get(), resp.data(), rsize)) {
+    std::vector<uint8_t> compact_payload;
+    proto::AppendPod(compact_payload, flags);
+    rpc::v1::Payload payload;
+    payload.set_value(compact_payload.data(), compact_payload.size());
+    envelope.Clear();
+    auto* request = envelope.mutable_request();
+    request->set_request_id(1);
+    const std::string_view method = rpc::MethodName(rpc::Method::Shutdown);
+    request->set_method(method.data(), method.size());
+    if (!payload.SerializeToString(request->mutable_payload()) || !write_envelope(envelope) ||
+        !read_envelope(&envelope) || !envelope.has_response() ||
+        envelope.response().request_id() != 1 ||
+        !payload.ParseFromString(envelope.response().payload()) ||
+        payload.value().size() < sizeof(int32_t)) {
         return false;
     }
     pipe.reset();
 
     int32_t status = HDL_E_FAILED;
-    memcpy(&status, resp.data(), sizeof(status));
+    memcpy(&status, payload.value().data(), sizeof(status));
     if (status != HDL_OK) {
-        HDL_LOG_ERROR("OpShutdown returned %d", static_cast<int>(status));
+        HDL_LOG_ERROR("Control.Shutdown returned %d", static_cast<int>(status));
         return false;
     }
     /* Wait until the pipe is gone so ServeClient has left the DLL. */

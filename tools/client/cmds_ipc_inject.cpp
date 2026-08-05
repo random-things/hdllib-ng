@@ -18,7 +18,7 @@
 
 CommandResult CmdInject(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -91,7 +91,7 @@ CommandResult CmdInject(CmdCtx& ctx) {
     if (!exe_path.empty()) {
         GetFullPathNameW(exe_path.c_str(), MAX_PATH, full_exe, nullptr);
     }
-    AppendPod(req, static_cast<uint32_t>(OpInjectDll));
+    SetMethod(req, hdl::rpc::Method::InjectDll);
     AppendPod(req, target_pid);
     AppendPod(req, method);
     AppendWString(req, full);
@@ -112,9 +112,9 @@ CommandResult CmdInject(CmdCtx& ctx) {
         const uint32_t track_pid = out_pid ? out_pid : (target_pid ? target_pid : ctx.pid);
         hdlcli::RememberInjectedModule(track_pid, full, base);
         if (track_pid == ctx.pid) {
-            std::vector<uint8_t> treq;
+            PreparedRequest treq;
             std::vector<uint8_t> tresp;
-            AppendPod(treq, static_cast<uint32_t>(OpTrackLoadedDll));
+            SetMethod(treq, hdl::rpc::Method::TrackLoadedDll);
             AppendPod(treq, base);
             AppendWString(treq, full);
             ctx.client.Request(treq, tresp);
@@ -141,18 +141,18 @@ CommandResult CmdShutdown(CmdCtx& ctx) {
 
     if (flags & HDL_SHUTDOWN_UNLOAD_MODULES) {
         for (const auto& m : hdlcli::ListInjectedModules(ctx.pid)) {
-            std::vector<uint8_t> treq;
+            PreparedRequest treq;
             std::vector<uint8_t> tresp;
-            AppendPod(treq, static_cast<uint32_t>(OpTrackLoadedDll));
+            SetMethod(treq, hdl::rpc::Method::TrackLoadedDll);
             AppendPod(treq, m.base);
             AppendWString(treq, m.path.c_str());
             ctx.client.Request(treq, tresp);
         }
     }
 
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
-    AppendPod(req, static_cast<uint32_t>(OpShutdown));
+    SetMethod(req, hdl::rpc::Method::Shutdown);
     AppendPod(req, flags);
     if (!ctx.client.Request(req, resp)) {
         return FailIpc(ctx);
@@ -175,7 +175,7 @@ CommandResult CmdShutdown(CmdCtx& ctx) {
 
 CommandResult CmdUnload(CmdCtx& ctx) {
     using namespace hdl::proto;
-    std::vector<uint8_t> req;
+    PreparedRequest req;
     std::vector<uint8_t> resp;
 
     if (ctx.argc < 4) {
@@ -196,7 +196,7 @@ CommandResult CmdUnload(CmdCtx& ctx) {
     }
     wchar_t full[MAX_PATH];
     GetFullPathNameW(path, MAX_PATH, full, nullptr);
-    AppendPod(req, static_cast<uint32_t>(OpUnloadDll));
+    SetMethod(req, hdl::rpc::Method::UnloadDll);
     AppendPod(req, target_pid);
     AppendPod(req, static_cast<int32_t>(reload));
     AppendWString(req, full);

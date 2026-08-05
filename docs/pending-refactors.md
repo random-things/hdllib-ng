@@ -10,14 +10,14 @@ The reviewed first-party code is approximately 35,200 lines across 137 C/C++/ASM
 
 | Priority | Status | Finding / fix |
 |---|---|---|
-| Critical | **Fixed** | `DllMain` DETACH calls `CoreShutdownDetach()` which is a loader-lock no-op. Teardown is `OpShutdown` → `CoreShutdownPrepare` / `CoreShutdownFinish` (finish deferred until IPC workers join via `CoreOnIpcServerExited`). FreeLibrary without prior `OpShutdown` is unsupported. Lifecycle stress: `hdl_tests --lifecycle-only`. |
+| Critical | **Fixed** | `DllMain` DETACH calls `CoreShutdownDetach()` which is a loader-lock no-op. Teardown is `Control/Shutdown` → `CoreShutdownPrepare` / `CoreShutdownFinish` (finish deferred until IPC workers join via `CoreOnIpcServerExited`). FreeLibrary without prior shutdown prepare is unsupported. Lifecycle stress: `hdl_tests --lifecycle-only`. |
 | Critical | **Fixed** | IPC `ServeClient` workers are joinable (`server.cpp`); accept thread joins them before session/job map teardown. Soft 2s wait removed as primary safety. `CoreShutdownPrepare` tears down instrumentation only; session/job close runs after worker join (`ThreadMain` + `CloseDomainSessionsAndJobs` on the finish path). |
 | High | **Fixed** | Search/discover sessions use `shared_ptr` holders with per-session mutexes (`common.cpp`). Sessions remain process-global by id so multi-process CLI staging works; UAF on concurrent close is prevented by shared ownership (no disconnect auto-close). Regression: `lifecycle/search_close_vs_inflight`, `lifecycle/discover_close_vs_inflight`, `lifecycle/close_all_vs_inflight`, `lifecycle/ipc_close_vs_inflight` in `hdl_tests --lifecycle-only`. |
 | High | **Fixed** | `CoreInit` already uses `kUninit → kBootstrapping → kReady`. `ipc::Start` now returns `HDL_E_FAILED` unless the listen pipe becomes ready. |
-| High | **Fixed** | `OpHello` / `OpCapabilities` (`HDL_IPC_PROTO_MAJOR=1`); `PipeClient` negotiates on connect. Field-wise LE codecs in `src/ipc/wire.hpp` for wire `Hdl*` structs (including request-side `HdlFieldPred` / `HdlPointerPath`); `hdl_pe_tests` round-trips codecs. |
+| High | **Fixed** | The `HDLRPC1\n` preface and protobuf `ClientHello` / `ServerHello` negotiate protocol 1.0 and advertise the schema-generated method inventory and transport limits. Field-wise LE codecs remain inside compact domain payload adapters; `hdl_pe_tests` round-trips them. |
 | High | **Fixed** | Bounds-checked `PeImageView` (`src/inject/pe_image_view.*`) used by manual map: rejects one-past-end `AddressOfEntryPoint`; shared `WalkBaseRelocDirectory` / local `ApplyRelocations` (`pe_relocs.*`) fail closed on truncated/malformed base-reloc blocks — covered by `hdl_pe_tests` fixtures that reach `ApplyRelocations`. |
 
-Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `CoreShutdown` because MinHook/CRT teardown can `STATUS_STACK_BUFFER_OVERRUN` after heavy hook API tests. Injected unload remains OpShutdown + no-op detach.
+Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `CoreShutdown` because MinHook/CRT teardown can `STATUS_STACK_BUFFER_OVERRUN` after heavy hook API tests. Injected unload remains named shutdown RPC + no-op detach.
 
 ## Practical refactors
 
@@ -48,11 +48,12 @@ Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `Co
 
    `src/win/raii.hpp` provides `unique_handle`, `unique_hmodule`, and `scope_exit`. Applied across injection techniques (`create_remote_thread`, `queue_user_apc`, `rtl_create_user_thread`, `nt_create_thread_ex`, `thread_hijack`, `rtl_remote_call`, `early_bird_apc`, `section_map`, `manual_map`) and IPC server ownership.
 
-5. Make operations declarative. **Done**
+5. Make RPC methods declarative. **Done**
 
-   `src/ipc/ops_manifest.inc` defines every opcode, handler symbol, and capability bit in one
-   X-macro table. `protocol.hpp` derives `enum Op`, `dispatch.cpp` generates its switch, and
-   `tests/ops_manifest_test.cpp` validates uniqueness and capability-bit sanity at build time.
+   `proto/hdl/rpc/v1/services.proto` defines the named service surface. The
+   `hdl_rpc_codegen` protoc plugin derives method metadata and handler dispatch;
+   `hdl_rpc_schema_tests` verifies generated inventory and dispatch parity. There
+   is no parallel numeric registry.
 
 6. Split the public header without breaking consumers. **Done**
 
