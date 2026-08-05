@@ -278,6 +278,12 @@ unset(_HDL_CMAKE_POLICY_VERSION_MINIMUM_WAS_DEFINED)
 
 set(HDL_RPC_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(HDL_RPC_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS
+  "${protobuf_SOURCE_DIR}"
+  "${protobuf_SOURCE_DIR}/upb/reflection/cmake"
+  "${absl_SOURCE_DIR}"
+  "${protobuf_SOURCE_DIR}/src"
+  "${protobuf_SOURCE_DIR}/third_party/utf8_range")
 set(HDL_RPC_PROTO_FILES
   "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/common.proto"
   "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/envelope.proto"
@@ -296,7 +302,14 @@ set(HDL_RPC_BINDING_OUTPUTS
 
 add_executable(hdl_rpc_codegen tools/rpc_codegen/main.cpp)
 target_link_libraries(hdl_rpc_codegen PRIVATE protobuf::libprotoc protobuf::libprotobuf)
+target_include_directories(hdl_rpc_codegen SYSTEM PRIVATE
+  ${HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS})
 hdl_configure_target(hdl_rpc_codegen HOST_TOOL)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  # MSVC 14.51 reports C4702 from Abseil template expansion even when its
+  # include roots are external; keep that dependency diagnostic out of /WX.
+  target_compile_options(hdl_rpc_codegen PRIVATE /wd4702)
+endif()
 
 add_custom_command(
   OUTPUT ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS}
@@ -328,8 +341,9 @@ add_custom_target(hdl_rpc_generated
 add_library(hdl_rpc_proto STATIC ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS})
 add_dependencies(hdl_rpc_proto hdl_rpc_generated)
 target_include_directories(hdl_rpc_proto PUBLIC
-  "${HDL_RPC_GENERATED_DIR}"
-  "${protobuf_SOURCE_DIR}/third_party/utf8_range")
+  "${HDL_RPC_GENERATED_DIR}")
+target_include_directories(hdl_rpc_proto SYSTEM PUBLIC
+  ${HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS})
 target_link_libraries(hdl_rpc_proto PUBLIC protobuf::libprotobuf-lite)
 
 add_library(hdl_rpc_runtime STATIC
@@ -874,7 +888,7 @@ if(HDL_BUILD_TOYS)
     )
     target_compile_definitions(hdl_toy_tests PRIVATE UNICODE _UNICODE)
     hdl_configure_target(hdl_toy_tests)
-    target_link_libraries(hdl_toy_tests PRIVATE hdl_inject advapi32)
+    target_link_libraries(hdl_toy_tests PRIVATE hdl_inject hdl_rpc_runtime advapi32)
     add_dependencies(hdl_toy_tests hdlclient hdllib hdl_toy_arena)
     add_custom_command(TARGET hdl_toy_tests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
