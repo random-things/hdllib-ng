@@ -653,6 +653,9 @@ HdlStatus SearchCreate(HdlSearchSession** out_session) {
     if (!out_session) {
         return HDL_E_INVALID_ARG;
     }
+    // std::nothrow returns null on failure; CodeQL build mode "none" can
+    // conservatively resolve this as the throwing overload.
+    // codeql[cpp/incorrect-allocation-error-handling]
     auto* s = new (std::nothrow) SearchSession();
     if (!s) {
         return HDL_E_NO_MEM;

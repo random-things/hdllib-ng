@@ -15,6 +15,11 @@ param(
     # Skip database create; analyze an existing DatabaseDir.
     [switch]$AnalyzeOnly,
 
+    # The default scans checked-in C/C++ without compiling dependencies. Use
+    # manual only when a traced, configuration-specific build is required.
+    [ValidateSet('none', 'manual')]
+    [string]$BuildMode = 'none',
+
     # Do not exit non-zero when the SARIF contains alerts (still writes reports).
     [switch]$AllowFindings,
 
@@ -197,33 +202,44 @@ New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dbPath),
     (Split-Path -Parent $sarifPath), (Split-Path -Parent $csvPath) | Out-Null
 
 if (-not $AnalyzeOnly) {
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-        throw 'CMake is not available. Invoke CodeQL through tools/ci/run-checks.ps1.'
-    }
-
     if (Test-Path -LiteralPath $dbPath) {
         Write-Host "Removing stale database: $dbPath"
         Remove-Item -LiteralPath $dbPath -Recurse -Force
     }
 
-    # Match the clean GitHub-hosted runner: do not let an up-to-date local build
-    # produce an empty/partial traced database or retain an old CMake cache.
-    $buildDir = Join-Path $repoRoot 'build\ci-codeql'
-    if (Test-Path -LiteralPath $buildDir) {
-        Write-Host "Removing stale CodeQL build: $buildDir"
-        Remove-Item -LiteralPath $buildDir -Recurse -Force
-    }
-
-    $tempRoot = Join-Path $env:TEMP ("hdllib-codeql-{0}" -f [guid]::NewGuid().ToString('N'))
-    $fetchDir = if ([string]::IsNullOrWhiteSpace($FetchContentDir)) {
-        Join-Path $tempRoot 'fetchcontent'
+    if ($BuildMode -eq 'none') {
+        Write-Host 'Creating fresh CodeQL database (C/C++ build mode: none)...'
+        & $codeql database create $dbPath `
+            --language=cpp `
+            --build-mode=none `
+            --source-root=$repoRoot `
+            --codescanning-config=$configPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "codeql database create failed with exit code $LASTEXITCODE."
+        }
     } else {
-        Resolve-ResultPath $FetchContentDir
-    }
-    $buildScript = Join-Path $tempRoot 'build.cmd'
-    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
-    try {
-        @"
+        if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+            throw 'CMake is not available for manual CodeQL extraction.'
+        }
+
+        # A manual extraction must trace a clean build. Otherwise an up-to-date
+        # tree can produce an empty or partial database.
+        $buildDir = Join-Path $repoRoot 'build\ci-codeql'
+        if (Test-Path -LiteralPath $buildDir) {
+            Write-Host "Removing stale CodeQL build: $buildDir"
+            Remove-Item -LiteralPath $buildDir -Recurse -Force
+        }
+
+        $tempRoot = Join-Path $env:TEMP ("hdllib-codeql-{0}" -f [guid]::NewGuid().ToString('N'))
+        $fetchDir = if ([string]::IsNullOrWhiteSpace($FetchContentDir)) {
+            Join-Path $tempRoot 'fetchcontent'
+        } else {
+            Resolve-ResultPath $FetchContentDir
+        }
+        $buildScript = Join-Path $tempRoot 'build.cmd'
+        New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+        try {
+            @"
 @echo off
 setlocal
 cd /d "$repoRoot"
@@ -233,17 +249,18 @@ cmake --build --preset ci-codeql --parallel
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath $buildScript -Encoding ascii
 
-        Write-Host 'Creating fresh CodeQL database (clean traced ci-codeql build)...'
-        & $codeql database create $dbPath `
-            --language=cpp `
-            --source-root=$repoRoot `
-            --codescanning-config=$configPath `
-            --command="cmd /c `"$buildScript`""
-        if ($LASTEXITCODE -ne 0) {
-            throw "codeql database create failed with exit code $LASTEXITCODE."
+            Write-Host 'Creating fresh CodeQL database (clean traced ci-codeql build)...'
+            & $codeql database create $dbPath `
+                --language=cpp `
+                --source-root=$repoRoot `
+                --codescanning-config=$configPath `
+                --command="cmd /c `"$buildScript`""
+            if ($LASTEXITCODE -ne 0) {
+                throw "codeql database create failed with exit code $LASTEXITCODE."
+            }
+        } finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
-    } finally {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 } elseif (-not (Test-Path -LiteralPath $dbPath)) {
     throw "AnalyzeOnly set but database '$dbPath' does not exist."

@@ -52,7 +52,7 @@ __declspec(dllexport) __declspec(noinline) const char* HdlToyUseString(void) {
 }
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 /* Immediate 0x544F5931 ('TOY1') → bytes 31 59 4F 54 in the image. */
 __declspec(dllexport) __declspec(noinline) int HdlToyCalc(int a, int b) {
@@ -62,7 +62,7 @@ __declspec(dllexport) __declspec(noinline) int HdlToyCalc(int a, int b) {
     return x + y + (magic ^ magic);
 }
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 struct ToyBag {
@@ -130,6 +130,9 @@ static void SyncStaticRoots() {
 }
 
 static ToyBag* AllocBag(int32_t gold, int32_t potions) {
+    // std::nothrow returns null on failure; CodeQL build mode "none" can
+    // conservatively resolve this as the throwing overload.
+    // codeql[cpp/incorrect-allocation-error-handling]
     auto* bag = new (std::nothrow) ToyBag{};
     if (!bag) {
         return nullptr;
@@ -141,6 +144,9 @@ static ToyBag* AllocBag(int32_t gold, int32_t potions) {
 }
 
 static ToyEntity* AllocEntity(const char* name, int32_t hp, float x, float y, int32_t gold) {
+    // std::nothrow returns null on failure; CodeQL build mode "none" can
+    // conservatively resolve this as the throwing overload.
+    // codeql[cpp/incorrect-allocation-error-handling]
     auto* e = new (std::nothrow) ToyEntity{};
     if (!e) {
         return nullptr;
@@ -165,7 +171,9 @@ static void FreeEntity(ToyEntity* e) {
     delete e;
 }
 
-__declspec(dllexport) ToyWorld* HdlToyGetWorld(void) { return g_world_ptr; }
+__declspec(dllexport) ToyWorld* HdlToyGetWorld(void) {
+    return g_world_ptr;
+}
 
 __declspec(dllexport) ToyEntity* HdlToyGetEntity(uint32_t index) {
     if (!g_world_ptr || index >= g_world_ptr->count) {
@@ -180,7 +188,7 @@ __declspec(dllexport) ToyBag* HdlToyGetBag(uint32_t index) {
 }
 
 #if defined(_MSC_VER)
-#  pragma optimize("", off)
+#pragma optimize("", off)
 #endif
 __declspec(dllexport) __declspec(noinline) void HdlToyTickOnce(void) {
     if (!g_world_ptr) {
@@ -251,7 +259,7 @@ __declspec(dllexport) __declspec(noinline) int HdlToyRespawn(uint32_t index) {
     return HdlToyReallocBag(index);
 }
 #if defined(_MSC_VER)
-#  pragma optimize("", on)
+#pragma optimize("", on)
 #endif
 
 __declspec(dllexport) int HdlToyRetarget(uint32_t src, uint32_t dst) {
@@ -309,7 +317,7 @@ __declspec(dllexport) int HdlToyKill(uint32_t index) {
     return 1;
 }
 
-}  // extern "C"
+} // extern "C"
 
 bool InitWorld(uint32_t entity_count) {
     if (entity_count < 2) {
@@ -318,6 +326,9 @@ bool InitWorld(uint32_t entity_count) {
     if (entity_count > kMaxEntities) {
         entity_count = kMaxEntities;
     }
+    // std::nothrow returns null on failure; CodeQL build mode "none" can
+    // conservatively resolve this as the throwing overload.
+    // codeql[cpp/incorrect-allocation-error-handling]
     g_world_ptr = new (std::nothrow) ToyWorld{};
     if (!g_world_ptr) {
         return false;
@@ -496,7 +507,7 @@ DWORD WINAPI AutoTickThread(LPVOID param) {
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 int wmain(int argc, wchar_t** argv) {
     (void)HdlToyUseString();
@@ -538,9 +549,9 @@ int wmain(int argc, wchar_t** argv) {
     HANDLE stdin_thr = CreateThread(nullptr, 0, StdinThread, nullptr, 0, nullptr);
     HANDLE auto_thr = nullptr;
     if (auto_ms) {
-        auto_thr = CreateThread(nullptr, 0, AutoTickThread,
-                                reinterpret_cast<LPVOID>(static_cast<uintptr_t>(auto_ms)), 0,
-                                nullptr);
+        auto_thr =
+            CreateThread(nullptr, 0, AutoTickThread,
+                         reinterpret_cast<LPVOID>(static_cast<uintptr_t>(auto_ms)), 0, nullptr);
     }
 
     HWND hwnd = nullptr;

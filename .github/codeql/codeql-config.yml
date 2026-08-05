@@ -1,9 +1,12 @@
 name: hdllib CodeQL configuration
 
-# Note: paths-ignore has no effect for traced C/C++ databases.
+# Build mode "none" applies these filters during extraction. The manual fallback
+# still filters third-party results from SARIF in tools/ci/run-codeql.ps1.
 paths-ignore:
   - build/**
   - third_party/**
+  # Build-only generator: buildless extraction cannot resolve libprotoc headers.
+  - tools/rpc_codegen/**
 
 queries:
   - uses: ./.github/codeql/hdllib-security-extended.qls
