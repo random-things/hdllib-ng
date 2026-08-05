@@ -207,10 +207,11 @@ bool WriteHandlerResponse(HANDLE pipe, const void* data, uint32_t size) {
         std::memcpy(&hdl_status, data, sizeof(hdl_status));
     }
     bool end_stream = true;
+    constexpr uint32_t kMoreFlagBit = 1u; // HDL_IPC_MORE
     if (g_active_response.streaming && data && size >= sizeof(int32_t) + sizeof(uint32_t)) {
         uint32_t flags = 0;
         std::memcpy(&flags, static_cast<const uint8_t*>(data) + sizeof(int32_t), sizeof(flags));
-        end_stream = (flags & 1u) == 0;
+        end_stream = (flags & kMoreFlagBit) == 0;
     }
 
     ::hdl::rpc::v1::Envelope envelope;

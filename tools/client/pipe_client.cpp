@@ -63,6 +63,9 @@ bool MakeRequestEnvelope(const hdl::rpc::PreparedRequest& prepared, uint64_t req
     auto* request = envelope->mutable_request();
     request->set_request_id(request_id);
     const std::string_view method_name = hdl::rpc::MethodName(prepared.method);
+    if (method_name.empty()) {
+        return false;
+    }
     request->set_method(method_name.data(), method_name.size());
     request->set_timeout_ms(prepared.timeout_ms);
     request->set_stream_response(stream_response);
@@ -127,6 +130,7 @@ bool PipeClient::Connect(DWORD timeout_ms) {
                 }
                 proto_major_ = 0;
                 proto_minor_ = 0;
+                next_request_id_ = 0;
                 return false;
             }
             return true;

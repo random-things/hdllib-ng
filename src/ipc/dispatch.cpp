@@ -24,6 +24,20 @@ bool HandleRequest(HANDLE pipe, const std::vector<uint8_t>& req) {
         return rpc::WriteErrorResponse(pipe, request.request_id(), rpc::v1::RPC_CODE_UNIMPLEMENTED,
                                        HDL_E_NOT_FOUND, "METHOD_NOT_FOUND", "Unknown RPC method");
     }
+
+    if (!request.stream_response()) {
+        switch (method) {
+        case rpc::Method::SearchMemory:
+        case rpc::Method::SearchFirst:
+        case rpc::Method::SearchGetHits:
+            return rpc::WriteErrorResponse(
+                pipe, request.request_id(), rpc::v1::RPC_CODE_INVALID_ARGUMENT, HDL_E_INVALID_ARG,
+                "STREAM_REQUIRED", "stream_response must be true for this method");
+        default:
+            break;
+        }
+    }
+
     const bool stream_response = rpc::MethodIsServerStreaming(method) && request.stream_response();
     rpc::ResponseScope scope(request.request_id(), stream_response);
     auto request_job = std::make_shared<Job>();
