@@ -1,0 +1,31 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message ReadMemoryRequest { fixed64 address = 1; uint32 size = 2; }
+message ReadMemoryResponse { bytes data = 1; }
+message WriteMemoryRequest { fixed64 address = 1; bytes data = 2; }
+message WriteMemoryResponse { uint32 bytes_written = 1; }
+message AllocRequest { uint64 size = 1; uint32 protection = 2; }
+message AllocResponse { fixed64 address = 1; }
+message FreeRequest { fixed64 address = 1; }
+message FindCavesRequest {
+  uint32 min_size = 1;
+  uint32 fill_byte = 2;
+  SearchScope scope = 3;
+  uint32 max_results = 4;
+  fixed64 near_address = 5;
+  uint64 max_distance = 6;
+}
+message FindCavesResponse { repeated CaveInfo caves = 1; }
+message AllocNearRequest {
+  fixed64 near_address = 1;
+  uint64 max_distance = 2;
+  uint64 size = 3;
+  uint32 protection = 4;
+}
+message AllocNearResponse { fixed64 address = 1; }
+message ProtectMemoryRequest { fixed64 address = 1; uint64 size = 2; uint32 protection = 3; }
+message ProtectMemoryResponse { uint32 old_protection = 1; }
+message FlushICacheRequest { fixed64 address = 1; uint64 size = 2; }

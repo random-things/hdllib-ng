@@ -20,7 +20,7 @@ transport limits. `hdl_client_tests` covers mismatched-major rejection;
 [rpc.md](rpc.md) and [capabilities.md](capabilities.md).
 
 Follow-ups: warn/disable individual client verbs when the advertised method is
-missing; fuzz envelope parsing and compact payload adapters.
+missing; expand fuzzing of envelope parsing and complex typed request messages.
 
 ---
 

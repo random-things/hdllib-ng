@@ -122,12 +122,24 @@ void ServeClient(HANDLE pipe) {
     std::array<char, rpc::kConnectionPrefaceSize> preface{};
     std::vector<uint8_t> hello_frame;
     ::hdl::rpc::v1::Envelope hello;
-    const bool hello_valid =
+    const bool preface_valid =
         ReadExact(pipe, preface.data(), static_cast<DWORD>(preface.size())) &&
-        std::memcmp(preface.data(), rpc::kConnectionPreface, preface.size()) == 0 &&
-        ReadFrame(pipe, hello_frame) &&
-        rpc::ParseEnvelope(hello_frame.data(), hello_frame.size(), &hello) &&
-        hello.has_client_hello();
+        std::memcmp(preface.data(), rpc::kConnectionPreface, preface.size()) == 0;
+    bool handshake_frame_too_large = false;
+    const bool frame_read =
+        preface_valid && ReadFrame(pipe, hello_frame, &handshake_frame_too_large);
+    const bool hello_valid = frame_read &&
+                             rpc::ParseEnvelope(hello_frame.data(), hello_frame.size(), &hello) &&
+                             hello.has_client_hello();
+    if (preface_valid && !hello_valid) {
+        if (handshake_frame_too_large) {
+            (void)rpc::WriteGoAway(pipe, rpc::v1::RPC_CODE_RESOURCE_EXHAUSTED, HDL_E_INVALID_ARG,
+                                   "FRAME_TOO_LARGE", "Handshake frame exceeds the server limit");
+        } else {
+            (void)rpc::WriteGoAway(pipe, rpc::v1::RPC_CODE_DATA_LOSS, HDL_E_FAILED,
+                                   "INVALID_HANDSHAKE", "Expected a protobuf ClientHello envelope");
+        }
+    }
     // Even on a major mismatch, identify the server version so the client can
     // report a useful negotiation error before this connection is closed.
     const bool hello_sent = hello_valid && rpc::WriteServerHello(pipe);
@@ -136,7 +148,13 @@ void ServeClient(HANDLE pipe) {
 
     while (negotiated && !g_stop.load()) {
         std::vector<uint8_t> req;
-        if (!ReadFrame(pipe, req)) {
+        bool frame_too_large = false;
+        if (!ReadFrame(pipe, req, &frame_too_large)) {
+            if (frame_too_large) {
+                (void)rpc::WriteGoAway(pipe, rpc::v1::RPC_CODE_RESOURCE_EXHAUSTED,
+                                       HDL_E_INVALID_ARG, "FRAME_TOO_LARGE",
+                                       "Request frame exceeds the negotiated limit");
+            }
             break;
         }
         if (!HandleRequest(pipe, req)) {

@@ -1,7 +1,6 @@
+#include "hdl/rpc/v1/types.pb.h"
 #include "inject/pe_image_view.hpp"
 #include "inject/pe_relocs.hpp"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 #include "rpc/runtime.hpp"
 
 #include "hdllib/hdllib.h"
@@ -173,65 +172,50 @@ void TestMalformedRelocs() {
 }
 
 void TestWireRoundTrip() {
-    using namespace hdl::proto;
-    HdlRegionInfo in{};
-    in.base = 0x1000;
-    in.size = 0x2000;
-    in.protect = 0x40;
-    in.state = 0x1000;
-    in.type = 0x20000;
-    in.reserved = 7;
-    std::vector<uint8_t> buf;
-    AppendHdlRegionInfo(buf, in);
-    Reader r(buf);
-    HdlRegionInfo out{};
-    Expect(TakeHdlRegionInfo(r, out) && r.left == 0, "wire/region_take");
-    Expect(out.base == in.base && out.size == in.size && out.protect == in.protect &&
-               out.state == in.state && out.type == in.type && out.reserved == in.reserved,
-           "wire/region_roundtrip");
+    hdl::rpc::v1::RegionInfo region;
+    region.set_base(0x1000);
+    region.set_size(0x2000);
+    region.set_protection(0x40);
+    region.set_state(0x1000);
+    region.set_type(0x20000);
+    std::string bytes;
+    Expect(region.SerializeToString(&bytes), "proto/region_serialize");
+    hdl::rpc::v1::RegionInfo region_out;
+    Expect(region_out.ParseFromString(bytes), "proto/region_parse");
+    Expect(region_out.base() == region.base() && region_out.size() == region.size() &&
+               region_out.protection() == region.protection() &&
+               region_out.state() == region.state() && region_out.type() == region.type(),
+           "proto/region_roundtrip");
 
-    HdlModuleInfo min{};
-    min.base = 0x7ff00000;
-    min.size = 0x10000;
-    wcsncpy_s(min.path, L"C:\\Windows\\System32\\ntdll.dll", _TRUNCATE);
-    buf.clear();
-    AppendHdlModuleInfo(buf, min);
-    Reader mr(buf);
-    HdlModuleInfo mout{};
-    Expect(TakeHdlModuleInfo(mr, mout) && mr.left == 0, "wire/module_take");
-    Expect(mout.base == min.base && mout.size == min.size && wcscmp(mout.path, min.path) == 0,
-           "wire/module_roundtrip");
+    hdl::rpc::v1::ModuleInfo module;
+    module.set_base(0x7ff00000);
+    module.set_size(0x10000);
+    module.set_path("C:\\Windows\\System32\\ntdll.dll");
+    Expect(module.SerializeToString(&bytes), "proto/module_serialize");
+    hdl::rpc::v1::ModuleInfo module_out;
+    Expect(module_out.ParseFromString(bytes) && module_out.path() == module.path(),
+           "proto/module_roundtrip");
 
-    HdlFieldPred pred{};
-    pred.offset = 8;
-    pred.kind = HDL_PRED_EQ_I32;
-    pred.a = 0x1111;
-    pred.b = 0x2222;
-    buf.clear();
-    AppendHdlFieldPred(buf, pred);
-    Reader pr(buf);
-    HdlFieldPred pout{};
-    Expect(TakeHdlFieldPred(pr, pout) && pr.left == 0, "wire/field_pred_take");
-    Expect(pout.offset == pred.offset && pout.kind == pred.kind && pout.a == pred.a &&
-               pout.b == pred.b,
-           "wire/field_pred_roundtrip");
+    hdl::rpc::v1::FieldPredicate predicate;
+    predicate.set_offset(8);
+    predicate.mutable_range_i32()->set_minimum(0x1111);
+    predicate.mutable_range_i32()->set_maximum(0x2222);
+    Expect(predicate.SerializeToString(&bytes), "proto/predicate_serialize");
+    hdl::rpc::v1::FieldPredicate predicate_out;
+    Expect(predicate_out.ParseFromString(bytes) && predicate_out.has_range_i32() &&
+               predicate_out.range_i32().maximum() == 0x2222,
+           "proto/predicate_roundtrip");
 
-    HdlPointerPath path{};
-    path.static_base = 0x7ff00000;
-    path.depth = 2;
-    path.offsets[0] = 0x10;
-    path.offsets[1] = -4;
-    buf.clear();
-    AppendHdlPointerPath(buf, path);
-    Reader path_r(buf);
-    HdlPointerPath path_out{};
-    Expect(TakeHdlPointerPath(path_r, path_out) && path_r.left == 0, "wire/pointer_path_take");
-    Expect(path_out.static_base == path.static_base && path_out.depth == path.depth &&
-               path_out.offsets[0] == path.offsets[0] && path_out.offsets[1] == path.offsets[1],
-           "wire/pointer_path_roundtrip");
-
-    Expect(hdl::rpc::kProtocolMajor == 1, "wire/proto_major_is_1");
-    Expect(hdl::rpc::kProtocolMajor != 99, "wire/forced_mismatch_constant");
+    hdl::rpc::v1::PointerPath path;
+    path.set_static_base(0x7ff00000);
+    path.add_offsets(0x10);
+    path.add_offsets(-4);
+    Expect(path.SerializeToString(&bytes), "proto/path_serialize");
+    hdl::rpc::v1::PointerPath path_out;
+    Expect(path_out.ParseFromString(bytes) && path_out.static_base() == path.static_base() &&
+               path_out.offsets_size() == 2 && path_out.offsets(1) == -4,
+           "proto/path_roundtrip");
+    Expect(hdl::rpc::kProtocolMajor == 1, "proto/major_is_1");
 }
 
 } // namespace

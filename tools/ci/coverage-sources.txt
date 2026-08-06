@@ -1,7 +1,5 @@
 src/json/json.cpp
-src/protocol.hpp
 src/ipc/framing.cpp
-src/ipc/wire.hpp
 src/rpc/runtime.cpp
 src/inject/pe_image_view.cpp
 src/inject/pe_relocs.cpp

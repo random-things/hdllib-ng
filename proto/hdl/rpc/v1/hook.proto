@@ -1,0 +1,15 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message HookTraceRequest { fixed64 target = 1; uint32 argument_count = 2; }
+message HookTraceResponse { fixed64 handle = 1; }
+message HookRequest { fixed64 target = 1; fixed64 detour = 2; }
+message HookResponse { fixed64 handle = 1; fixed64 trampoline = 2; }
+message EnableHookRequest { fixed64 handle = 1; bool enabled = 2; }
+message UnhookRequest { fixed64 handle = 1; }
+message PollHookHitsRequest { uint32 max_hits = 1; uint32 wait_timeout_ms = 2; }
+message PollHookHitsResponse { repeated HookHit hits = 1; }
+message HookImportRequest { string module = 1; string dll = 2; string import_name = 3; uint32 argument_count = 4; }
+message HookImportResponse { fixed64 handle = 1; }

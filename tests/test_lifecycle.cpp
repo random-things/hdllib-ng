@@ -1,7 +1,5 @@
 #include "domain_api.hpp"
 #include "ipc/common.hpp"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 #include "support.hpp"
 #include "test_runners.hpp"
 
@@ -19,7 +17,6 @@ using hdltest::TargetProc;
 using hdltest::TargetProfile;
 
 static void RunSessionLifetimeRaceTests(Counters& c) {
-    using namespace hdl::proto;
     std::printf("\n== Session lifetime race ==\n");
     fflush(stdout);
 
@@ -175,31 +172,21 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
         uint64_t search_id = 0;
         uint64_t disc_id = 0;
         {
-            PreparedRequest req;
-            std::vector<uint8_t> resp;
-            SetMethod(req, hdl::rpc::Method::SearchCreate);
-            if (!hdltest::PipeRequest(self_pid, req, resp)) {
-                faults.fetch_add(1);
-                break;
-            }
-            Reader r(resp);
-            int32_t st = 0;
-            if (!r.TakePod(st) || !r.TakePod(search_id) || st != HDL_OK || !search_id) {
+            hdl::rpc::v1::SearchCreateResponse response;
+            int32_t status = HDL_E_FAILED;
+            if (!hdltest::PipeUnary<hdl::rpc::Method::Search_SearchCreate>(
+                    self_pid, hdl::rpc::v1::Empty{}, &response, &status) ||
+                status != HDL_OK || !(search_id = response.session_id())) {
                 faults.fetch_add(1);
                 break;
             }
         }
         {
-            PreparedRequest req;
-            std::vector<uint8_t> resp;
-            SetMethod(req, hdl::rpc::Method::DiscoverCreate);
-            if (!hdltest::PipeRequest(self_pid, req, resp)) {
-                faults.fetch_add(1);
-                break;
-            }
-            Reader r(resp);
-            int32_t st = 0;
-            if (!r.TakePod(st) || !r.TakePod(disc_id) || st != HDL_OK || !disc_id) {
+            hdl::rpc::v1::DiscoverCreateResponse response;
+            int32_t status = HDL_E_FAILED;
+            if (!hdltest::PipeUnary<hdl::rpc::Method::Discover_DiscoverCreate>(
+                    self_pid, hdl::rpc::v1::Empty{}, &response, &status) ||
+                status != HDL_OK || !(disc_id = response.session_id())) {
                 faults.fetch_add(1);
                 break;
             }
@@ -212,50 +199,44 @@ static void RunSessionLifetimeRaceTests(Counters& c) {
             workers.emplace_back([&, search_id, disc_id] {
                 while (!stop.load(std::memory_order_relaxed)) {
                     {
-                        PreparedRequest req;
-                        std::vector<uint8_t> resp;
-                        SetMethod(req, hdl::rpc::Method::SearchReset);
-                        AppendPod(req, search_id);
-                        if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
-                            Reader r(resp);
-                            int32_t st = 0;
-                            if (r.TakePod(st) && st != HDL_OK && st != HDL_E_NOT_FOUND) {
-                                bad_status.fetch_add(1);
-                            }
-                        }
+                        hdl::rpc::v1::SearchResetRequest request;
+                        request.set_session_id(search_id);
+                        hdl::rpc::v1::Empty response;
+                        int32_t status = HDL_E_FAILED;
+                        if (hdltest::PipeUnary<hdl::rpc::Method::Search_SearchReset>(
+                                self_pid, request, &response, &status, 2000) &&
+                            status != HDL_OK && status != HDL_E_NOT_FOUND)
+                            bad_status.fetch_add(1);
                     }
                     {
-                        PreparedRequest req;
-                        std::vector<uint8_t> resp;
-                        SetMethod(req, hdl::rpc::Method::DiscoverGetCandidates);
-                        AppendPod(req, disc_id);
-                        AppendPod(req, static_cast<uint32_t>(8));
-                        if (hdltest::PipeRequest(self_pid, req, resp, 2000)) {
-                            Reader r(resp);
-                            int32_t st = 0;
-                            if (r.TakePod(st) && st != HDL_OK && st != HDL_E_NOT_FOUND &&
-                                st != HDL_E_BUFFER_SMALL) {
-                                bad_status.fetch_add(1);
-                            }
-                        }
+                        hdl::rpc::v1::DiscoverGetCandidatesRequest request;
+                        request.set_session_id(disc_id);
+                        request.set_max_results(8);
+                        int32_t status = HDL_E_FAILED;
+                        if (hdltest::PipeStream<hdl::rpc::Method::Discover_DiscoverGetCandidates>(
+                                self_pid, request, [](const auto&) { return true; }, &status,
+                                2000) &&
+                            status != HDL_OK && status != HDL_E_NOT_FOUND &&
+                            status != HDL_E_BUFFER_SMALL)
+                            bad_status.fetch_add(1);
                     }
                 }
             });
         }
         Sleep(5);
         {
-            PreparedRequest req;
-            std::vector<uint8_t> resp;
-            SetMethod(req, hdl::rpc::Method::SearchClose);
-            AppendPod(req, search_id);
-            hdltest::PipeRequest(self_pid, req, resp, 2000);
+            hdl::rpc::v1::SearchCloseRequest request;
+            request.set_session_id(search_id);
+            hdl::rpc::v1::Empty response;
+            hdltest::PipeUnary<hdl::rpc::Method::Search_SearchClose>(self_pid, request, &response,
+                                                                     nullptr, 2000);
         }
         {
-            PreparedRequest req;
-            std::vector<uint8_t> resp;
-            SetMethod(req, hdl::rpc::Method::DiscoverClose);
-            AppendPod(req, disc_id);
-            hdltest::PipeRequest(self_pid, req, resp, 2000);
+            hdl::rpc::v1::DiscoverCloseRequest request;
+            request.set_session_id(disc_id);
+            hdl::rpc::v1::Empty response;
+            hdltest::PipeUnary<hdl::rpc::Method::Discover_DiscoverClose>(self_pid, request,
+                                                                         &response, nullptr, 2000);
         }
         stop.store(true);
         for (auto& th : workers) {
@@ -365,17 +346,22 @@ void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* 
     Report(c, sst == HDL_OK && secondary != 0, true, "clean_unload/inject secondary", "");
     if (sst == HDL_OK && secondary != 0) {
         /* Register the secondary DLL with the injected server before shutdown. */
-        hdl::rpc::PreparedRequest treq;
-        hdl::rpc::SetMethod(treq, hdl::rpc::Method::TrackLoadedDll);
-        hdl::proto::AppendPod(treq, secondary);
-        hdl::proto::AppendWString(treq, sys);
-        std::vector<uint8_t> response;
-        int32_t track_st = HDL_E_FAILED;
-        const bool tracked =
-            hdltest::PipeRequest(target.pid, treq, response) && response.size() >= sizeof(track_st);
-        if (tracked) {
-            memcpy(&track_st, response.data(), sizeof(track_st));
+        hdl::rpc::v1::TrackLoadedDllRequest request;
+        request.set_base(secondary);
+        std::string path;
+        const int wide_length = static_cast<int>(wcslen(sys));
+        const int needed = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, sys, wide_length,
+                                               nullptr, 0, nullptr, nullptr);
+        if (needed > 0) {
+            path.resize(static_cast<size_t>(needed));
+            WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, sys, wide_length, path.data(),
+                                needed, nullptr, nullptr);
         }
+        request.set_dll_path(std::move(path));
+        hdl::rpc::v1::Empty response;
+        int32_t track_st = HDL_E_FAILED;
+        const bool tracked = hdltest::PipeUnary<hdl::rpc::Method::Injection_TrackLoadedDll>(
+            target.pid, request, &response, &track_st);
         Report(c, tracked && track_st == HDL_OK, false, "clean_unload/track secondary", "");
     }
 

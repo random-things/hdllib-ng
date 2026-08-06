@@ -1,6 +1,7 @@
 #include "framing.hpp"
 
 #include "hdllib/pipe_name.h"
+#include "rpc/runtime.hpp"
 
 #include <sddl.h>
 
@@ -88,12 +89,18 @@ SECURITY_ATTRIBUTES* BuildPipeSa(std::vector<uint8_t>& sd_storage) {
     return &sa;
 }
 
-bool ReadFrame(HANDLE pipe, std::vector<uint8_t>& out) {
+bool ReadFrame(HANDLE pipe, std::vector<uint8_t>& out, bool* frame_too_large) {
+    if (frame_too_large) {
+        *frame_too_large = false;
+    }
     uint32_t size = 0;
     if (!ReadExact(pipe, &size, sizeof(size))) {
         return false;
     }
-    if (size > 64u * 1024u * 1024u) {
+    if (size > rpc::kMaxFrameBytes) {
+        if (frame_too_large) {
+            *frame_too_large = true;
+        }
         return false;
     }
     out.resize(size);
@@ -113,5 +120,5 @@ bool WriteFrameBytes(HANDLE pipe, const void* data, uint32_t size) {
     return WriteExact(pipe, data, size);
 }
 
-}  // namespace ipc
-}  // namespace hdl
+} // namespace ipc
+} // namespace hdl

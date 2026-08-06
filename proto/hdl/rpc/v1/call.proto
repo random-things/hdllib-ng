@@ -1,0 +1,19 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message ResolveExportRequest { string module = 1; string name = 2; }
+message ResolveExportResponse { fixed64 address = 1; }
+message CallExportRequest { string module = 1; string name = 2; repeated CallArgument arguments = 3; }
+message CallExportResponse { CallResult result = 1; }
+message CallRequest { fixed64 address = 1; repeated CallArgument arguments = 2; CallThreadMode thread_mode = 3; }
+message CallResponse { CallResult result = 1; }
+message CallVtableRequest {
+  fixed64 object = 1;
+  uint32 index = 2;
+  repeated CallArgument arguments = 3;
+  bool prepend_this = 4;
+  CallThreadMode thread_mode = 5;
+}
+message CallVtableResponse { CallResult result = 1; }

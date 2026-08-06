@@ -1,0 +1,13 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message GetHealthResponse { HealthInfo health = 1; }
+message EnumRegionsResponse { repeated RegionInfo regions = 1; }
+message EnumModulesResponse { repeated ModuleInfo modules = 1; }
+message EnumThreadsResponse { repeated ThreadInfo threads = 1; }
+message PollEventsRequest { uint32 max_events = 1; uint32 wait_timeout_ms = 2; }
+message PollEventsResponse { repeated Event events = 1; }
+message FingerprintRequest { uint32 scan_flags = 1; }
+message FingerprintResponse { repeated FingerprintTag tags = 1; }

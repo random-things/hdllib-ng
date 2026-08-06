@@ -3,12 +3,13 @@
 #include "inject.hpp"
 #include "inject/select.hpp"
 #include "log.hpp"
+#include "rpc_helpers.hpp"
 #include "session_modules.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
 #include "pipe_client.hpp"
-#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -500,12 +501,13 @@ int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
         PipeClient client(pid);
         if (client.Connect(2000)) {
             for (const auto& m : hdlcli::ListInjectedModules(pid)) {
-                hdl::rpc::PreparedRequest req;
-                std::vector<uint8_t> resp;
-                hdl::rpc::SetMethod(req, hdl::rpc::Method::TrackLoadedDll);
-                hdl::proto::AppendPod(req, m.base);
-                hdl::proto::AppendWString(req, m.path.c_str());
-                client.Request(req, resp);
+                hdl::rpc::v1::TrackLoadedDllRequest request;
+                request.set_base(m.base);
+                std::string path_utf8;
+                if (!WideToUtf8(m.path, &path_utf8))
+                    continue;
+                request.set_dll_path(std::move(path_utf8));
+                (void)hdl::rpc::InjectionClient(&client).TrackLoadedDll(request);
             }
             client.Close();
         }

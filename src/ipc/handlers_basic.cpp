@@ -1,397 +1,225 @@
 #include "handlers.hpp"
-#include "wire.hpp"
+
+#include "common.hpp"
+#include "convert.hpp"
 
 #include "core.hpp"
 #include "fingerprint.hpp"
 #include "health.hpp"
 #include "inject.hpp"
-#include "jobs.hpp"
 #include "loaded_modules.hpp"
 #include "log.hpp"
 #include "memory.hpp"
-#include "protocol.hpp"
 
 #include <string>
 #include <vector>
 
-namespace hdl {
-namespace ipc {
-namespace {
+namespace hdl::ipc {
 
-template <typename T>
-HdlStatus EnumerateAll(HdlStatus (*enumerate)(T*, uint32_t*), std::vector<T>* values) {
-    values->clear();
-    uint32_t required = 0;
-    HdlStatus st = enumerate(nullptr, &required);
-    if (st != HDL_OK && st != HDL_E_BUFFER_SMALL) {
-        return st;
-    }
-
-    constexpr uint32_t kGrowthSlack = 64;
-    constexpr int kMaxAttempts = 4;
-    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
-        if (required == 0) {
-            return HDL_OK;
-        }
-        // The collection can grow between the size query and fill call. For regions,
-        // allocating this vector can itself add mappings to the process being queried.
-        const uint32_t capacity =
-            required <= UINT32_MAX - kGrowthSlack ? required + kGrowthSlack : required;
-        values->resize(capacity);
-        uint32_t count = capacity;
-        st = enumerate(values->data(), &count);
-        if (st == HDL_OK) {
-            values->resize(count);
-            return HDL_OK;
-        }
-        values->clear();
-        if (st != HDL_E_BUFFER_SMALL) {
-            return st;
-        }
-        required = count;
-    }
-    return HDL_E_BUFFER_SMALL;
+rpc::Status HandleControl_Ping(rpc::CallContext&, const rpc::v1::Empty&,
+                               rpc::v1::PingResponse* response) {
+    response->set_pid(GetCurrentProcessId());
+    return rpc::Status::Ok();
 }
 
-} // namespace
-
-bool HandlePing(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, static_cast<uint32_t>(GetCurrentProcessId()));
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleSetLogLevel(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    int32_t level = 0;
-    if (!r.TakePod(level)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleControl_SetLogLevel(rpc::CallContext&, const rpc::v1::SetLogLevelRequest& request,
+                                      rpc::v1::Empty*) {
+    const int level = static_cast<int>(request.level());
+    if (level < HDL_LOG_OFF || level > HDL_LOG_DEBUG) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     SetLogLevel(static_cast<LogLevel>(level));
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    return WriteFrame(pipe, resp);
+    return rpc::Status::Ok();
 }
 
-bool HandleSetLogFile(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
+rpc::Status HandleControl_SetLogFile(rpc::CallContext&, const rpc::v1::SetLogFileRequest& request,
+                                     rpc::v1::Empty*) {
     std::wstring path;
-    if (!r.TakeWString(path)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!Utf8ToWide(request.path(), &path)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG, "path must be valid UTF-8 without NUL");
     }
-    /* The pipe path is untrusted, but the pipe DACL admits only SYSTEM/Admins/owner (see
-     * BuildPipeSa), all of whom can already run arbitrary code via Memory.WriteMemory/Call.Call.
-     * append-only log at a caller-chosen path is strictly weaker; SetLogFile still normalizes via
-     * GetFullPathNameW and rejects oversized paths. */
     const wchar_t* log_path = path.empty() ? nullptr : path.c_str();
     // codeql[cpp/path-injection]
-    const bool log_ok = SetLogFile(log_path);
-    AppendPod(resp, static_cast<int32_t>(log_ok ? HDL_OK : HDL_E_FAILED));
-    return WriteFrame(pipe, resp);
+    return rpc::Status::FromHdl(SetLogFile(log_path) ? HDL_OK : HDL_E_FAILED);
 }
 
-bool HandleSetHealthVeh(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    int32_t enabled = 0;
-    if (!r.TakePod(enabled)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleControl_SetHealthVeh(rpc::CallContext&,
+                                       const rpc::v1::SetHealthVehRequest& request,
+                                       rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(SetHealthVeh(request.enabled()));
+}
+
+rpc::Status HandleControl_GetHealthVeh(rpc::CallContext&, const rpc::v1::Empty&,
+                                       rpc::v1::GetHealthVehResponse* response) {
+    response->set_enabled(IsHealthVehEnabled());
+    return rpc::Status::Ok();
+}
+
+rpc::Status HandleControl_Shutdown(rpc::CallContext& context,
+                                   const rpc::v1::ShutdownRequest& request, rpc::v1::Empty*) {
+    CoreShutdownPrepare(request.flags());
+    context.DeferAfterReply([] { CoreShutdownFinish(); });
+    return rpc::Status::Ok();
+}
+
+rpc::Status HandleProcess_GetHealth(rpc::CallContext&, const rpc::v1::Empty&,
+                                    rpc::v1::GetHealthResponse* response) {
+    HdlHealthInfo info{};
+    const HdlStatus status = GetHealth(&info);
+    ToProto(info, response->mutable_health());
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleProcess_EnumRegions(rpc::CallContext&, const rpc::v1::Empty&,
+                                      rpc::ServerWriter<rpc::v1::EnumRegionsResponse>& writer) {
+    std::vector<HdlRegionInfo> values;
+    const HdlStatus status = EnumerateAll(&EnumRegions, &values);
+    return WriteBatches(status, values, 64, writer,
+                        [](const HdlRegionInfo& value, rpc::v1::EnumRegionsResponse* batch) {
+                            ToProto(value, batch->add_regions());
+                            return true;
+                        });
+}
+
+rpc::Status HandleProcess_EnumModules(rpc::CallContext&, const rpc::v1::Empty&,
+                                      rpc::ServerWriter<rpc::v1::EnumModulesResponse>& writer) {
+    std::vector<HdlModuleInfo> values;
+    const HdlStatus status = EnumerateAll(&EnumModules, &values);
+    return WriteBatches(status, values, 16, writer,
+                        [](const HdlModuleInfo& value, rpc::v1::EnumModulesResponse* batch) {
+                            return ToProto(value, batch->add_modules());
+                        });
+}
+
+rpc::Status HandleProcess_EnumThreads(rpc::CallContext&, const rpc::v1::Empty&,
+                                      rpc::ServerWriter<rpc::v1::EnumThreadsResponse>& writer) {
+    std::vector<HdlThreadInfo> values;
+    const HdlStatus status = EnumerateAll(&EnumThreads, &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlThreadInfo& value, rpc::v1::EnumThreadsResponse* batch) {
+                            ToProto(value, batch->add_threads());
+                            return true;
+                        });
+}
+
+rpc::Status HandleProcess_PollEvents(rpc::CallContext&, const rpc::v1::PollEventsRequest& request,
+                                     rpc::ServerWriter<rpc::v1::PollEventsResponse>& writer) {
+    uint32_t maximum = request.max_events();
+    if (!maximum || maximum > 64) {
+        maximum = 64;
     }
-    AppendPod(resp, static_cast<int32_t>(SetHealthVeh(enabled != 0)));
-    return WriteFrame(pipe, resp);
+    std::vector<HdlEvent> events(maximum);
+    const uint32_t count = HealthPollEvents(events.data(), maximum, request.wait_timeout_ms());
+    if (count) {
+        rpc::v1::PollEventsResponse response;
+        for (uint32_t index = 0; index < count; ++index) {
+            ToProto(events[index], response.add_events());
+        }
+        if (!writer.Write(response)) {
+            return rpc::Status::FromHdl(HDL_E_CANCELLED);
+        }
+    }
+    return rpc::Status::Ok();
 }
 
-bool HandleGetHealthVeh(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, static_cast<int32_t>(IsHealthVehEnabled() ? 1 : 0));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleProcess_Fingerprint(rpc::CallContext&, const rpc::v1::FingerprintRequest& request,
+                                      rpc::ServerWriter<rpc::v1::FingerprintResponse>& writer) {
+    const uint32_t scan_flags = request.scan_flags() ? request.scan_flags() : HDL_FP_SCAN_DEFAULT;
+    uint32_t count = 0;
+    HdlStatus status = EnumFingerprintTags(scan_flags, nullptr, &count);
+    std::vector<HdlFingerprintTag> tags;
+    if (status == HDL_E_BUFFER_SMALL && count) {
+        tags.resize(count);
+        status = EnumFingerprintTags(scan_flags, tags.data(), &count);
+        tags.resize(status == HDL_OK ? count : 0);
+    } else if (status == HDL_OK) {
+        count = 0;
+    }
+    return WriteBatches(status, tags, 16, writer,
+                        [](const HdlFingerprintTag& value, rpc::v1::FingerprintResponse* batch) {
+                            ToProto(value, batch->add_tags());
+                            return true;
+                        });
 }
 
-bool HandleInjectDll(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t pid = 0;
-    uint32_t method = HDL_INJECT_CREATE_REMOTE_THREAD;
-    std::wstring path;
-    std::wstring exe_path;
-    std::string hook_export;
-    if (!r.TakePod(pid) || !r.TakePod(method) || !r.TakeWString(path) || !r.TakeWString(exe_path) ||
-        !r.TakeString(hook_export)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleMemory_ReadMemory(rpc::CallContext&, const rpc::v1::ReadMemoryRequest& request,
+                                    rpc::v1::ReadMemoryResponse* response) {
+    if (request.size() > 16u * 1024u * 1024u) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    std::vector<uint8_t> buffer(request.size());
+    size_t read = 0;
+    const HdlStatus status = ReadMemory(request.address(), buffer.data(), buffer.size(), &read);
+    response->set_data(buffer.data(), read);
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleMemory_WriteMemory(rpc::CallContext&, const rpc::v1::WriteMemoryRequest& request,
+                                     rpc::v1::WriteMemoryResponse* response) {
+    if (request.data().size() > 16u * 1024u * 1024u) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    size_t written = 0;
+    const HdlStatus status =
+        WriteMemory(request.address(), request.data().data(), request.data().size(), &written);
+    response->set_bytes_written(static_cast<uint32_t>(written));
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleInjection_InjectDll(rpc::CallContext&, const rpc::v1::InjectDllRequest& request,
+                                      rpc::v1::InjectDllResponse* response) {
+    std::wstring dll_path;
+    std::wstring executable_path;
+    const int method = static_cast<int>(request.method());
+    if (method < rpc::v1::INJECTION_METHOD_CREATE_REMOTE_THREAD ||
+        method > rpc::v1::INJECTION_METHOD_ETW_CALLBACK ||
+        !Utf8ToWide(request.dll_path(), &dll_path) || dll_path.empty() ||
+        !Utf8ToWide(request.executable_path(), &executable_path) ||
+        request.hook_export().find('\0') != std::string::npos) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     uint64_t base = 0;
     uint32_t out_pid = 0;
-    const HdlStatus st = InjectDllEx(
-        pid, path.c_str(), static_cast<int>(method), exe_path.empty() ? nullptr : exe_path.c_str(),
-        hook_export.empty() ? nullptr : hook_export.c_str(), &out_pid, &base);
-    if (st == HDL_OK && base) {
+    const HdlStatus status = InjectDllEx(
+        request.pid(), dll_path.c_str(), method,
+        executable_path.empty() ? nullptr : executable_path.c_str(),
+        request.hook_export().empty() ? nullptr : request.hook_export().c_str(), &out_pid, &base);
+    if (status == HDL_OK && base) {
         const DWORD self = GetCurrentProcessId();
-        const uint32_t effective = out_pid ? out_pid : (pid ? pid : self);
+        const uint32_t effective = out_pid ? out_pid : (request.pid() ? request.pid() : self);
         if (effective == self) {
-            TrackLoadedModule(path.c_str(), base);
+            TrackLoadedModule(dll_path.c_str(), base);
         }
     }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, base);
-    AppendPod(resp, out_pid);
-    return WriteFrame(pipe, resp);
+    response->set_base(base);
+    response->set_out_pid(out_pid);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleUnloadDll(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t pid = 0;
-    int32_t reload = 0;
+rpc::Status HandleInjection_UnloadDll(rpc::CallContext&, const rpc::v1::UnloadDllRequest& request,
+                                      rpc::v1::UnloadDllResponse* response) {
     std::wstring path;
-    if (!r.TakePod(pid) || !r.TakePod(reload) || !r.TakeWString(path)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!Utf8ToWide(request.dll_path(), &path) || path.empty()) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     uint64_t base = 0;
-    const HdlStatus st = UnloadDll(pid, path.c_str(), reload, 0, &base);
-    if (st == HDL_OK) {
+    const HdlStatus status = UnloadDll(request.pid(), path.c_str(), request.reload(), 0, &base);
+    if (status == HDL_OK) {
         UntrackLoadedModule(path.c_str());
     }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, base);
-    return WriteFrame(pipe, resp);
+    response->set_base(base);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleShutdown(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t flags = 0;
-    if (!r.TakePod(flags)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    /* Restore instrumentation first, reply, then signal IPC stop without joining
-     * (this thread is a ServeClient worker — joining the accept loop would deadlock). */
-    CoreShutdownPrepare(flags);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    const bool wrote = WriteFrame(pipe, resp);
-    if (wrote) {
-        FlushFileBuffers(pipe);
-    }
-    /* Keep this pipe connected until ServeClient returns so the client can read OK. */
-    CoreShutdownFinish(pipe);
-    return wrote;
-}
-
-bool HandleTrackLoadedDll(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t base = 0;
+rpc::Status HandleInjection_TrackLoadedDll(rpc::CallContext&,
+                                           const rpc::v1::TrackLoadedDllRequest& request,
+                                           rpc::v1::Empty*) {
     std::wstring path;
-    if (!r.TakePod(base) || !r.TakeWString(path) || !base || path.empty()) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!request.base() || !Utf8ToWide(request.dll_path(), &path) || path.empty()) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
-    TrackLoadedModule(path.c_str(), base);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    return WriteFrame(pipe, resp);
+    TrackLoadedModule(path.c_str(), request.base());
+    return rpc::Status::Ok();
 }
 
-bool HandleReadMemory(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t address = 0;
-    uint32_t size = 0;
-    if (!r.TakePod(address) || !r.TakePod(size) || size > 16u * 1024u * 1024u) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    std::vector<uint8_t> buf(size);
-    size_t got = 0;
-    const HdlStatus st = ReadMemory(address, buf.data(), size, &got);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, static_cast<uint32_t>(got));
-    if (got) {
-        AppendBytes(resp, buf.data(), got);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleWriteMemory(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t address = 0;
-    uint32_t size = 0;
-    if (!r.TakePod(address) || !r.TakePod(size) || size > 16u * 1024u * 1024u || r.left < size) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    size_t wrote = 0;
-    const HdlStatus st = WriteMemory(address, r.p, size, &wrote);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, static_cast<uint32_t>(wrote));
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleEnumRegions(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    // Aggregate delivery has no trailer; streamed delivery carries the compact flags tuple.
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    (void)job_id;
-    (void)timeout_ms;
-
-    std::vector<HdlRegionInfo> regions;
-    const HdlStatus st = EnumerateAll(&EnumRegions, &regions);
-    const uint32_t count = static_cast<uint32_t>(regions.size());
-
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, regions.data(), count, 64);
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlRegionInfo(resp, regions[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleEnumModules(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    (void)job_id;
-    (void)timeout_ms;
-
-    std::vector<HdlModuleInfo> modules;
-    const HdlStatus st = EnumerateAll(&EnumModules, &modules);
-    const uint32_t count = static_cast<uint32_t>(modules.size());
-
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, modules.data(), count, 16);
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlModuleInfo(resp, modules[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleFingerprint(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t scan_flags = HDL_FP_SCAN_DEFAULT;
-    if (r.left >= sizeof(uint32_t)) {
-        if (!r.TakePod(scan_flags)) {
-            AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-            return WriteFrame(pipe, resp);
-        }
-        if (scan_flags == 0) {
-            scan_flags = HDL_FP_SCAN_DEFAULT;
-        }
-    }
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    (void)job_id;
-    (void)timeout_ms;
-
-    uint32_t count = 0;
-    EnumFingerprintTags(scan_flags, nullptr, &count);
-    std::vector<HdlFingerprintTag> tags(count);
-    const HdlStatus st = count ? EnumFingerprintTags(scan_flags, tags.data(), &count) : HDL_OK;
-
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, tags.data(), count, 16);
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlFingerprintTag(resp, tags[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleGetHealth(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    HdlHealthInfo info{};
-    const HdlStatus st = GetHealth(&info);
-    AppendPod(resp, static_cast<int32_t>(st));
-    proto::AppendHdlHealthInfo(resp, info);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleEnumThreads(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    (void)job_id;
-    (void)timeout_ms;
-
-    std::vector<HdlThreadInfo> threads;
-    const HdlStatus st = EnumerateAll(&EnumThreads, &threads);
-    const uint32_t count = static_cast<uint32_t>(threads.size());
-
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, threads.data(), count, 32);
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlThreadInfo(resp, threads[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandlePollEvents(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t max_events = 0;
-    uint32_t timeout_ms = 0;
-    if (!r.TakePod(max_events) || !r.TakePod(timeout_ms)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    if (max_events == 0 || max_events > 64) {
-        max_events = 64;
-    }
-    std::vector<HdlEvent> events(max_events);
-    const uint32_t got = HealthPollEvents(events.data(), max_events, timeout_ms);
-    AppendPod(resp, static_cast<int32_t>(HDL_OK));
-    AppendPod(resp, got);
-    if (got) {
-        for (uint32_t _i = 0; _i < got; ++_i)
-            proto::AppendHdlEvent(resp, events[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-} // namespace ipc
-} // namespace hdl
+} // namespace hdl::ipc

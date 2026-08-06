@@ -42,9 +42,23 @@ if ($rawProfiles.Count -eq 0) { throw 'Coverage tests produced no .profraw files
 $profile = Join-Path $artifacts 'coverage.profdata'
 Invoke-Native llvm-profdata (@('merge', '-sparse') + @($rawProfiles.FullName) + @('-o', $profile))
 
-$objects = @(Get-ChildItem -LiteralPath $buildDir -Recurse -File |
-    Where-Object { $_.Name -match '^hdl_.*tests\.exe$' -or $_.Name -eq 'hdllib.dll' } |
-    Select-Object -ExpandProperty FullName -Unique)
+$coverageObjectNames = @(
+    'hdl_abi_tests.exe',
+    'hdl_client_tests.exe',
+    'hdl_invocation_tests.exe',
+    'hdl_json_tests.exe',
+    'hdl_pe_tests.exe',
+    'hdl_rpc_message_tests.exe',
+    'hdl_rpc_schema_tests.exe',
+    'hdl_select_tests.exe',
+    'hdl_store_tests.exe',
+    'hdl_tests.exe',
+    'hdllib.dll'
+)
+$objects = @($coverageObjectNames | ForEach-Object {
+        $candidate = Join-Path $buildDir $_
+        if (Test-Path -LiteralPath $candidate) { $candidate }
+    })
 if ($objects.Count -eq 0) { throw 'No instrumented test objects were found.' }
 $primary = $objects[0]
 $additionalObjects = @()

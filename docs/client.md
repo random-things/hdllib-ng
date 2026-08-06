@@ -1,6 +1,6 @@
 # hdlclient workflows
 
-How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Protocol reference: [rpc.md](rpc.md); capability and payload reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
+How to drive an injected `hdllib.dll` with `hdlclient`: one-shot CLI, `discover-*` sessions, and interest-store recipes. For outcome-oriented guidance, start with [Goal-oriented workflows](workflows.md); for a complete worked lab with captured output, use the [Toy arena walkthrough](toy-arena-walkthrough.md). Protocol reference: [rpc.md](rpc.md); capability and typed contract reference: [capabilities.md](capabilities.md). Inject techniques: [inject/](inject/README.md). Live command list: `hdlclient` with no args, or `tools/client/usage.cpp`.
 
 ## Modes
 
@@ -254,7 +254,7 @@ hdlclient <pid> discover-scan --session 1 --type i32 --value 100 --tag hp
 hdlclient <pid> discover-add --session 1 --kind object --addr 0xGUESSED_BASE --tag player
 ```
 
-**Recipe:** `hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100` — constraint scan, list objects, cluster the first.
+**Recipe:** `hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100 --module game.exe` — constraint scan within one module, list objects, cluster the first. Omit `--module` to retain the full image scope.
 
 ### Pipeline C — layout / fields via heat and watches
 
@@ -335,7 +335,7 @@ Recipes are top-level one-shot verbs. Place/stitch require `--store`; action req
 |--------|----------------|
 | `recipe suggest` | Fingerprint process; print primary tags + suggested watch/call/module commands |
 | `recipe action <name> <watch_hex> --wait-ms N\|--signal FILE` | Watch → action window → wait → end → rank → **stabilize** top candidate |
-| `recipe constrain <size> <pred>…` | Constraint scan → list objects → cluster first object |
+| `recipe constrain <size> <pred>… [--module NAME]` | Constraint scan, optionally scoped to one module → list objects → cluster first object |
 | `recipe place <interest> <near_hex>` | Best cave near VA (or `AllocNear` fallback) → cave locator on interest |
 | `recipe stitch <interest> --target HEX [--kind …] [--steal-min N]` | BuildStub + patch jmp at target → stub + patch locators |
 | `recipe expand <base> <size>` | `discover-watch-region` + printed next steps for heat |
@@ -356,7 +356,7 @@ hdlclient --store interests.json <pid> recipe stitch my_hook --target 0xRESOLVED
 
 ```bat
 hdlclient --store interests.json <pid> session new
-hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100
+hdlclient --store interests.json <pid> recipe constrain 128 vtable:0 eq_i32:16:100 --module game.exe
 hdlclient <pid> recipe expand 0xOBJ 256
 hdlclient <pid> discover-action-begin --name bump
 rem trigger writes …
@@ -392,4 +392,4 @@ hdlclient --store interests.json <pid> stabilize <field_or_fn_cand>
 | [`tools/client/cmds_controller.cpp`](../tools/client/cmds_controller.cpp) | session/store/recipe/stabilize |
 | [`tools/client/session_persist.cpp`](../tools/client/session_persist.cpp) | Session sidecar / env resolution |
 | [`tools/client/store.cpp`](../tools/client/store.cpp) / [`recipes.cpp`](../tools/client/recipes.cpp) | Interest JSON + recipes |
-| [`docs/rpc.md`](rpc.md) / [`docs/capabilities.md`](capabilities.md) | Named RPC transport and payload details |
+| [`docs/rpc.md`](rpc.md) / [`docs/capabilities.md`](capabilities.md) | Named RPC transport and typed method contracts |

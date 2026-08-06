@@ -1,0 +1,27 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message DisasmEnumBackendsResponse { repeated DisasmBackendInfo backends = 1; }
+message DisasmGetBackendResponse { sint32 backend_id = 1; }
+message DisasmSetBackendRequest { sint32 backend_id = 1; }
+message InstrLenRequest { fixed64 address = 1; }
+message InstrLenResponse { uint32 length = 1; }
+message DisasmRequest { fixed64 address = 1; uint32 max_instructions = 2; }
+message DisasmResponse { repeated Instruction instructions = 1; }
+message BuildStubRequest {
+  StubKind kind = 1;
+  uint32 flags = 2;
+  fixed64 target = 3;
+  fixed64 steal_from = 4;
+  uint32 steal_min_bytes = 5;
+  bytes raw = 6;
+  bool allocate_rx = 7;
+}
+message BuildStubResponse { StubResult result = 1; }
+message PatchCreateRequest { fixed64 address = 1; bytes data = 2; string name = 3; }
+message PatchCreateResponse { fixed64 handle = 1; }
+message PatchEnableRequest { fixed64 handle = 1; bool enabled = 2; }
+message PatchRemoveRequest { fixed64 handle = 1; }
+message PatchEnumResponse { repeated PatchInfo patches = 1; }

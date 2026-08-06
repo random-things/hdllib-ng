@@ -1,0 +1,370 @@
+edition = "2023";
+
+package hdl.rpc.v1;
+
+option optimize_for = LITE_RUNTIME;
+
+message SearchScope {
+  fixed64 start = 1;
+  uint64 size = 2;
+  uint32 flags = 3;
+  string module = 4;
+}
+
+enum SearchComparison {
+  SEARCH_COMPARISON_EXACT = 0;
+  SEARCH_COMPARISON_UNKNOWN = 1;
+  SEARCH_COMPARISON_CHANGED = 2;
+  SEARCH_COMPARISON_UNCHANGED = 3;
+  SEARCH_COMPARISON_INCREASED = 4;
+  SEARCH_COMPARISON_DECREASED = 5;
+  SEARCH_COMPARISON_INCREASED_BY = 6;
+  SEARCH_COMPARISON_DECREASED_BY = 7;
+  SEARCH_COMPARISON_GREATER = 8;
+  SEARCH_COMPARISON_LESS = 9;
+}
+
+enum SearchAlignment {
+  SEARCH_ALIGNMENT_NATURAL = 0;
+  SEARCH_ALIGNMENT_BYTE = 1;
+}
+
+enum FingerprintCategory {
+  FINGERPRINT_CATEGORY_UNSPECIFIED = 0;
+  FINGERPRINT_CATEGORY_LANGUAGE = 1;
+  FINGERPRINT_CATEGORY_RUNTIME = 2;
+  FINGERPRINT_CATEGORY_TOOLCHAIN = 3;
+  FINGERPRINT_CATEGORY_UI = 4;
+  FINGERPRINT_CATEGORY_GRAPHICS = 5;
+  FINGERPRINT_CATEGORY_ENGINE = 6;
+  FINGERPRINT_CATEGORY_WEBHOST = 7;
+  FINGERPRINT_CATEGORY_AUDIO = 8;
+  FINGERPRINT_CATEGORY_NETWORK = 9;
+  FINGERPRINT_CATEGORY_TOOLING = 10;
+  FINGERPRINT_CATEGORY_APP = 11;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_EXCEPTION = 1;
+  EVENT_TYPE_HEALTH = 2;
+  EVENT_TYPE_JOB_DONE = 3;
+  EVENT_TYPE_HOOK = 4;
+  EVENT_TYPE_WATCH = 5;
+}
+
+enum FieldKind {
+  FIELD_KIND_UNKNOWN = 0;
+  FIELD_KIND_POINTER = 1;
+  FIELD_KIND_VTABLE = 2;
+  FIELD_KIND_ASCII = 3;
+  FIELD_KIND_FLOAT = 4;
+  FIELD_KIND_INT32 = 5;
+  FIELD_KIND_INT64 = 6;
+}
+
+enum CandidateKind {
+  CANDIDATE_KIND_UNSPECIFIED = 0;
+  CANDIDATE_KIND_ADDRESS = 1;
+  CANDIDATE_KIND_FUNCTION = 2;
+  CANDIDATE_KIND_OBJECT = 3;
+  CANDIDATE_KIND_FIELD = 4;
+}
+
+enum StubKind {
+  STUB_KIND_UNSPECIFIED = 0;
+  STUB_KIND_ABSOLUTE_JUMP = 1;
+  STUB_KIND_RELATIVE_JUMP_32 = 2;
+  STUB_KIND_MOVE_RAX_JUMP = 3;
+  STUB_KIND_RAW = 4;
+}
+
+enum WatchHardwareAccess {
+  WATCH_HARDWARE_ACCESS_UNSPECIFIED = 0;
+  WATCH_HARDWARE_ACCESS_EXECUTE = 1;
+  WATCH_HARDWARE_ACCESS_WRITE = 2;
+  WATCH_HARDWARE_ACCESS_READ_WRITE = 3;
+}
+
+enum WatchPageMode {
+  WATCH_PAGE_MODE_UNSPECIFIED = 0;
+  WATCH_PAGE_MODE_GUARD = 1;
+  WATCH_PAGE_MODE_NO_ACCESS = 2;
+}
+
+enum WatchType {
+  WATCH_TYPE_UNSPECIFIED = 0;
+  WATCH_TYPE_HARDWARE = 1;
+  WATCH_TYPE_PAGE = 2;
+}
+
+message SearchValue {
+  oneof value {
+    string aob_pattern = 1;
+    sint32 signed_8 = 2;
+    uint32 unsigned_8 = 3;
+    sint32 signed_16 = 4;
+    uint32 unsigned_16 = 5;
+    sint32 signed_32 = 6;
+    uint32 unsigned_32 = 7;
+    sint64 signed_64 = 8;
+    uint64 unsigned_64 = 9;
+    float float_32 = 10;
+    double float_64 = 11;
+    bytes narrow_bytes = 12;
+    string wide_text = 13;
+  }
+}
+
+message RegionInfo {
+  fixed64 base = 1;
+  uint64 size = 2;
+  uint32 protection = 3;
+  uint32 state = 4;
+  uint32 type = 5;
+}
+
+message ModuleInfo {
+  fixed64 base = 1;
+  uint64 size = 2;
+  string path = 3;
+}
+
+message HealthInfo {
+  uint32 pid = 1;
+  uint32 thread_count = 2;
+  uint32 handle_count = 3;
+  uint32 flags = 4;
+  uint64 working_set = 5;
+  uint64 private_bytes = 6;
+  uint64 user_time_100ns = 7;
+  uint64 kernel_time_100ns = 8;
+  uint32 cpu_percent = 9;
+  bool gui_hung = 10;
+  uint32 last_exception_code = 11;
+  fixed64 last_exception_address = 12;
+  uint64 last_exception_tick_ms = 13;
+}
+
+message ThreadInfo {
+  uint32 tid = 1;
+  uint32 suspend_count = 2;
+  uint64 user_time_100ns = 3;
+  uint64 kernel_time_100ns = 4;
+  fixed64 start_address = 5;
+}
+
+message FingerprintTag {
+  FingerprintCategory category = 1;
+  uint32 confidence = 2;
+  uint32 flags = 3;
+  string id = 4;
+  string evidence = 5;
+}
+
+message Event {
+  EventType type = 1;
+  uint32 code = 2;
+  uint64 timestamp_ms = 3;
+  fixed64 address = 4;
+  uint64 detail = 5;
+}
+
+message PatternResult {
+  fixed64 match_address = 1;
+  fixed64 resolved_address = 2;
+  fixed64 module_base = 3;
+  uint64 rva = 4;
+}
+
+message PointerPath {
+  fixed64 static_base = 1;
+  repeated sint32 offsets = 2;
+}
+
+message StructField {
+  uint32 offset = 1;
+  FieldKind kind = 2;
+  uint64 value = 3;
+}
+
+enum CallThreadMode {
+  CALL_THREAD_MODE_WORKER = 0;
+  CALL_THREAD_MODE_MAIN = 1;
+}
+
+message CallArgument {
+  oneof value {
+    uint64 unsigned_value = 1;
+    sint64 signed_value = 2;
+    fixed64 pointer_value = 3;
+    bytes buffer = 4;
+    bytes narrow_string = 5;
+    string wide_string = 6;
+    float float_value = 7;
+    double double_value = 8;
+  }
+}
+
+message BufferCopyOut {
+  uint32 argument_index = 1;
+  bytes data = 2;
+}
+
+message CallResult {
+  uint64 return_value = 1;
+  uint32 last_error = 2;
+  repeated BufferCopyOut buffer_copy_outs = 3;
+}
+
+message HookHit {
+  fixed64 hook_id = 1;
+  uint64 timestamp_ms = 2;
+  uint64 return_value = 3;
+  repeated uint64 arguments = 4;
+  fixed64 caller = 5;
+  repeated fixed64 frames = 6;
+}
+
+message Candidate {
+  fixed64 id = 1;
+  CandidateKind kind = 2;
+  uint32 confidence = 3;
+  fixed64 address = 4;
+  fixed64 module_base = 5;
+  uint64 rva = 6;
+  uint32 field_offset = 7;
+  uint32 flags = 8;
+  string tag = 9;
+}
+
+message EqI32Predicate { sint32 value = 1; }
+message EqF32Predicate { float value = 1; }
+message RangeI32Predicate { sint32 minimum = 1; sint32 maximum = 2; }
+message RelativeLeI32Predicate { sint32 relative_offset = 1; }
+message PointerPredicate {}
+message VtablePredicate {}
+message EqU64Predicate { uint64 value = 1; }
+
+message FieldPredicate {
+  sint32 offset = 1;
+  oneof predicate {
+    EqI32Predicate equals_i32 = 2;
+    EqF32Predicate equals_f32 = 3;
+    RangeI32Predicate range_i32 = 4;
+    RelativeLeI32Predicate relative_le_i32 = 5;
+    PointerPredicate pointer = 6;
+    VtablePredicate vtable = 7;
+    EqU64Predicate equals_u64 = 8;
+  }
+}
+
+message SynthesizedPattern {
+  string pattern = 1;
+  sint32 pattern_offset = 2;
+  uint32 rip_displacement_offset = 3;
+  uint32 rip_instruction_length = 4;
+  fixed64 match_address = 5;
+  fixed64 resolved_address = 6;
+  uint32 unique_hits = 7;
+}
+
+message HeatField {
+  uint32 offset = 1;
+  uint32 changes = 2;
+  FieldKind kind = 3;
+  uint32 size = 4;
+  uint64 last_value = 5;
+}
+
+message CaveInfo {
+  fixed64 address = 1;
+  uint64 size = 2;
+  fixed64 region_base = 3;
+}
+
+message DisasmBackendInfo {
+  sint32 id = 1;
+  string name = 2;
+}
+
+message Instruction {
+  fixed64 address = 1;
+  uint32 length = 2;
+  uint32 flags = 3;
+  fixed64 branch_target = 4;
+  sint32 rip_displacement_offset = 5;
+  uint32 rip_displacement_size = 6;
+  string mnemonic = 7;
+  string operands = 8;
+}
+
+message StubResult {
+  fixed64 stub_address = 1;
+  uint32 stolen_bytes = 2;
+  bytes code = 3;
+}
+
+message PatchInfo {
+  fixed64 handle = 1;
+  fixed64 address = 2;
+  uint32 size = 3;
+  bool enabled = 4;
+  string name = 5;
+}
+
+message SectionInfo {
+  string name = 1;
+  fixed64 virtual_address = 2;
+  uint64 virtual_size = 3;
+  uint32 raw_size = 4;
+  uint32 characteristics = 5;
+}
+
+message ExportInfo {
+  string name = 1;
+  uint32 ordinal = 2;
+  bool forwarder = 3;
+  uint64 rva = 4;
+  fixed64 virtual_address = 5;
+}
+
+message ImportInfo {
+  string module = 1;
+  string name = 2;
+  uint32 ordinal = 3;
+  fixed64 iat_address = 4;
+  fixed64 bound_address = 5;
+}
+
+message FunctionInfo {
+  fixed64 start = 1;
+  fixed64 end = 2;
+  uint32 confidence = 3;
+  uint32 flags = 4;
+}
+
+message XrefEdge {
+  fixed64 from = 1;
+  fixed64 to = 2;
+  uint32 kind = 3;
+}
+
+message WatchInfo {
+  fixed64 handle = 1;
+  fixed64 address = 2;
+  uint32 size = 3;
+  uint32 kind = 4;
+  WatchType type = 5;
+  uint32 thread_id = 6;
+}
+
+message WatchHit {
+  fixed64 watch_handle = 1;
+  uint64 timestamp_ms = 2;
+  uint32 thread_id = 3;
+  uint32 access = 4;
+  fixed64 instruction_pointer = 5;
+  fixed64 accessed_address = 6;
+  uint32 size = 7;
+}

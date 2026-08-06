@@ -1,0 +1,27 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message SearchMemoryRequest { SearchScope scope = 1; string aob_pattern = 2; uint32 max_hits = 3; }
+message SearchMemoryResponse { repeated fixed64 addresses = 1; uint64 total = 2; }
+message SearchCreateResponse { fixed64 session_id = 1; }
+message SearchCloseRequest { fixed64 session_id = 1; }
+message SearchResetRequest { fixed64 session_id = 1; }
+message SearchFirstRequest {
+  fixed64 session_id = 1;
+  SearchScope scope = 2;
+  SearchValue value = 3;
+  SearchComparison comparison = 4;
+  SearchAlignment alignment = 5;
+  uint32 max_results = 6;
+}
+message SearchFirstResponse { repeated fixed64 addresses = 1; uint64 total = 2; }
+message SearchNextRequest {
+  fixed64 session_id = 1;
+  SearchComparison comparison = 2;
+  SearchValue value = 3;
+}
+message SearchNextResponse { uint32 remaining_count = 1; }
+message SearchGetHitsRequest { fixed64 session_id = 1; uint32 max_hits = 2; }
+message SearchGetHitsResponse { repeated fixed64 addresses = 1; uint64 total = 2; }

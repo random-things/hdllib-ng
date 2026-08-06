@@ -3,218 +3,129 @@
 using namespace cmds_place_detail;
 
 CommandResult CmdPatch(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
+    hdl::rpc::CodeClient client(&ctx.client);
     if (_wcsicmp(ctx.argv[3], L"list") == 0) {
-        PreparedRequest req;
-        std::vector<uint8_t> resp;
-        SetMethod(req, hdl::rpc::Method::PatchEnum);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
+        std::vector<hdl::rpc::v1::PatchInfo> patches;
+        const auto status =
+            client.PatchEnum({}, [&patches](const hdl::rpc::v1::PatchEnumResponse& batch) {
+                patches.insert(patches.end(), batch.patches().begin(), batch.patches().end());
+                return true;
+            });
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("count");
+        writer.Num(patches.size());
+        writer.Key("patches");
+        writer.BeginArray();
+        for (const auto& patch : patches) {
+            writer.BeginObject();
+            writer.Key("handle");
+            writer.HexStr(patch.handle());
+            writer.Key("addr");
+            writer.HexStr(patch.address());
+            writer.Key("enabled");
+            writer.Bool(patch.enabled());
+            writer.Key("name");
+            writer.Str(patch.name());
+            writer.EndObject();
         }
-        Reader r(resp);
-        int32_t st = 0;
-        uint32_t count = 0;
-        if (!r.TakePod(st) || !r.TakePod(count)) {
-            return FailBadResp(ctx);
-        }
-        struct PatchItem {
-            uint64_t handle;
-            uint64_t addr;
-            int32_t enabled;
-            char name[64];
-        };
-        std::vector<PatchItem> items;
-        items.reserve(count);
-        for (uint32_t i = 0; i < count; ++i) {
-            HdlPatchInfo p{};
-            if (!hdl::proto::TakeHdlPatchInfo(r, p)) {
-                return FailBadResp(ctx);
-            }
-            PatchItem pi;
-            pi.handle = p.handle;
-            pi.addr = p.addr;
-            pi.enabled = p.enabled;
-            strncpy_s(pi.name, p.name, _TRUNCATE);
-            items.push_back(pi);
-        }
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("count");
-        w.Num(count);
-        w.Key("patches");
-        w.BeginArray();
-        for (const auto& pi : items) {
-            w.BeginObject();
-            w.Key("handle");
-            w.HexStr(pi.handle);
-            w.Key("addr");
-            w.HexStr(pi.addr);
-            w.Key("enabled");
-            w.Bool(pi.enabled != 0);
-            w.Key("name");
-            w.Str(pi.name);
-            w.EndObject();
-        }
-        w.EndArray();
-        w.EndObject();
-        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+        writer.EndArray();
+        writer.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
     }
     if (_wcsicmp(ctx.argv[3], L"create") == 0 && ctx.argc >= 6) {
-        const uint64_t addr = _wcstoui64(ctx.argv[4], nullptr, 0);
         std::vector<uint8_t> bytes;
-        if (!ParseHexBytes(ctx.argv[5], bytes) || bytes.empty()) {
+        if (!ParseHexBytes(ctx.argv[5], bytes) || bytes.empty())
             return FailArg(ctx, L"bad hex bytes");
-        }
-        std::string name;
-        for (int i = 6; i < ctx.argc; ++i) {
+        hdl::rpc::v1::PatchCreateRequest request;
+        request.set_address(_wcstoui64(ctx.argv[4], nullptr, 0));
+        request.set_data(bytes.data(), bytes.size());
+        for (int i = 6; i < ctx.argc; ++i)
             if (wcscmp(ctx.argv[i], L"--name") == 0 && i + 1 < ctx.argc) {
-                char buf[64];
-                WideCharToMultiByte(CP_UTF8, 0, ctx.argv[++i], -1, buf, sizeof(buf), nullptr,
-                                    nullptr);
-                name = buf;
+                std::string name;
+                if (!WideToUtf8(ctx.argv[++i], &name))
+                    return FailArg(ctx, L"invalid name");
+                request.set_name(std::move(name));
             }
-        }
-        PreparedRequest req;
-        std::vector<uint8_t> resp;
-        SetMethod(req, hdl::rpc::Method::PatchCreate);
-        AppendPod(req, addr);
-        AppendPod(req, static_cast<uint32_t>(bytes.size()));
-        AppendString(req, name.c_str());
-        AppendBytes(req, bytes.data(), bytes.size());
-        if (!ctx.client.Request(req, resp)) {
+        const auto result = client.PatchCreate(request);
+        if (!result.has_response)
             return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        uint64_t handle = 0;
-        if (!r.TakePod(st) || !r.TakePod(handle)) {
-            return FailBadResp(ctx);
-        }
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("handle");
-        w.HexStr(handle);
-        w.EndObject();
-        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("handle");
+        writer.HexStr(result.response.handle());
+        writer.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), result.status.hdl_status(), writer.Take());
     }
     if ((_wcsicmp(ctx.argv[3], L"enable") == 0 || _wcsicmp(ctx.argv[3], L"disable") == 0) &&
         ctx.argc >= 5) {
-        const uint64_t handle = _wcstoui64(ctx.argv[4], nullptr, 0);
-        const int32_t en = _wcsicmp(ctx.argv[3], L"enable") == 0 ? 1 : 0;
-        PreparedRequest req;
-        std::vector<uint8_t> resp;
-        SetMethod(req, hdl::rpc::Method::PatchEnable);
-        AppendPod(req, handle);
-        AppendPod(req, en);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        r.TakePod(st);
-        return FinishStatus(ctx, st);
+        hdl::rpc::v1::PatchEnableRequest request;
+        request.set_handle(_wcstoui64(ctx.argv[4], nullptr, 0));
+        request.set_enabled(_wcsicmp(ctx.argv[3], L"enable") == 0);
+        const auto result = client.PatchEnable(request);
+        return result.has_response ? FinishStatus(ctx, result.status.hdl_status()) : FailIpc(ctx);
     }
     if (_wcsicmp(ctx.argv[3], L"remove") == 0 && ctx.argc >= 5) {
-        const uint64_t handle = _wcstoui64(ctx.argv[4], nullptr, 0);
-        PreparedRequest req;
-        std::vector<uint8_t> resp;
-        SetMethod(req, hdl::rpc::Method::PatchRemove);
-        AppendPod(req, handle);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        r.TakePod(st);
-        return FinishStatus(ctx, st);
+        hdl::rpc::v1::PatchRemoveRequest request;
+        request.set_handle(_wcstoui64(ctx.argv[4], nullptr, 0));
+        const auto result = client.PatchRemove(request);
+        return result.has_response ? FinishStatus(ctx, result.status.hdl_status()) : FailIpc(ctx);
     }
     return FailUsage(ctx);
 }
 
 CommandResult CmdStub(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    int32_t kind = HDL_STUB_MOV_RAX_JMP;
-    uint64_t target = 0;
-    uint64_t steal_from = 0;
-    uint32_t steal_min = 0;
-    uint32_t alloc_rx = 1;
+    hdl::rpc::v1::BuildStubRequest request;
+    request.set_kind(hdl::rpc::v1::STUB_KIND_MOVE_RAX_JUMP);
+    request.set_allocate_rx(true);
     std::vector<uint8_t> raw;
     for (int i = 3; i < ctx.argc; ++i) {
         if (wcscmp(ctx.argv[i], L"--kind") == 0 && i + 1 < ctx.argc) {
             ++i;
-            if (_wcsicmp(ctx.argv[i], L"abs_jmp") == 0) {
-                kind = HDL_STUB_ABS_JMP;
-            } else if (_wcsicmp(ctx.argv[i], L"rel_jmp32") == 0) {
-                kind = HDL_STUB_REL_JMP32;
-            } else if (_wcsicmp(ctx.argv[i], L"raw") == 0) {
-                kind = HDL_STUB_RAW;
-            } else {
-                kind = HDL_STUB_MOV_RAX_JMP;
-            }
-        } else if (wcscmp(ctx.argv[i], L"--target") == 0 && i + 1 < ctx.argc) {
-            target = _wcstoui64(ctx.argv[++i], nullptr, 0);
-        } else if (wcscmp(ctx.argv[i], L"--steal") == 0 && i + 1 < ctx.argc) {
-            steal_from = _wcstoui64(ctx.argv[++i], nullptr, 0);
-        } else if (wcscmp(ctx.argv[i], L"--steal-min") == 0 && i + 1 < ctx.argc) {
-            steal_min = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--alloc") == 0) {
-            alloc_rx = 1;
-        } else if (wcscmp(ctx.argv[i], L"--no-alloc") == 0) {
-            alloc_rx = 0;
-        } else if (wcscmp(ctx.argv[i], L"--raw") == 0 && i + 1 < ctx.argc) {
-            if (!ParseHexBytes(ctx.argv[++i], raw)) {
+            request.set_kind(
+                _wcsicmp(ctx.argv[i], L"abs_jmp") == 0 ? hdl::rpc::v1::STUB_KIND_ABSOLUTE_JUMP
+                : _wcsicmp(ctx.argv[i], L"rel_jmp32") == 0
+                    ? hdl::rpc::v1::STUB_KIND_RELATIVE_JUMP_32
+                : _wcsicmp(ctx.argv[i], L"raw") == 0 ? hdl::rpc::v1::STUB_KIND_RAW
+                                                     : hdl::rpc::v1::STUB_KIND_MOVE_RAX_JUMP);
+        } else if (wcscmp(ctx.argv[i], L"--target") == 0 && i + 1 < ctx.argc)
+            request.set_target(_wcstoui64(ctx.argv[++i], nullptr, 0));
+        else if (wcscmp(ctx.argv[i], L"--steal") == 0 && i + 1 < ctx.argc)
+            request.set_steal_from(_wcstoui64(ctx.argv[++i], nullptr, 0));
+        else if (wcscmp(ctx.argv[i], L"--steal-min") == 0 && i + 1 < ctx.argc)
+            request.set_steal_min_bytes(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--no-alloc") == 0)
+            request.set_allocate_rx(false);
+        else if (wcscmp(ctx.argv[i], L"--alloc") == 0)
+            request.set_allocate_rx(true);
+        else if (wcscmp(ctx.argv[i], L"--raw") == 0 && i + 1 < ctx.argc) {
+            if (!ParseHexBytes(ctx.argv[++i], raw))
                 return FailArg(ctx, L"bad --raw hex");
-            }
-            kind = HDL_STUB_RAW;
+            request.set_kind(hdl::rpc::v1::STUB_KIND_RAW);
         }
     }
-    if (kind != HDL_STUB_RAW && !target && !steal_from) {
+    if (request.kind() != hdl::rpc::v1::STUB_KIND_RAW && !request.target() && !request.steal_from())
         return FailUsage(ctx);
-    }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::BuildStub);
-    AppendPod(req, kind);
-    AppendPod(req, 0u);
-    AppendPod(req, target);
-    AppendPod(req, steal_from);
-    AppendPod(req, steal_min);
-    AppendPod(req, 0u);
-    AppendPod(req, alloc_rx);
-    AppendPod(req, static_cast<uint32_t>(raw.size()));
-    if (!raw.empty()) {
-        AppendBytes(req, raw.data(), raw.size());
-    }
-    if (!ctx.client.Request(req, resp)) {
+    request.set_raw(raw.data(), raw.size());
+    const auto result = hdl::rpc::CodeClient(&ctx.client).BuildStub(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    HdlStubResult result{};
-    if (!r.TakePod(st) || !hdl::proto::TakeHdlStubResult(r, result)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("stub_va");
-    w.HexStr(result.stub_va);
-    w.Key("stolen");
-    w.Num(result.stolen_bytes);
-    w.Key("size");
-    w.Num(result.code_size);
-    w.Key("code");
-    w.BeginArray();
-    for (uint32_t i = 0; i < result.code_size; ++i) {
-        w.Num(result.code[i]);
-    }
-    w.EndArray();
-    w.EndObject();
-    for (uint32_t i = 0; i < result.code_size; ++i) {
-        wchar_t bw[8];
-        swprintf_s(bw, L"%02x%s", result.code[i], (i + 1 == result.code_size) ? L"\n" : L" ");
-    }
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    const auto& stub = result.response.result();
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("stub_va");
+    writer.HexStr(stub.stub_address());
+    writer.Key("stolen");
+    writer.Num(stub.stolen_bytes());
+    writer.Key("size");
+    writer.Num(stub.code().size());
+    writer.Key("code");
+    writer.BeginArray();
+    for (unsigned char byte : stub.code())
+        writer.Num(byte);
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), result.status.hdl_status(), writer.Take());
 }

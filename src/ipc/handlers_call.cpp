@@ -1,82 +1,22 @@
 #include "handlers.hpp"
-#include "wire.hpp"
+
+#include "common.hpp"
+#include "convert.hpp"
 
 #include "alloc.hpp"
 #include "call.hpp"
-#include "jobs.hpp"
-#include "protocol.hpp"
 #include "resolve.hpp"
 
-#include <string>
 #include <thread>
-#include <vector>
 
-namespace hdl {
-namespace ipc {
+namespace hdl::ipc {
 namespace {
 
-bool TakeCallArgs(proto::Reader& r, uint32_t arg_count, std::vector<HdlCallArg>& args,
-                  std::vector<std::vector<uint8_t>>& owned, std::vector<uint8_t>& resp) {
-    using namespace proto;
-    args.resize(arg_count);
-    owned.resize(arg_count);
-    for (uint32_t i = 0; i < arg_count; ++i) {
-        int32_t kind = 0;
-        uint32_t size = 0;
-        uint64_t u64 = 0;
-        if (!r.TakePod(kind) || !r.TakePod(size) || !r.TakePod(u64)) {
-            AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-            return false;
-        }
-        args[i].kind = kind;
-        args[i].size = size;
-        args[i].u64 = u64;
-        args[i].ptr = nullptr;
-        if (kind == HDL_CALL_ARG_BUF || kind == HDL_CALL_ARG_CSTR || kind == HDL_CALL_ARG_WSTR) {
-            uint32_t blob = 0;
-            if (!r.TakePod(blob) || r.left < blob) {
-                AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-                return false;
-            }
-            owned[i].assign(r.p, r.p + blob);
-            r.p += blob;
-            r.left -= blob;
-            args[i].ptr = owned[i].data();
-            if (kind == HDL_CALL_ARG_BUF) {
-                args[i].size = blob;
-            }
-        } else if (kind == HDL_CALL_ARG_PTR) {
-            args[i].ptr = reinterpret_cast<const void*>(u64);
-        }
-    }
-    return true;
-}
-
-void AppendBufArgs(std::vector<uint8_t>& resp, const std::vector<HdlCallArg>& args,
-                   const std::vector<std::vector<uint8_t>>& owned) {
-    using namespace proto;
-    uint32_t buf_n = 0;
-    for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
-        if (args[i].kind == HDL_CALL_ARG_BUF) {
-            ++buf_n;
-        }
-    }
-    AppendPod(resp, buf_n);
-    for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
-        if (args[i].kind == HDL_CALL_ARG_BUF) {
-            AppendPod(resp, i);
-            AppendPod(resp, static_cast<uint32_t>(owned[i].size()));
-            AppendBytes(resp, owned[i].data(), owned[i].size());
-        }
-    }
-}
-
-std::thread StartJobWatcher(const std::shared_ptr<Job>& job, volatile int* local_cancel) {
-    return std::thread([job, local_cancel]() {
-        while (!*local_cancel) {
-            const HdlStatus cs = JobCheck(job);
-            if (cs != HDL_OK) {
-                *local_cancel = 1;
+std::thread StartDeadlineWatcher(const std::shared_ptr<Job>& job, volatile int* cancel) {
+    return std::thread([job, cancel] {
+        while (!*cancel) {
+            if (JobCheck(job) != HDL_OK) {
+                *cancel = 1;
                 break;
             }
             Sleep(20);
@@ -84,240 +24,176 @@ std::thread StartJobWatcher(const std::shared_ptr<Job>& job, volatile int* local
     });
 }
 
+rpc::Status CallStatus(HdlStatus status) {
+    rpc::Status result = rpc::Status::FromHdl(status);
+    if (status == HDL_E_TIMEOUT || status == HDL_E_CANCELLED) {
+        result.set_outcome_unknown(true);
+    }
+    return result;
+}
+
 } // namespace
 
-bool HandleResolveExport(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
+rpc::Status HandleCall_ResolveExport(rpc::CallContext&,
+                                     const rpc::v1::ResolveExportRequest& request,
+                                     rpc::v1::ResolveExportResponse* response) {
     std::wstring module;
-    std::string name;
-    if (!r.TakeWString(module) || !r.TakeString(name)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!Utf8ToWide(request.module(), &module) || request.name().empty() ||
+        request.name().find('\0') != std::string::npos) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
-    uint64_t addr = 0;
-    const HdlStatus st =
-        ResolveExport(module.empty() ? nullptr : module.c_str(), name.c_str(), &addr);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, addr);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleCallExport(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    std::wstring module;
-    std::string name;
-    uint32_t arg_count = 0;
-    uint32_t timeout_ms = 0;
-    uint64_t job_id = 0;
-    if (!r.TakeWString(module) || !r.TakeString(name) || !r.TakePod(arg_count) ||
-        !r.TakePod(timeout_ms) || !r.TakePod(job_id) || arg_count > 16) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    std::vector<HdlCallArg> args;
-    std::vector<std::vector<uint8_t>> owned;
-    if (!TakeCallArgs(r, arg_count, args, owned, resp)) {
-        return WriteFrame(pipe, resp);
-    }
-
-    auto job = BindJob(job_id, 0);
-    volatile int local_cancel = 0;
-    std::thread watcher;
-    if (job) {
-        watcher = StartJobWatcher(job, &local_cancel);
-    }
-
-    HdlCallResult result{};
-    const HdlStatus st = CallExport(module.empty() ? nullptr : module.c_str(), name.c_str(),
-                                    arg_count ? args.data() : nullptr, arg_count, &result,
-                                    timeout_ms, job ? &local_cancel : nullptr);
-
-    if (job) {
-        local_cancel = 1;
-        if (watcher.joinable()) {
-            watcher.join();
-        }
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    proto::AppendHdlCallResult(resp, result);
-    AppendBufArgs(resp, args, owned);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleCall(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
     uint64_t address = 0;
-    uint32_t arg_count = 0;
-    uint32_t thread_mode = 0;
-    uint32_t timeout_ms = 0;
-    uint64_t job_id = 0;
-    if (!r.TakePod(address) || !r.TakePod(arg_count) || !r.TakePod(thread_mode) ||
-        !r.TakePod(timeout_ms) || !r.TakePod(job_id) || arg_count > 16) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    std::vector<HdlCallArg> args;
-    std::vector<std::vector<uint8_t>> owned;
-    if (!TakeCallArgs(r, arg_count, args, owned, resp)) {
-        return WriteFrame(pipe, resp);
-    }
-
-    auto job = BindJob(job_id, 0);
-    volatile int local_cancel = 0;
-    std::thread watcher;
-    if (job) {
-        watcher = StartJobWatcher(job, &local_cancel);
-    }
-
-    HdlCallDesc desc{};
-    desc.address = address;
-    desc.args = arg_count ? args.data() : nullptr;
-    desc.arg_count = arg_count;
-    desc.thread_mode = thread_mode;
-    desc.timeout_ms = timeout_ms;
-    HdlCallResult result{};
-    const HdlStatus st = Call(&desc, &result, job ? &local_cancel : nullptr);
-
-    if (job) {
-        local_cancel = 1;
-        if (watcher.joinable()) {
-            watcher.join();
-        }
-    }
-
-    AppendPod(resp, static_cast<int32_t>(st));
-    proto::AppendHdlCallResult(resp, result);
-    AppendBufArgs(resp, args, owned);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status =
+        ResolveExport(module.empty() ? nullptr : module.c_str(), request.name().c_str(), &address);
+    response->set_address(address);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleAlloc(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t size = 0;
-    uint32_t protect = 0;
-    if (!r.TakePod(size) || !r.TakePod(protect)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint64_t addr = 0;
-    const HdlStatus st = Alloc(static_cast<size_t>(size), protect, &addr);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, addr);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleFree(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    if (!r.TakePod(addr)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(Free(addr)));
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleResolveRip(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint32_t disp = 0;
-    uint32_t len = 0;
-    if (!r.TakePod(addr) || !r.TakePod(disp) || !r.TakePod(len)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint64_t out = 0;
-    const HdlStatus st = ResolveRipRelative(addr, disp, len, &out);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, out);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleFollowPointers(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t base = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(base) || !r.TakePod(count) || count > 64) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    std::vector<int64_t> offsets(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        if (!r.TakePod(offsets[i])) {
-            AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-            return WriteFrame(pipe, resp);
-        }
-    }
-    uint64_t out = 0;
-    const HdlStatus st = FollowPointers(base, count ? offsets.data() : nullptr, count, &out);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, out);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleModuleBase(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
+rpc::Status HandleCall_CallExport(rpc::CallContext& context,
+                                  const rpc::v1::CallExportRequest& request,
+                                  rpc::v1::CallExportResponse* response) {
     std::wstring module;
-    if (!r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    CallArguments arguments;
+    if (!Utf8ToWide(request.module(), &module) || request.name().empty() ||
+        request.name().find('\0') != std::string::npos || !arguments.Decode(request.arguments())) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
-    uint64_t base = 0;
-    const HdlStatus st = ModuleBase(module.empty() ? nullptr : module.c_str(), &base);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, base);
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleCallVtable(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t obj = 0;
-    uint32_t index = 0;
-    uint32_t arg_count = 0;
-    int32_t prepend_this = 1;
-    uint32_t thread_mode = 0;
-    uint32_t timeout_ms = 0;
-    uint64_t job_id = 0;
-    if (!r.TakePod(obj) || !r.TakePod(index) || !r.TakePod(arg_count) || !r.TakePod(prepend_this) ||
-        !r.TakePod(thread_mode) || !r.TakePod(timeout_ms) || !r.TakePod(job_id) || arg_count > 16) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (context.deadline_exceeded()) {
+        return rpc::Status::FromHdl(HDL_E_TIMEOUT);
     }
-    std::vector<HdlCallArg> args;
-    std::vector<std::vector<uint8_t>> owned;
-    if (!TakeCallArgs(r, arg_count, args, owned, resp)) {
-        return WriteFrame(pipe, resp);
-    }
-    auto job = BindJob(job_id, 0);
-    volatile int local_cancel = 0;
+    const auto job = CurrentRequestJob();
+    volatile int cancel = 0;
     std::thread watcher;
-    if (job) {
-        watcher = StartJobWatcher(job, &local_cancel);
+    if (job && job->deadline_tick) {
+        watcher = StartDeadlineWatcher(job, &cancel);
     }
     HdlCallResult result{};
-    const HdlStatus st =
-        CallVtable(obj, index, arg_count ? args.data() : nullptr, arg_count, prepend_this,
-                   thread_mode, &result, timeout_ms, job ? &local_cancel : nullptr);
-    if (job) {
-        local_cancel = 1;
-        if (watcher.joinable()) {
-            watcher.join();
-        }
+    const HdlStatus status =
+        CallExport(module.empty() ? nullptr : module.c_str(), request.name().c_str(),
+                   arguments.args.empty() ? nullptr : arguments.args.data(),
+                   static_cast<uint32_t>(arguments.args.size()), &result,
+                   context.remaining_timeout_ms(), watcher.joinable() ? &cancel : nullptr);
+    if (watcher.joinable()) {
+        cancel = 1;
+        watcher.join();
     }
-    AppendPod(resp, static_cast<int32_t>(st));
-    proto::AppendHdlCallResult(resp, result);
-    return WriteFrame(pipe, resp);
+    arguments.SetResult(result, response->mutable_result());
+    return CallStatus(status);
 }
 
-} // namespace ipc
-} // namespace hdl
+rpc::Status HandleCall_Call(rpc::CallContext& context, const rpc::v1::CallRequest& request,
+                            rpc::v1::CallResponse* response) {
+    CallArguments arguments;
+    const int thread_mode = static_cast<int>(request.thread_mode());
+    if (!request.address() || thread_mode < rpc::v1::CALL_THREAD_MODE_WORKER ||
+        thread_mode > rpc::v1::CALL_THREAD_MODE_MAIN || !arguments.Decode(request.arguments())) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    if (context.deadline_exceeded()) {
+        return rpc::Status::FromHdl(HDL_E_TIMEOUT);
+    }
+    const auto job = CurrentRequestJob();
+    volatile int cancel = 0;
+    std::thread watcher;
+    if (job && job->deadline_tick) {
+        watcher = StartDeadlineWatcher(job, &cancel);
+    }
+    HdlCallDesc desc{};
+    desc.address = request.address();
+    desc.args = arguments.args.empty() ? nullptr : arguments.args.data();
+    desc.arg_count = static_cast<uint32_t>(arguments.args.size());
+    desc.thread_mode = static_cast<uint32_t>(thread_mode);
+    desc.timeout_ms = context.remaining_timeout_ms();
+    HdlCallResult result{};
+    const HdlStatus status = Call(&desc, &result, watcher.joinable() ? &cancel : nullptr);
+    if (watcher.joinable()) {
+        cancel = 1;
+        watcher.join();
+    }
+    arguments.SetResult(result, response->mutable_result());
+    return CallStatus(status);
+}
+
+rpc::Status HandleCall_CallVtable(rpc::CallContext& context,
+                                  const rpc::v1::CallVtableRequest& request,
+                                  rpc::v1::CallVtableResponse* response) {
+    CallArguments arguments;
+    const int thread_mode = static_cast<int>(request.thread_mode());
+    if (!request.object() || thread_mode < rpc::v1::CALL_THREAD_MODE_WORKER ||
+        thread_mode > rpc::v1::CALL_THREAD_MODE_MAIN || !arguments.Decode(request.arguments())) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    if (context.deadline_exceeded()) {
+        return rpc::Status::FromHdl(HDL_E_TIMEOUT);
+    }
+    const auto job = CurrentRequestJob();
+    volatile int cancel = 0;
+    std::thread watcher;
+    if (job && job->deadline_tick) {
+        watcher = StartDeadlineWatcher(job, &cancel);
+    }
+    HdlCallResult result{};
+    const HdlStatus status = CallVtable(
+        request.object(), request.index(), arguments.args.empty() ? nullptr : arguments.args.data(),
+        static_cast<uint32_t>(arguments.args.size()), request.prepend_this(),
+        static_cast<uint32_t>(thread_mode), &result, context.remaining_timeout_ms(),
+        watcher.joinable() ? &cancel : nullptr);
+    if (watcher.joinable()) {
+        cancel = 1;
+        watcher.join();
+    }
+    arguments.SetResult(result, response->mutable_result());
+    return CallStatus(status);
+}
+
+rpc::Status HandleMemory_Alloc(rpc::CallContext&, const rpc::v1::AllocRequest& request,
+                               rpc::v1::AllocResponse* response) {
+    uint64_t address = 0;
+    const HdlStatus status =
+        Alloc(static_cast<size_t>(request.size()), request.protection(), &address);
+    response->set_address(address);
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleMemory_Free(rpc::CallContext&, const rpc::v1::FreeRequest& request,
+                              rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(Free(request.address()));
+}
+
+rpc::Status HandleLocate_ResolveRip(rpc::CallContext&, const rpc::v1::ResolveRipRequest& request,
+                                    rpc::v1::ResolveRipResponse* response) {
+    uint64_t address = 0;
+    const HdlStatus status = ResolveRipRelative(request.address(), request.displacement_offset(),
+                                                request.instruction_length(), &address);
+    response->set_address(address);
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleLocate_FollowPointers(rpc::CallContext&,
+                                        const rpc::v1::FollowPointersRequest& request,
+                                        rpc::v1::FollowPointersResponse* response) {
+    if (request.offsets_size() > 64) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    std::vector<int64_t> offsets(request.offsets().begin(), request.offsets().end());
+    uint64_t address = 0;
+    const HdlStatus status =
+        FollowPointers(request.base(), offsets.empty() ? nullptr : offsets.data(),
+                       static_cast<uint32_t>(offsets.size()), &address);
+    response->set_address(address);
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleLocate_ModuleBase(rpc::CallContext&, const rpc::v1::ModuleBaseRequest& request,
+                                    rpc::v1::ModuleBaseResponse* response) {
+    std::wstring module;
+    if (!Utf8ToWide(request.module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    uint64_t base = 0;
+    const HdlStatus status = ModuleBase(module.empty() ? nullptr : module.c_str(), &base);
+    response->set_base(base);
+    return rpc::Status::FromHdl(status);
+}
+
+} // namespace hdl::ipc

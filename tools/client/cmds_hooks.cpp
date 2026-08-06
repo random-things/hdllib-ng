@@ -1,275 +1,163 @@
 #include "cmd.hpp"
 #include "cmd_fail.hpp"
 #include "json_out.hpp"
+#include "rpc_helpers.hpp"
 #include "usage.hpp"
-#include "util.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-
-#include <cstdio>
-#include <cstring>
 #include <string>
 #include <vector>
 
 CommandResult CmdHooktrace(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t arg_count = 0;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--args") == 0 && i + 1 < ctx.argc) {
-            arg_count = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
-    }
-    SetMethod(req, hdl::rpc::Method::HookTrace);
-    AppendPod(req, target);
-    AppendPod(req, arg_count);
-    if (!ctx.client.Request(req, resp)) {
+    hdl::rpc::v1::HookTraceRequest request;
+    request.set_target(_wcstoui64(ctx.argv[3], nullptr, 0));
+    for (int i = 4; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--args") == 0 && i + 1 < ctx.argc)
+            request.set_argument_count(_wtoi(ctx.argv[++i]));
+    const auto result = hdl::rpc::HookClient(&ctx.client).HookTrace(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t handle = 0;
-    if (!r.TakePod(st) || !r.TakePod(handle)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("handle");
-    w.HexStr(handle);
-    w.EndObject();
-    return CmdStatus(L"hooktrace", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("handle");
+    writer.HexStr(result.response.handle());
+    writer.EndObject();
+    return CmdStatus(L"hooktrace", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdHook(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 5) {
+    if (ctx.argc < 5)
         return FailUsage(ctx);
-    }
-    const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
-    const uint64_t detour = _wcstoui64(ctx.argv[4], nullptr, 0);
-    uint32_t flags = 0;
-    for (int i = 5; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--flags") == 0 && i + 1 < ctx.argc) {
-            flags = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
-    }
-    if (flags != 0) {
-        return FailUsage(ctx);
-    }
-    SetMethod(req, hdl::rpc::Method::Hook);
-    AppendPod(req, target);
-    AppendPod(req, detour);
-    AppendPod(req, flags);
-    if (!ctx.client.Request(req, resp)) {
+    for (int i = 5; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--flags") == 0 && i + 1 < ctx.argc && _wtoi(ctx.argv[++i]) != 0)
+            return FailUsage(ctx);
+    hdl::rpc::v1::HookRequest request;
+    request.set_target(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_detour(_wcstoui64(ctx.argv[4], nullptr, 0));
+    const auto result = hdl::rpc::HookClient(&ctx.client).Hook(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t handle = 0;
-    uint64_t trampoline = 0;
-    if (!r.TakePod(st) || !r.TakePod(handle) || !r.TakePod(trampoline)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("handle");
-    w.HexStr(handle);
-    w.Key("trampoline");
-    w.HexStr(trampoline);
-    w.EndObject();
-    return CmdStatus(L"hook", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("handle");
+    writer.HexStr(result.response.handle());
+    writer.Key("trampoline");
+    writer.HexStr(result.response.trampoline());
+    writer.EndObject();
+    return CmdStatus(L"hook", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdUnhook(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t handle = _wcstoui64(ctx.argv[3], nullptr, 0);
-    SetMethod(req, hdl::rpc::Method::Unhook);
-    AppendPod(req, handle);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    r.TakePod(st);
-    return CmdStatus(L"unhook", st, "{}");
+    hdl::rpc::v1::UnhookRequest request;
+    request.set_handle(_wcstoui64(ctx.argv[3], nullptr, 0));
+    const auto result = hdl::rpc::HookClient(&ctx.client).Unhook(request);
+    return result.has_response ? CmdStatus(L"unhook", result.status.hdl_status(), "{}")
+                               : FailIpc(ctx);
 }
 
 CommandResult CmdHookEnable(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 5) {
+    if (ctx.argc < 5)
         return FailUsage(ctx);
-    }
-    const uint64_t handle = _wcstoui64(ctx.argv[3], nullptr, 0);
-    const int32_t enable = _wtoi(ctx.argv[4]);
-    SetMethod(req, hdl::rpc::Method::EnableHook);
-    AppendPod(req, handle);
-    AppendPod(req, enable);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    r.TakePod(st);
-    return CmdStatus(L"hook-enable", st, "{}");
+    hdl::rpc::v1::EnableHookRequest request;
+    request.set_handle(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_enabled(_wtoi(ctx.argv[4]) != 0);
+    const auto result = hdl::rpc::HookClient(&ctx.client).EnableHook(request);
+    return result.has_response ? CmdStatus(L"hook-enable", result.status.hdl_status(), "{}")
+                               : FailIpc(ctx);
 }
 
 CommandResult CmdHookhits(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    uint32_t timeout_ms = 0;
-    uint32_t max_n = 16;
+    hdl::rpc::v1::PollHookHitsRequest request;
+    request.set_max_hits(16);
     for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
-            timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc) {
-            max_n = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
+        if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc)
+            request.set_wait_timeout_ms(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc)
+            request.set_max_hits(_wtoi(ctx.argv[++i]));
     }
-    SetMethod(req, hdl::rpc::Method::PollHookHits);
-    AppendPod(req, max_n);
-    AppendPod(req, timeout_ms);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-
-    std::vector<HdlHookHit> hits;
-    hits.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlHookHit hit{};
-        if (!hdl::proto::TakeHdlHookHit(r, hit)) {
-            return FailBadResp(ctx);
-        }
-        hits.push_back(hit);
-    }
-
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("hits");
-    w.BeginArray();
+    std::vector<hdl::rpc::v1::HookHit> hits;
+    const auto status =
+        hdl::rpc::HookClient(&ctx.client)
+            .PollHookHits(request, [&hits](const hdl::rpc::v1::PollHookHitsResponse& batch) {
+                hits.insert(hits.end(), batch.hits().begin(), batch.hits().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(hits.size());
+    writer.Key("hits");
+    writer.BeginArray();
     for (const auto& hit : hits) {
-        w.BeginObject();
-        w.Key("hook_id");
-        w.HexStr(hit.hook_id);
-        w.Key("return_value");
-        w.HexStr(hit.return_value);
-        w.Key("caller");
-        w.HexStr(hit.caller);
-        w.Key("args");
-        w.BeginArray();
-        for (uint32_t a = 0; a < hit.arg_count && a < 8; ++a) {
-            w.HexStr(hit.args[a]);
-        }
-        w.EndArray();
-        w.EndObject();
+        writer.BeginObject();
+        writer.Key("hook_id");
+        writer.HexStr(hit.hook_id());
+        writer.Key("return_value");
+        writer.HexStr(hit.return_value());
+        writer.Key("caller");
+        writer.HexStr(hit.caller());
+        writer.Key("args");
+        writer.BeginArray();
+        for (uint64_t arg : hit.arguments())
+            writer.HexStr(arg);
+        writer.EndArray();
+        writer.EndObject();
     }
-    w.EndArray();
-    w.EndObject();
-
-    for (const auto& hit : hits) {
-        for (uint32_t a = 0; a < hit.arg_count && a < 8; ++a) {
-            wchar_t arg[64];
-            swprintf_s(arg, L" a%u=%llx", a, static_cast<unsigned long long>(hit.args[a]));
-        }
-    }
-    return CmdStatus(L"hookhits", st, w.Take());
-}
-
-static std::string NarrowHook(const wchar_t* w) {
-    char buf[512];
-    WideCharToMultiByte(CP_UTF8, 0, w ? w : L"", -1, buf, sizeof(buf), nullptr, nullptr);
-    return buf;
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(L"hookhits", status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdHookImport(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
+    hdl::rpc::v1::HookImportRequest request;
     std::wstring module;
-    std::string dll;
-    std::string import_name;
-    uint32_t arg_count = 0;
-    wchar_t* bang = wcschr(ctx.argv[3], L'!');
-    if (bang) {
-        wchar_t buf[512];
-        wcsncpy_s(buf, ctx.argv[3], _TRUNCATE);
-        wchar_t* b = wcschr(buf, L'!');
-        if (!b) {
-            return CmdFail(L"hook-import", HDL_E_INVALID_ARG, L"bad DLL!Name");
-        }
-        *b = 0;
-        dll = NarrowHook(buf);
-        import_name = NarrowHook(b + 1);
+    std::wstring value = ctx.argv[3];
+    const size_t bang = value.find(L'!');
+    if (bang != std::wstring::npos) {
+        std::string dll, name;
+        if (!WideToUtf8(value.substr(0, bang), &dll) || !WideToUtf8(value.substr(bang + 1), &name))
+            return FailArg(ctx, L"bad DLL!Name");
+        request.set_dll(std::move(dll));
+        request.set_import_name(std::move(name));
     } else {
         for (int i = 3; i < ctx.argc; ++i) {
+            std::string text;
             if (wcscmp(ctx.argv[i], L"--dll") == 0 && i + 1 < ctx.argc) {
-                dll = NarrowHook(ctx.argv[++i]);
+                if (!WideToUtf8(ctx.argv[++i], &text))
+                    return FailArg(ctx, L"bad DLL");
+                request.set_dll(std::move(text));
             } else if (wcscmp(ctx.argv[i], L"--import") == 0 && i + 1 < ctx.argc) {
-                import_name = NarrowHook(ctx.argv[++i]);
-            } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+                if (!WideToUtf8(ctx.argv[++i], &text))
+                    return FailArg(ctx, L"bad import");
+                request.set_import_name(std::move(text));
+            } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
                 module = ctx.argv[++i];
-            } else if (wcscmp(ctx.argv[i], L"--args") == 0 && i + 1 < ctx.argc) {
-                arg_count = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-            }
+            else if (wcscmp(ctx.argv[i], L"--args") == 0 && i + 1 < ctx.argc)
+                request.set_argument_count(_wtoi(ctx.argv[++i]));
         }
     }
-    if (dll.empty() || import_name.empty()) {
+    if (request.dll().empty() || request.import_name().empty())
         return CmdFail(L"hook-import", HDL_E_INVALID_ARG,
                        L"need hook-import DLL!Name or --dll X --import Y");
-    }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::HookImport);
-    AppendWString(req, module.c_str());
-    AppendString(req, dll.c_str());
-    AppendString(req, import_name.c_str());
-    AppendPod(req, arg_count);
-    if (!ctx.client.Request(req, resp)) {
+    std::string module_utf8;
+    if (!WideToUtf8(module, &module_utf8))
+        return FailArg(ctx, L"bad module");
+    request.set_module(std::move(module_utf8));
+    const auto result = hdl::rpc::HookClient(&ctx.client).HookImport(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t handle = 0;
-    if (!r.TakePod(st) || !r.TakePod(handle)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("handle");
-    w.HexStr(handle);
-    w.EndObject();
-    return CmdStatus(L"hook-import", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("handle");
+    writer.HexStr(result.response.handle());
+    writer.EndObject();
+    return CmdStatus(L"hook-import", result.status.hdl_status(), writer.Take());
 }

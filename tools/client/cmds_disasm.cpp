@@ -3,175 +3,100 @@
 using namespace cmds_place_detail;
 
 CommandResult CmdDisasmBackend(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
+    hdl::rpc::CodeClient client(&ctx.client);
     if (ctx.argc >= 4 && _wcsicmp(ctx.argv[3], L"list") == 0) {
-        SetMethod(req, hdl::rpc::Method::DisasmEnumBackends);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
+        std::vector<hdl::rpc::v1::DisasmBackendInfo> backends;
+        const auto status = client.DisasmEnumBackends(
+            {}, [&backends](const hdl::rpc::v1::DisasmEnumBackendsResponse& batch) {
+                backends.insert(backends.end(), batch.backends().begin(), batch.backends().end());
+                return true;
+            });
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("backends");
+        writer.BeginArray();
+        for (const auto& backend : backends) {
+            writer.BeginObject();
+            writer.Key("id");
+            writer.Num(backend.id());
+            writer.Key("name");
+            writer.Str(backend.name());
+            writer.EndObject();
         }
-        Reader r(resp);
-        int32_t st = 0;
-        uint32_t count = 0;
-        if (!r.TakePod(st) || !r.TakePod(count)) {
-            return FailBadResp(ctx);
-        }
-        struct BackendItem {
-            int32_t id;
-            char name[64];
-        };
-        std::vector<BackendItem> items;
-        items.reserve(count);
-        for (uint32_t i = 0; i < count; ++i) {
-            HdlDisasmBackendInfo info{};
-            if (!hdl::proto::TakeHdlDisasmBackendInfo(r, info)) {
-                return FailBadResp(ctx);
-            }
-            BackendItem bi;
-            bi.id = info.id;
-            strncpy_s(bi.name, info.name, _TRUNCATE);
-            items.push_back(bi);
-        }
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("backends");
-        w.BeginArray();
-        for (const auto& bi : items) {
-            w.BeginObject();
-            w.Key("id");
-            w.Num(bi.id);
-            w.Key("name");
-            w.Str(bi.name);
-            w.EndObject();
-        }
-        w.EndArray();
-        w.EndObject();
-        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+        writer.EndArray();
+        writer.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
     }
     if (ctx.argc >= 4 && _wcsicmp(ctx.argv[3], L"get") == 0) {
-        SetMethod(req, hdl::rpc::Method::DisasmGetBackend);
-        if (!ctx.client.Request(req, resp)) {
+        const auto result = client.DisasmGetBackend({});
+        if (!result.has_response)
             return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        int32_t id = 0;
-        if (!r.TakePod(st) || !r.TakePod(id)) {
-            return FailBadResp(ctx);
-        }
-        JsonWriter w;
-        w.BeginObject();
-        w.Key("id");
-        w.Num(id);
-        w.EndObject();
-        return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("id");
+        writer.Num(result.response.backend_id());
+        writer.EndObject();
+        return CmdStatus(ctx.cmd.c_str(), result.status.hdl_status(), writer.Take());
     }
     if (ctx.argc >= 5 && _wcsicmp(ctx.argv[3], L"set") == 0) {
-        const int32_t id = _wtoi(ctx.argv[4]);
-        SetMethod(req, hdl::rpc::Method::DisasmSetBackend);
-        AppendPod(req, id);
-        if (!ctx.client.Request(req, resp)) {
-            return FailIpc(ctx);
-        }
-        Reader r(resp);
-        int32_t st = 0;
-        if (!r.TakePod(st)) {
-            return FailBadResp(ctx);
-        }
-        return FinishStatus(ctx, st);
+        hdl::rpc::v1::DisasmSetBackendRequest request;
+        request.set_backend_id(_wtoi(ctx.argv[4]));
+        const auto result = client.DisasmSetBackend(request);
+        return result.has_response ? FinishStatus(ctx, result.status.hdl_status()) : FailIpc(ctx);
     }
     return FailUsage(ctx);
 }
 
 CommandResult CmdDisasm(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
+    hdl::rpc::v1::DisasmRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_max_instructions(16);
+    for (int i = 4; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc)
+            request.set_max_instructions(_wtoi(ctx.argv[++i]));
+    std::vector<hdl::rpc::v1::Instruction> instructions;
+    const auto status =
+        hdl::rpc::CodeClient(&ctx.client)
+            .Disasm(request, [&instructions](const hdl::rpc::v1::DisasmResponse& batch) {
+                instructions.insert(instructions.end(), batch.instructions().begin(),
+                                    batch.instructions().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(instructions.size());
+    writer.Key("insns");
+    writer.BeginArray();
+    for (const auto& instruction : instructions) {
+        writer.BeginObject();
+        writer.Key("addr");
+        writer.HexStr(instruction.address());
+        writer.Key("mnemonic");
+        writer.Str(instruction.mnemonic());
+        writer.Key("op");
+        writer.Str(instruction.operands());
+        writer.EndObject();
     }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t max_insns = 16;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc) {
-            max_insns = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
-    }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::Disasm);
-    AppendPod(req, addr);
-    AppendPod(req, max_insns);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct InsnItem {
-        uint64_t addr;
-        char mnemonic[32];
-        char op_str[128];
-    };
-    std::vector<InsnItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlInsn insn{};
-        if (!hdl::proto::TakeHdlInsn(r, insn)) {
-            return FailBadResp(ctx);
-        }
-        InsnItem it;
-        it.addr = insn.addr;
-        strncpy_s(it.mnemonic, insn.mnemonic, _TRUNCATE);
-        strncpy_s(it.op_str, insn.op_str, _TRUNCATE);
-        items.push_back(it);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("insns");
-    w.BeginArray();
-    for (const auto& it : items) {
-        w.BeginObject();
-        w.Key("addr");
-        w.HexStr(it.addr);
-        w.Key("mnemonic");
-        w.Str(it.mnemonic);
-        w.Key("op");
-        w.Str(it.op_str);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdInstrLen(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::InstrLen);
-    AppendPod(req, addr);
-    if (!ctx.client.Request(req, resp)) {
+    hdl::rpc::v1::InstrLenRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
+    const auto result = hdl::rpc::CodeClient(&ctx.client).InstrLen(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t len = 0;
-    if (!r.TakePod(st) || !r.TakePod(len)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("len");
-    w.Num(len);
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("len");
+    writer.Num(result.response.length());
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), result.status.hdl_status(), writer.Take());
 }

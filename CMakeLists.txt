@@ -76,6 +76,12 @@ function(hdl_configure_target target_name)
     target_compile_options(${target_name} PRIVATE
       "$<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address;/Zi>")
 
+    # Protobuf and Abseil are supplied as uninstrumented static libraries. Keep
+    # MSVC STL annotation metadata consistent across that boundary while still
+    # instrumenting all first-party code with AddressSanitizer.
+    target_compile_definitions(${target_name} PRIVATE
+      "$<$<COMPILE_LANGUAGE:CXX>:_DISABLE_VECTOR_ANNOTATION;_DISABLE_STRING_ANNOTATION;_DISABLE_OPTIONAL_ANNOTATION>")
+
     get_target_property(hdl_target_type ${target_name} TYPE)
     if(hdl_target_type STREQUAL "EXECUTABLE"
         OR hdl_target_type STREQUAL "SHARED_LIBRARY"
@@ -287,18 +293,35 @@ set(HDL_RPC_PROTOBUF_SYSTEM_INCLUDE_DIRS
 set(HDL_RPC_PROTO_FILES
   "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/common.proto"
   "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/envelope.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/types.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/control.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/process.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/memory.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/search.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/call.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/hook.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/locate.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/discover.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/code.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/pe.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/watch.proto"
+  "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/injection.proto"
   "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/services.proto")
-set(HDL_RPC_PROTO_SOURCES
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/common.pb.cc"
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/envelope.pb.cc"
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.pb.cc")
-set(HDL_RPC_PROTO_HEADERS
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/common.pb.h"
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/envelope.pb.h"
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.pb.h")
+set(HDL_RPC_PROTO_STEMS
+  common envelope types control process memory search call hook locate discover code pe watch
+  injection services)
+set(HDL_RPC_PROTO_SOURCES)
+set(HDL_RPC_PROTO_HEADERS)
+foreach(_hdl_rpc_stem IN LISTS HDL_RPC_PROTO_STEMS)
+  list(APPEND HDL_RPC_PROTO_SOURCES
+    "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/${_hdl_rpc_stem}.pb.cc")
+  list(APPEND HDL_RPC_PROTO_HEADERS
+    "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/${_hdl_rpc_stem}.pb.h")
+endforeach()
 set(HDL_RPC_BINDING_OUTPUTS
   "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.hpp"
-  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.dispatch.inc")
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.dispatch.inc"
+  "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.contract.json")
 
 add_executable(hdl_rpc_codegen tools/rpc_codegen/main.cpp)
 target_link_libraries(hdl_rpc_codegen PRIVATE protobuf::libprotoc protobuf::libprotobuf)
@@ -338,6 +361,13 @@ add_custom_command(
 add_custom_target(hdl_rpc_generated
   DEPENDS ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS} ${HDL_RPC_BINDING_OUTPUTS})
 
+add_custom_target(hdl_rpc_contract_check
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+    "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.contract.json"
+    "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/contract.json"
+  DEPENDS hdl_rpc_generated "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/contract.json"
+  COMMENT "Checking the generated RPC contract against its golden baseline")
+
 add_library(hdl_rpc_proto STATIC ${HDL_RPC_PROTO_SOURCES} ${HDL_RPC_PROTO_HEADERS})
 add_dependencies(hdl_rpc_proto hdl_rpc_generated)
 target_include_directories(hdl_rpc_proto PUBLIC
@@ -348,6 +378,8 @@ target_link_libraries(hdl_rpc_proto PUBLIC protobuf::libprotobuf-lite)
 
 add_library(hdl_rpc_runtime STATIC
   src/rpc/runtime.cpp
+  src/rpc/pipe_io.cpp
+  src/rpc/pipe_client.cpp
   src/ipc/framing.cpp)
 add_dependencies(hdl_rpc_runtime hdl_rpc_generated)
 target_include_directories(hdl_rpc_runtime
@@ -575,7 +607,6 @@ if(HDL_BUILD_TOOLS)
   add_executable(hdlclient
     tools/client/main.cpp
     tools/client/invocation.cpp
-    tools/client/pipe_client.cpp
     tools/client/local_inject.cpp
     tools/client/session_modules.cpp
     tools/client/session_persist.cpp
@@ -795,13 +826,34 @@ if(HDL_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${HDL_RPC_GENERATED_DIR}
   )
+  target_link_libraries(hdl_rpc_schema_tests PRIVATE hdl_rpc_proto)
   string(REPLACE "\\" "/" _hdl_handlers_hpp "${CMAKE_CURRENT_SOURCE_DIR}/src/ipc/handlers.hpp")
   target_compile_definitions(hdl_rpc_schema_tests PRIVATE
     UNICODE _UNICODE
     "HDL_HANDLERS_HPP=\"${_hdl_handlers_hpp}\"")
-  add_dependencies(hdl_rpc_schema_tests hdl_rpc_generated)
+  add_dependencies(hdl_rpc_schema_tests hdl_rpc_generated hdl_rpc_contract_check)
   hdl_configure_target(hdl_rpc_schema_tests)
   add_test(NAME hdl_rpc_schema_tests COMMAND hdl_rpc_schema_tests)
+  add_test(NAME hdl_rpc_contract_test
+    COMMAND ${CMAKE_COMMAND} -E compare_files
+      "${HDL_RPC_GENERATED_DIR}/hdl/rpc/v1/services.rpc.contract.json"
+      "${HDL_RPC_PROTO_ROOT}/hdl/rpc/v1/contract.json")
+  set_tests_properties(hdl_rpc_contract_test PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
+
+  add_executable(hdl_rpc_message_tests tests/rpc_message_test.cpp)
+  target_link_libraries(hdl_rpc_message_tests PRIVATE hdl_rpc_proto)
+  target_include_directories(hdl_rpc_message_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HDL_RPC_GENERATED_DIR})
+  target_compile_definitions(hdl_rpc_message_tests PRIVATE UNICODE _UNICODE)
+  hdl_configure_target(hdl_rpc_message_tests)
+  add_test(NAME hdl_rpc_message_tests COMMAND hdl_rpc_message_tests)
+  set_tests_properties(hdl_rpc_message_tests PROPERTIES
+    TIMEOUT 30
+    LABELS "headless;unit")
   set_tests_properties(hdl_rpc_schema_tests PROPERTIES
     TIMEOUT 30
     LABELS "headless;unit")
@@ -832,7 +884,6 @@ if(HDL_BUILD_TESTS)
     add_executable(hdl_client_tests
       tests/client_test_main.cpp
       tools/client/store.cpp
-      tools/client/pipe_client.cpp
       src/json/json.cpp
     )
     target_include_directories(hdl_client_tests PRIVATE

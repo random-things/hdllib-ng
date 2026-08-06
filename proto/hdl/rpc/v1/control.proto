@@ -1,0 +1,17 @@
+edition = "2023";
+package hdl.rpc.v1;
+option optimize_for = LITE_RUNTIME;
+
+enum LogLevel {
+  LOG_LEVEL_OFF = 0;
+  LOG_LEVEL_ERROR = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_DEBUG = 3;
+}
+
+message PingResponse { uint32 pid = 1; }
+message SetLogLevelRequest { LogLevel level = 1; }
+message SetLogFileRequest { string path = 1; }
+message SetHealthVehRequest { bool enabled = 1; }
+message GetHealthVehResponse { bool enabled = 1; }
+message ShutdownRequest { uint32 flags = 1; }

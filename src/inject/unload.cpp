@@ -2,13 +2,10 @@
 #include "inject/techniques.hpp"
 #include "win/raii.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
-#include "protocol.hpp"
-#include "rpc/runtime.hpp"
-
-#include <cstring>
-#include <vector>
+#include "rpc/pipe_client.hpp"
 
 namespace hdl {
 namespace inject {
@@ -20,34 +17,6 @@ HMODULE ModuleContaining(const void* addr) {
                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                        reinterpret_cast<LPCWSTR>(addr), &mod);
     return mod;
-}
-
-bool PipeReadExact(HANDLE pipe, void* buf, DWORD size) {
-    uint8_t* p = static_cast<uint8_t*>(buf);
-    DWORD remaining = size;
-    while (remaining) {
-        DWORD got = 0;
-        if (!ReadFile(pipe, p, remaining, &got, nullptr) || got == 0) {
-            return false;
-        }
-        p += got;
-        remaining -= got;
-    }
-    return true;
-}
-
-bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
-    const uint8_t* p = static_cast<const uint8_t*>(buf);
-    DWORD remaining = size;
-    while (remaining) {
-        DWORD wrote = 0;
-        if (!WriteFile(pipe, p, remaining, &wrote, nullptr) || wrote == 0) {
-            return false;
-        }
-        p += wrote;
-        remaining -= wrote;
-    }
-    return true;
 }
 
 /* Ask the in-target helper to restore instrumentation before FreeLibrary (hdllib only). */
@@ -77,63 +46,18 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
         return false;
     }
 
-    win::unique_handle pipe(HdlOpenLocalPipe(pid));
-    if (!pipe) {
+    PipeClient pipe(pid, "hdllib-unload", "0.1.0-pre");
+    if (!pipe.Connect()) {
         return false;
     }
+    rpc::v1::ShutdownRequest shutdown;
+    shutdown.set_flags(flags);
+    rpc::ControlClient control(&pipe);
+    const rpc::Result<rpc::v1::Empty> result = control.Shutdown(shutdown);
+    pipe.Close();
 
-    if (!PipeWriteExact(pipe.get(), rpc::kConnectionPreface,
-                        static_cast<DWORD>(rpc::kConnectionPrefaceSize))) {
-        return false;
-    }
-    auto write_envelope = [&pipe](const rpc::v1::Envelope& envelope) {
-        std::vector<uint8_t> bytes;
-        if (!rpc::SerializeEnvelope(envelope, &bytes))
-            return false;
-        const uint32_t size = static_cast<uint32_t>(bytes.size());
-        return PipeWriteExact(pipe.get(), &size, sizeof(size)) &&
-               PipeWriteExact(pipe.get(), bytes.data(), size);
-    };
-    auto read_envelope = [&pipe](rpc::v1::Envelope* envelope) {
-        uint32_t size = 0;
-        if (!PipeReadExact(pipe.get(), &size, sizeof(size)) || size > rpc::kMaxFrameBytes)
-            return false;
-        std::vector<uint8_t> bytes(size);
-        return PipeReadExact(pipe.get(), bytes.data(), size) &&
-               rpc::ParseEnvelope(bytes.data(), bytes.size(), envelope);
-    };
-
-    rpc::v1::Envelope envelope;
-    envelope.mutable_client_hello()->set_protocol_major(rpc::kProtocolMajor);
-    envelope.mutable_client_hello()->set_protocol_minor(rpc::kProtocolMinor);
-    envelope.mutable_client_hello()->set_client_name("hdllib-unload");
-    if (!write_envelope(envelope) || !read_envelope(&envelope) || !envelope.has_server_hello() ||
-        envelope.server_hello().protocol_major() != rpc::kProtocolMajor) {
-        return false;
-    }
-
-    std::vector<uint8_t> compact_payload;
-    proto::AppendPod(compact_payload, flags);
-    rpc::v1::Payload payload;
-    payload.set_value(compact_payload.data(), compact_payload.size());
-    envelope.Clear();
-    auto* request = envelope.mutable_request();
-    request->set_request_id(1);
-    const std::string_view method = rpc::MethodName(rpc::Method::Shutdown);
-    request->set_method(method.data(), method.size());
-    if (!payload.SerializeToString(request->mutable_payload()) || !write_envelope(envelope) ||
-        !read_envelope(&envelope) || !envelope.has_response() ||
-        envelope.response().request_id() != 1 ||
-        !payload.ParseFromString(envelope.response().payload()) ||
-        payload.value().size() < sizeof(int32_t)) {
-        return false;
-    }
-    pipe.reset();
-
-    int32_t status = HDL_E_FAILED;
-    memcpy(&status, payload.value().data(), sizeof(status));
-    if (status != HDL_OK) {
-        HDL_LOG_ERROR("Control.Shutdown returned %d", static_cast<int>(status));
+    if (!result.status.ok()) {
+        HDL_LOG_ERROR("Control.Shutdown returned %d", result.status.hdl_status());
         return false;
     }
     /* Wait until the pipe is gone so ServeClient has left the DLL. */

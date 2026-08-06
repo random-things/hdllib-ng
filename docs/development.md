@@ -16,7 +16,7 @@ The root [`CMakeLists.txt`](../CMakeLists.txt) is authoritative.
 | `HDL_DISASM_ZYDIS` | `ON` | Fetch and register Zydis |
 | `HDL_DISASM_CAPSTONE` | `ON` | Fetch and register Capstone |
 | `HDL_WARNINGS_AS_ERRORS` | `OFF` | Promote warnings on first-party targets; enabled by CI presets |
-| `HDL_ENABLE_ASAN` | `OFF` | Instrument first-party targets with MSVC AddressSanitizer |
+| `HDL_ENABLE_ASAN` | `OFF` | Instrument first-party targets with MSVC AddressSanitizer; STL annotations are disabled at the uninstrumented Protobuf/Abseil boundary |
 | `HDL_ENABLE_CLANG_TIDY` | `OFF` | Run the configured clang-tidy checks during C++ compilation |
 | `HDL_ENABLE_MSVC_ANALYZE` | `OFF` | Run MSVC native code analysis during compilation |
 | `HDL_BUILD_FUZZERS` | `OFF` | Build clang-cl/libFuzzer parser harnesses |
@@ -64,7 +64,7 @@ flowchart LR
     Dispatch --> Handler["ipc/handlers_*.cpp"]
     Handler --> Domain
 
-    Command["client main/usage/cmds"] --> Pipe["PipeClient serialization"]
+    Command["client main/usage/cmds"] --> Pipe["Generated client + shared PipeClient"]
     Pipe --> Handler
 
     Domain --> LocalTests["hdl_tests domain link"]
@@ -82,18 +82,20 @@ The named pipe is the sole remote control channel. `api.cpp` only exports
 
 ## Add or change a pipe-backed operation
 
-1. Define or update flags, structures, and enums in
-   [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) when wire types change.
-2. Implement the operation in its domain `.cpp`/`.hpp`. Keep process mechanics
-   out of adapters.
-3. Declare the named RPC under the appropriate service in
+1. Define or update the semantic request, response, and shared domain messages
+   in the applicable file under [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1).
+   Change [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) only when the
+   in-process C API also changes; C layouts are not wire layouts.
+2. Declare the named RPC under the appropriate service in
    [`proto/hdl/rpc/v1/services.proto`](../proto/hdl/rpc/v1/services.proto).
    Method identity is generated from the schema; do not add a parallel numeric
    registry or handwritten dispatch entry.
-4. Declare the handler in [`src/ipc/handlers.hpp`](../src/ipc/handlers.hpp) and
-   implement it in the matching `handlers_*.cpp`. The generated dispatch include
-   connects the schema method to the matching `Handle<Method>` function.
-5. Update client serialization or add a `Cmd*` handler in the matching
+3. Implement the operation in its domain `.cpp`/`.hpp`. Keep process mechanics
+   out of adapters.
+4. Implement the generated `Handle<Service>_<Method>` declaration in the
+   matching `handlers_*.cpp`. The generated dispatch include parses the declared
+   request and invokes that service-qualified symbol.
+5. Call the generated service client from the matching `Cmd*` handler in the
    [`tools/client/cmds_*.cpp`](../tools/client/) file. Register human-facing
    commands in [`tools/client/main.cpp`](../tools/client/main.cpp) and document
    syntax in [`tools/client/usage.cpp`](../tools/client/usage.cpp).
@@ -194,11 +196,10 @@ Long scans and graph/discover traversals should accept a cancel token or job,
 call `JobCheck`/`TokenCheck` inside loops, and preserve
 `HDL_E_CANCELLED`/`HDL_E_TIMEOUT`.
 
-If a schema method supports streaming, keep both delivery modes:
-
-- Non-streaming callers receive one ordinary response.
-- Streaming callers receive ordered chunks with stable `total`, `offset`, and
-  `count`; only intermediate chunks set `HDL_IPC_MORE`.
+If a schema method supports server streaming, emit bounded typed batch messages
+through `ServerWriter<T>`. Streaming behavior is fixed by `services.proto`:
+ordered data responses have `end_stream=false`, and one payload-free terminal
+response carries the final status with `end_stream=true`.
 
 ### Resource ownership
 
@@ -239,6 +240,8 @@ Test binary roles and target profiles are documented in
 | [`tests/test_select.cpp`](../tests/test_select.cpp) | Pure target-profile scoring, hard/soft gates, stealth preference, Wow64 rejection |
 | [`tests/test_main.cpp`](../tests/test_main.cpp) | Local exported API, place/code/watch/graph, locate/discover fixtures, live injection matrix |
 | [`tests/client_test_main.cpp`](../tests/client_test_main.cpp) | End-to-end executable commands, framing, one-shot store/recipes against a target |
+| [`tests/rpc_schema_test.cpp`](../tests/rpc_schema_test.cpp) | Method/service inventory, traits metadata, service-qualified handlers, and absence of legacy payloads |
+| [`tests/rpc_message_test.cpp`](../tests/rpc_message_test.cpp) | Shared-message round trips, UTF conversion, oneof/range/default validation, and current limits |
 | [`tests/store_test.cpp`](../tests/store_test.cpp) | Interest JSON v1/v2 migration and v3 round trips |
 | [`tests/toy_test_main.cpp`](../tests/toy_test_main.cpp) | Higher-level locate/discover/path/heat/vcall/watch/place/stitch workflows |
 | [`tests/target/main.cpp`](../tests/target/main.cpp) | Configurable injection victim and exported ground truth |
@@ -250,7 +253,7 @@ Read these files together before editing:
 
 | Change | Required context set |
 |---|---|
-| RPC method or payload | `services.proto`, generated RPC metadata, `dispatch.cpp`, matching handler, client serializer, `rpc.md`, `capabilities.md`, live tests |
+| RPC method or message | `services.proto`, its per-service proto, generated method traits/clients/handlers/dispatch, `rpc.md`, `capabilities.md`, schema/message/live tests, contract golden |
 | Search semantics | `hdllib.h` search enums/structs, `memory.cpp`, `handlers_search.cpp`, `cmds_scan.cpp`, discover scan composition, local/client tests |
 | Address filtering or memory safety | `memory.cpp`, `resolve.cpp`, `locate.cpp`, `place.cpp`, `graph.cpp`, `discover.cpp` |
 | Function-boundary/disassembly logic | `disasm/`, `code.cpp`, `graph.cpp`, discover ranking/synthesis, both backend configurations |

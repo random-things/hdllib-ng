@@ -5,7 +5,7 @@
 #include "hdllib/hdllib.h"
 
 #include <array>
-#include <cstring>
+#include <limits>
 
 #include <bcrypt.h>
 
@@ -13,15 +13,6 @@
 
 namespace hdl::rpc {
 namespace {
-
-struct ActiveResponse {
-    uint64_t request_id = 0;
-    uint32_t sequence = 0;
-    bool streaming = false;
-};
-
-thread_local ActiveResponse g_active_response;
-thread_local bool g_has_active_response = false;
 
 struct ServerIdentity {
     std::array<uint8_t, 16> bytes{};
@@ -39,7 +30,88 @@ const ServerIdentity& GetServerIdentity() {
     return identity;
 }
 
+std::string_view HdlReason(int32_t status) {
+    switch (status) {
+    case HDL_OK:
+        return "OK";
+    case HDL_E_INVALID_ARG:
+        return "INVALID_ARGUMENT";
+    case HDL_E_ACCESS:
+        return "ACCESS_DENIED";
+    case HDL_E_NOT_FOUND:
+        return "NOT_FOUND";
+    case HDL_E_NO_MEM:
+        return "RESOURCE_EXHAUSTED";
+    case HDL_E_BUSY:
+        return "BUSY";
+    case HDL_E_CANCELLED:
+        return "CANCELLED";
+    case HDL_E_NOT_INIT:
+        return "NOT_INITIALIZED";
+    case HDL_E_TIMEOUT:
+        return "DEADLINE_EXCEEDED";
+    case HDL_E_BUFFER_SMALL:
+        return "BUFFER_TOO_SMALL";
+    default:
+        return "INTERNAL";
+    }
+}
+
 } // namespace
+
+Status Status::Ok() {
+    return FromHdl(HDL_OK);
+}
+
+Status Status::FromHdl(int32_t hdl_status, std::string_view message) {
+    ::hdl::rpc::v1::RpcStatus value;
+    SetRpcStatus(hdl_status, &value);
+    value.set_message(message.data(), message.size());
+    return Status(std::move(value));
+}
+
+Status Status::Transport(::hdl::rpc::v1::RpcCode code, std::string_view reason,
+                         std::string_view message) {
+    ::hdl::rpc::v1::RpcStatus value;
+    value.set_code(code);
+    value.set_hdl_status(::hdl::rpc::v1::HDL_STATUS_FAILED);
+    value.set_reason(reason.data(), reason.size());
+    value.set_message(message.data(), message.size());
+    return Status(std::move(value));
+}
+
+CallContext::CallContext(uint64_t request_id, uint32_t timeout_ms)
+    : request_id_(request_id), timeout_ms_(timeout_ms),
+      deadline_tick_(timeout_ms ? GetTickCount64() + timeout_ms : 0) {}
+
+uint32_t CallContext::remaining_timeout_ms() const {
+    if (!deadline_tick_) {
+        return 0;
+    }
+    const uint64_t now = GetTickCount64();
+    if (now >= deadline_tick_) {
+        return 1;
+    }
+    const uint64_t remaining = deadline_tick_ - now;
+    return remaining > (std::numeric_limits<uint32_t>::max)()
+               ? (std::numeric_limits<uint32_t>::max)()
+               : static_cast<uint32_t>(remaining);
+}
+
+bool CallContext::deadline_exceeded() const {
+    return deadline_tick_ && GetTickCount64() >= deadline_tick_;
+}
+
+void CallContext::DeferAfterReply(std::function<void()> action) {
+    after_reply_ = std::move(action);
+}
+
+void CallContext::RunAfterReply() {
+    if (after_reply_) {
+        auto action = std::move(after_reply_);
+        action();
+    }
+}
 
 bool SerializeEnvelope(const ::hdl::rpc::v1::Envelope& envelope, std::vector<uint8_t>* out) {
     if (!out || envelope.ByteSizeLong() > kMaxFrameBytes) {
@@ -78,11 +150,16 @@ bool ParseEnvelope(const uint8_t* data, size_t size, ::hdl::rpc::v1::Envelope* o
         return RpcCode::RPC_CODE_FAILED_PRECONDITION;
     case HDL_E_TIMEOUT:
         return RpcCode::RPC_CODE_DEADLINE_EXCEEDED;
-    case HDL_E_BUFFER_SMALL:
-    case HDL_E_FAILED:
     default:
         return RpcCode::RPC_CODE_INTERNAL;
     }
+}
+
+::hdl::rpc::v1::HdlStatusCode ToHdlStatusCode(int32_t status) {
+    if (status < HDL_OK || status > HDL_E_TIMEOUT) {
+        return ::hdl::rpc::v1::HDL_STATUS_FAILED;
+    }
+    return static_cast<::hdl::rpc::v1::HdlStatusCode>(status);
 }
 
 void SetRpcStatus(int32_t hdl_status, ::hdl::rpc::v1::RpcStatus* out) {
@@ -90,39 +167,9 @@ void SetRpcStatus(int32_t hdl_status, ::hdl::rpc::v1::RpcStatus* out) {
         return;
     }
     out->set_code(MapHdlStatus(hdl_status));
-    out->set_hdl_status(hdl_status);
-    switch (hdl_status) {
-    case HDL_OK:
-        out->set_reason("OK");
-        break;
-    case HDL_E_INVALID_ARG:
-        out->set_reason("INVALID_ARGUMENT");
-        break;
-    case HDL_E_ACCESS:
-        out->set_reason("ACCESS_DENIED");
-        break;
-    case HDL_E_NOT_FOUND:
-        out->set_reason("NOT_FOUND");
-        break;
-    case HDL_E_NO_MEM:
-        out->set_reason("RESOURCE_EXHAUSTED");
-        break;
-    case HDL_E_BUSY:
-        out->set_reason("BUSY");
-        break;
-    case HDL_E_CANCELLED:
-        out->set_reason("CANCELLED");
-        break;
-    case HDL_E_NOT_INIT:
-        out->set_reason("NOT_INITIALIZED");
-        break;
-    case HDL_E_TIMEOUT:
-        out->set_reason("DEADLINE_EXCEEDED");
-        break;
-    default:
-        out->set_reason("INTERNAL");
-        break;
-    }
+    out->set_hdl_status(ToHdlStatusCode(hdl_status));
+    const std::string_view reason = HdlReason(hdl_status);
+    out->set_reason(reason.data(), reason.size());
 }
 
 bool WriteServerHello(HANDLE pipe) {
@@ -142,8 +189,6 @@ bool WriteServerHello(HANDLE pipe) {
         auto* info = hello->add_methods();
         info->set_name(method.name.data(), method.name.size());
         info->set_server_streaming(method.server_streaming);
-        // The transport never invents a deadline. In particular, a low-selectivity
-        // search may legitimately take far longer than an interactive command.
         info->set_default_timeout_ms(0);
         info->set_max_timeout_ms(0);
     }
@@ -166,68 +211,23 @@ bool WriteErrorResponse(HANDLE pipe, uint64_t request_id, ::hdl::rpc::v1::RpcCod
     response->set_end_stream(true);
     auto* status = response->mutable_status();
     status->set_code(code);
-    status->set_hdl_status(hdl_status);
+    status->set_hdl_status(ToHdlStatusCode(hdl_status));
     status->set_reason(reason.data(), reason.size());
     status->set_message(message.data(), message.size());
 
-    // Keep the compact adapter consumable by the current client while the
-    // protobuf status remains the transport-level source of truth.
-    ::hdl::rpc::v1::Payload payload;
-    payload.set_value(&hdl_status, sizeof(hdl_status));
-    if (!payload.SerializeToString(response->mutable_payload())) {
-        return false;
-    }
     std::vector<uint8_t> bytes;
     return SerializeEnvelope(envelope, &bytes) &&
            ipc::WriteFrameBytes(pipe, bytes.data(), static_cast<uint32_t>(bytes.size()));
 }
 
-ResponseScope::ResponseScope(uint64_t request_id, bool streaming) {
-    if (!g_has_active_response) {
-        g_active_response = ActiveResponse{request_id, 0, streaming};
-        g_has_active_response = true;
-        active_ = true;
-    }
-}
-
-ResponseScope::~ResponseScope() {
-    if (active_) {
-        g_active_response = {};
-        g_has_active_response = false;
-    }
-}
-
-bool WriteHandlerResponse(HANDLE pipe, const void* data, uint32_t size) {
-    if (!g_has_active_response) {
-        return ipc::WriteFrameBytes(pipe, data, size);
-    }
-
-    int32_t hdl_status = HDL_E_FAILED;
-    if (data && size >= sizeof(hdl_status)) {
-        std::memcpy(&hdl_status, data, sizeof(hdl_status));
-    }
-    bool end_stream = true;
-    constexpr uint32_t kMoreFlagBit = 1u; // HDL_IPC_MORE
-    if (g_active_response.streaming && data && size >= sizeof(int32_t) + sizeof(uint32_t)) {
-        uint32_t flags = 0;
-        std::memcpy(&flags, static_cast<const uint8_t*>(data) + sizeof(int32_t), sizeof(flags));
-        end_stream = (flags & kMoreFlagBit) == 0;
-    }
-
+bool WriteGoAway(HANDLE pipe, ::hdl::rpc::v1::RpcCode code, int32_t hdl_status,
+                 std::string_view reason, std::string_view message) {
     ::hdl::rpc::v1::Envelope envelope;
-    auto* response = envelope.mutable_response();
-    response->set_request_id(g_active_response.request_id);
-    response->set_sequence(g_active_response.sequence++);
-    response->set_end_stream(end_stream);
-    SetRpcStatus(hdl_status, response->mutable_status());
-    ::hdl::rpc::v1::Payload payload;
-    if (data && size) {
-        payload.set_value(data, size);
-    }
-    if (!payload.SerializeToString(response->mutable_payload())) {
-        return false;
-    }
-
+    auto* status = envelope.mutable_go_away()->mutable_status();
+    status->set_code(code);
+    status->set_hdl_status(ToHdlStatusCode(hdl_status));
+    status->set_reason(reason.data(), reason.size());
+    status->set_message(message.data(), message.size());
     std::vector<uint8_t> bytes;
     return SerializeEnvelope(envelope, &bytes) &&
            ipc::WriteFrameBytes(pipe, bytes.data(), static_cast<uint32_t>(bytes.size()));

@@ -606,9 +606,14 @@ CommandResult CmdRecipe(CmdCtx& ctx) {
         }
         const uint32_t object_size = static_cast<uint32_t>(_wtoi(ctx.argv[4]));
         std::vector<HdlFieldPred> preds;
+        std::wstring module;
         for (int i = 5; i < ctx.argc; ++i) {
             if (EqFlag(ctx.argv[i], L"--session") && i + 1 < ctx.argc) {
                 ++i;
+                continue;
+            }
+            if (EqFlag(ctx.argv[i], L"--module") && i + 1 < ctx.argc) {
+                module = ctx.argv[++i];
                 continue;
             }
             HdlFieldPred p{};
@@ -626,8 +631,14 @@ CommandResult CmdRecipe(CmdCtx& ctx) {
         if (!hdlcli::PersistSessionId(ctx, st.discover_session)) {
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"session sidecar write failed");
         }
+        uint32_t scan_flags = HDL_SEARCH_IMAGE;
+        const wchar_t* module_name = nullptr;
+        if (!module.empty()) {
+            scan_flags |= HDL_SEARCH_MODULE;
+            module_name = module.c_str();
+        }
         const int rc =
-            hdlcli::RecipeConstrain(st, object_size, preds, HDL_SEARCH_IMAGE, nullptr, log);
+            hdlcli::RecipeConstrain(st, object_size, preds, scan_flags, module_name, log);
         if (rc != 0) {
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"recipe constrain failed");
         }
