@@ -130,11 +130,10 @@ static void SyncStaticRoots() {
 }
 
 static ToyBag* AllocBag(int32_t gold, int32_t potions) {
-    // std::nothrow returns null on failure; CodeQL build mode "none" can
-    // conservatively resolve this as the throwing overload.
-    // codeql[cpp/incorrect-allocation-error-handling]
-    auto* bag = new (std::nothrow) ToyBag{};
-    if (!bag) {
+    ToyBag* bag = nullptr;
+    try {
+        bag = new ToyBag{};
+    } catch (const std::bad_alloc&) {
         return nullptr;
     }
     bag->magic = kBagMagic;
@@ -144,11 +143,10 @@ static ToyBag* AllocBag(int32_t gold, int32_t potions) {
 }
 
 static ToyEntity* AllocEntity(const char* name, int32_t hp, float x, float y, int32_t gold) {
-    // std::nothrow returns null on failure; CodeQL build mode "none" can
-    // conservatively resolve this as the throwing overload.
-    // codeql[cpp/incorrect-allocation-error-handling]
-    auto* e = new (std::nothrow) ToyEntity{};
-    if (!e) {
+    ToyEntity* e = nullptr;
+    try {
+        e = new ToyEntity{};
+    } catch (const std::bad_alloc&) {
         return nullptr;
     }
     std::memset(e, 0, sizeof(*e));
@@ -326,11 +324,9 @@ bool InitWorld(uint32_t entity_count) {
     if (entity_count > kMaxEntities) {
         entity_count = kMaxEntities;
     }
-    // std::nothrow returns null on failure; CodeQL build mode "none" can
-    // conservatively resolve this as the throwing overload.
-    // codeql[cpp/incorrect-allocation-error-handling]
-    g_world_ptr = new (std::nothrow) ToyWorld{};
-    if (!g_world_ptr) {
+    try {
+        g_world_ptr = new ToyWorld{};
+    } catch (const std::bad_alloc&) {
         return false;
     }
     std::memset(g_world_ptr, 0, sizeof(*g_world_ptr));
