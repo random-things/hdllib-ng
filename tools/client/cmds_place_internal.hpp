@@ -2,13 +2,14 @@
 
 #include "cmd.hpp"
 #include "cmd_fail.hpp"
-#include "ipc/wire.hpp"
 #include "json_out.hpp"
-#include "protocol.hpp"
+#include "rpc_helpers.hpp"
 #include "util.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>

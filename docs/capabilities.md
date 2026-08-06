@@ -28,8 +28,8 @@ Capability reference organized around the named protobuf RPC services in [`servi
 | `hdllib.dll` | Loaded in-target; runs IPC server, memory/search/call/hook/place/code/discover logic |
 | `hdlclient.exe` | CLI: local multi-technique inject + pipe protocol + interest store & recipes |
 | `hdllib.h` | Shared types/status/enums; DLL exports only `HdlHookProc` / `HdlWinEventProc` |
-| `proto/hdl/rpc/v1` | Protobuf envelopes and named service/method declarations |
-| `protocol.hpp` | Compact domain payload codecs; never method identity |
+| `proto/hdl/rpc/v1` | Protobuf envelopes, typed domain messages, and named service/method declarations |
+| Generated RPC bindings | Typed clients, handlers, method traits, and server dispatch derived from `services.proto` |
 
 Pipe name: `HdlFormatPipeName(pid)` → `\\.\pipe\RPCControl_<hash>` ([`pipe_name.h`](../include/hdllib/pipe_name.h)). Override with env `HDL_PIPE` (exact `\\.\pipe\...` path, or the same with one literal pid placeholder such as `%lu` / `%08X`, expanded by replacement — never used as a `swprintf` format). Non-pipe paths and unknown `%` sequences are rejected; the path passed to `CreateFileW` is always rebuilt as `\\.\pipe\` + sanitized name. ACL: SYSTEM, Administrators, and the process user — not Everyone. Multiple concurrent clients are supported.
 
@@ -51,52 +51,37 @@ Every post-preface message is a length-prefixed protobuf `Envelope`:
 
 | Field | Type | Notes |
 |-------|------|--------|
-| `size` | `uint32_t` | Payload byte count |
+| `size` | `uint32_t` | Envelope byte count |
 | `payload` | `size` bytes | Serialized `Envelope` containing a hello, named request, response, or `GoAway` |
 
-Implementation: `PipeReadFrame` / `PipeWriteFrame` in `src/ipc/` (facade in `ipc_server.cpp`); client mirror in `tools/client/pipe_client.cpp`.
+Implementation: server frame I/O in `src/ipc/framing.cpp`; the reusable client
+channel and negotiated frame checks are in `src/rpc/pipe_client.cpp`.
 
-### Encoding helpers (`hdl::proto`)
+### Typed method payloads
 
-| Helper | Wire form |
-|--------|-----------|
-| `AppendPod` / `TakePod` | Native little-endian POD (`memcpy`) |
-| `AppendString` / `TakeString` | `uint32_t byte_len` + NUL-terminated narrow bytes (len includes NUL; empty ⇒ `0`) |
-| `AppendWString` / `TakeWString` | `uint32_t byte_len` + UTF-16LE including trailing `L'\0'` (len includes NUL; empty ⇒ `0`) |
-| `AppendBytes` | Raw bytes |
-| `AppendHdl*` / `TakeHdl*` (`wire.hpp`) | Field-wise LE codecs for public `Hdl*` reply structs (no struct padding on the wire) |
+`Request.payload` is the serialized request type declared for the selected
+method in `services.proto`. `Response.payload`, when present, is the serialized
+declared response or stream-batch type. There is no intermediate wrapper,
+positional field codec, C structure layout, explicit capacity, NUL terminator,
+or duplicated deadline/stream flag in a method payload.
 
-### Compact payload adapter fields
-
-The envelope owns the caller deadline and delivery mode. The current domain
-adapter retains a trailing tuple because the in-process handlers share the same
-compact field codec:
-
-| Field | Type | Purpose |
-|-------|------|---------|
-| reserved | `uint64_t` | Must be zero; remote jobs do not exist |
-| `timeout_ms` | `uint32_t` | Handler-adapter mirror of `Request.timeout_ms`; zero means no deadline |
-| `flags` | `uint32_t` | Handler-adapter streaming flag |
+Wire strings are UTF-8 and convert to or from Win32 UTF-16 at the handler
+boundary. Opaque memory and code remain `bytes`; lists and fixed C arrays become
+`repeated` fields containing only valid elements. Shared variants such as search
+values, call arguments, and discovery predicates use protobuf `oneof` fields.
 
 ### Streaming replies
 
-When `Request.stream_response` and the compact adapter's `HDL_IPC_REQ_STREAM`
-mirror are set for a schema-streaming method, the server writes **multiple
-`Response` envelopes**. Each compact chunk (regions/modules/threads/…):
+Streaming is determined solely by the method declaration. The server writes zero
+or more typed data `Response` envelopes with `end_stream=false`, then one
+payload-free terminal response with `end_stream=true`. Data responses have `OK`
+status; the terminal response carries the final status. Sequence numbers are
+monotonic from zero. Unary calls return one sequence-zero response with
+`end_stream=true`.
 
-| Field | Type |
-|-------|------|
-| `status` | `int32_t` |
-| `flags` | `uint32_t` — `HDL_IPC_MORE` (1) if more chunks follow |
-| `total` | `uint32_t` |
-| `offset` | `uint32_t` |
-| `count` | `uint32_t` |
-| items | `count` records (type depends on the method) |
-
-**Search** streams omit `offset` and use a 64-bit total: `status`, `flags`,
-`uint64_t total`, `uint32_t count`, `u64[count]`.
-
-Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStream`).
+Generated clients parse each typed data message and deliver it synchronously to
+the callback. Returning false closes the pipe, which is the cancellation
+mechanism while `max_in_flight` remains one.
 
 ### Status codes (`HdlStatus`)
 
@@ -109,7 +94,7 @@ Clients loop until a frame without `HDL_IPC_MORE` (see `PipeClient::RequestStrea
 | 4 | `HDL_E_NO_MEM` | Allocation failure |
 | 5 | `HDL_E_BUSY` | Ambiguous target, action already open, etc. |
 | 6 | `HDL_E_FAILED` | Generic failure |
-| 7 | `HDL_E_BUFFER_SMALL` | Caller buffer too small (C API: `*inout_count` = needed) |
+| 7 | `HDL_E_BUFFER_SMALL` | Caller buffer too small in the local C API; typed RPC handlers size their internal buffers dynamically |
 | 8 | `HDL_E_CANCELLED` | Cancelled by a local job/token or abandoned streaming request |
 | 9 | `HDL_E_NOT_INIT` | Library not initialized |
 | 10 | `HDL_E_TIMEOUT` | Deadline exceeded (callee may still be running on calls) |
@@ -132,9 +117,9 @@ method short name; the fully qualified form is `hdl.rpc.v1.Service/Method`.
 
 Default after inject: log level **off**; health VEH **off** until enabled or first `PollEvents`; IPC starts unless `HDL_NO_IPC`.
 
-**`Ping` reply:** `status`, `uint32_t pid`.
+**`Ping` reply:** typed `PingResponse { pid }`.
 
-**`SetLogLevel` request:** `int32_t level` (`HDL_LOG_OFF`…`HDL_LOG_DEBUG`).
+**`SetLogLevel` request:** typed `SetLogLevelRequest { level }` (`HDL_LOG_OFF`…`HDL_LOG_DEBUG`).
 
 ---
 
@@ -147,16 +132,16 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 | `Shutdown` | Restore hooks/patches/watches; optional unload tracked DLLs; stop IPC (DLL stays mapped) | `HdlShutdown` / `HdlShutdownEx` |
 | `TrackLoadedDll` | Register a module-list DLL for later `UNLOAD_MODULES` shutdown | `HdlTrackLoadedDll` |
 
-**`InjectDll` request:** `uint32_t pid`, `uint32_t method`, `wstring dll_path`, `wstring exe_path`, `string hook_export`.
-**Reply:** `status`, `uint64_t base`, `uint32_t out_pid`.
+**`InjectDll` request:** typed fields `pid`, `method`, `dll_path`, `exe_path`, and `hook_export`. Paths are UTF-8 strings on the wire.
+**Reply:** `InjectDllResponse { base, out_pid }`.
 
-**`UnloadDll` request:** `uint32_t pid`, `int32_t reload`, `wstring dll_path`.
-**Reply:** `status`, `uint64_t base` (new base when `reload != 0`, else 0).  
+**`UnloadDll` request:** typed fields `pid`, `reload`, and UTF-8 `dll_path`.
+**Reply:** `UnloadDllResponse { base }` (new base when `reload` is true, else 0).
 Remote unload of a module that exports `HdlShutdown` first sends `Shutdown(shutdown_flags)` so instrumentation is restored outside the loader lock.
 
-**`Shutdown` request:** `uint32_t flags` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Reply `status`; then the server signals IPC stop without joining the accept thread from the worker. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
+**`Shutdown` request:** `ShutdownRequest { flags }` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Its empty response is flushed before the deferred server stop begins. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
 
-**`TrackLoadedDll` request:** `uint64_t base`, `wstring dll_path`.
+**`TrackLoadedDll` request:** `TrackLoadedDllRequest { base, dll_path }` with a UTF-8 path.
 
 **Techniques** (`HDL_INJECT_*`, see [inject/](inject/README.md)):
 
@@ -197,9 +182,9 @@ Remote unload of a module that exports `HdlShutdown` first sends `Shutdown(shutd
 | `EnumRegions` | Virtual memory regions | `HdlEnumRegions` |
 | `EnumModules` | Loaded modules | `HdlEnumModules` |
 
-**Read request:** `uint64_t address`, `uint32_t size` → reply `status`, `uint32_t got`, bytes.  
-**Write request:** `address`, `size`, raw bytes → `status`, `uint32_t wrote`.  
-**Enum regions/modules:** non-stream reply `status`, `count`, array of `HdlRegionInfo` / `HdlModuleInfo`. Stream chunks as above (regions chunk 64, modules 16).
+**Read:** `ReadMemoryRequest { address, size }` → `ReadMemoryResponse { data }`.
+**Write:** `WriteMemoryRequest { address, data }` → `WriteMemoryResponse { bytes_written }`.
+**Enum regions/modules:** server streams typed `RegionBatch` / `ModuleBatch` messages (regions chunk 64, modules 16).
 
 `HdlRegionInfo`: base, size, protect, state, type.  
 `HdlModuleInfo`: base, size, path\[260\].
@@ -228,8 +213,8 @@ Remote unload of a module that exports `HdlShutdown` first sends `Shutdown(shutd
 
 **IPC sessions:** server maps `uint64_t session_id` → `HdlSearchSession*` (create returns id). The request envelope supplies an optional cooperative deadline; zero means unlimited.
 
-**`SearchMemory` / `SearchFirst` / `SearchGetHits` support response streaming.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on pipe backpressure until the client drains it. Compact chunks carry `status`, `flags(MORE)`, `total:u64` (0 until final), `count`, and `u64[count]` (append in order). The final chunk clears `MORE` and carries the true total. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. `hdlclient` writes unlimited results to a controller-owned candidate file and retains only a 64-address preview in memory. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.
-**`SearchNext`:** `session`, `cmp`, `value_len` + bytes plus compact adapter fields → `status`, `count` (then use GetHits to stream survivors).
+**`SearchMemory` / `SearchFirst` / `SearchGetHits` are server-streaming.** Hits are produced into a bounded in-DLL buffer (4096 addresses); when full the scan blocks on pipe backpressure until the client drains it. Each typed `SearchHitBatch` contains ordered addresses and an explicitly present total only when known; the final data batch reports the true total. `max_hits` / `max_results` 0 = unlimited; nonzero = optional early stop. `hdlclient` writes unlimited results to a controller-owned candidate file and retains only a 64-address preview in memory. AOB is always byte-unaligned; typed `alignment` 0 = natural, 1 = unaligned.
+**`SearchNext`:** accepts session, comparison, and an optional typed `SearchValue`, then returns `remaining_count`; use `SearchGetHits` to stream survivors.
 
 ---
 
@@ -254,7 +239,7 @@ jobs are not remotely addressable and are not RPC methods.
 
 **Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK` (wake only; full payload via `PollHookHits`), `WATCH` (wake only; full payload via `PollWatchHits` when armed).
 
-**`PollEvents`:** `max_events`, `timeout_ms` (0 = non-blocking) → `status`, `count`, `HdlEvent[]` (max clamped to 64).
+**`PollEvents`:** `{ max_events, wait_timeout_ms }` returns typed `EventBatch` messages (maximum clamped to 64).
 
 ---
 
@@ -264,9 +249,9 @@ jobs are not remotely addressable and are not RPC methods.
 |------------|------------|-------|
 | `Fingerprint` | Passive tags: language/runtime/UI/graphics/engine/… from modules + main IAT + PE subsystem | `HdlEnumFingerprintTags`, `HdlClassifyFingerprint` |
 
-**Request:** `uint32_t scan_flags` (`HDL_FP_SCAN_MODULES` / `IMPORTS` / `PE`; `0` or omit → `HDL_FP_SCAN_DEFAULT`). Streaming delivery is selected by the request envelope.
+**Request:** `FingerprintRequest { scan_flags }` (`HDL_FP_SCAN_MODULES` / `IMPORTS` / `PE`; `0` or omit → `HDL_FP_SCAN_DEFAULT`). The service declaration makes this method server-streaming.
 
-**Response:** `status`, `count`, `HdlFingerprintTag[]` (or streamed like modules). Each tag: `category`, `confidence` 0–100, `flags` (`FROM_MODULE` / `FROM_IMPORT` / `FROM_PE` / `PRIMARY`), `id`, `evidence`.
+**Response:** typed `FingerprintBatch` messages. Each tag contains `category`, `confidence` 0–100, `flags` (`FROM_MODULE` / `FROM_IMPORT` / `FROM_PE` / `PRIMARY`), `id`, and `evidence`.
 
 `HdlClassifyFingerprint` classifies caller-provided module basenames + import pairs (tests / offline dumps; no process walk). Active probes (`HDL_FP_ACTIVE`) are reserved.
 
@@ -299,11 +284,11 @@ Microsoft x64 ABI, up to **16** arguments. Arg kinds (`HDL_CALL_ARG_*`): `U64`, 
 
 Thread modes: `WORKER` (default helper thread) or `MAIN` (sync on primary UI HWND; fails if none / console-only).
 
-**IPC arg encoding (each):** `int32_t kind`, `uint32_t size`, `uint64_t u64` \[+ for BUF/CSTR/WSTR: `uint32_t blob_len` + bytes\]. PTR uses `u64` as the pointer value.
+**RPC arguments:** repeated `CallArgument` messages use a `oneof` for unsigned/signed integers, pointer, buffer, narrow C-string bytes, UTF-8 wide string, float, and double.
 
-**Call reply:** `status`, `HdlCallResult` (`return_value`, `last_error`), then for Call/CallExport: `buf_n` and per-BUF `(index, size, bytes)` copy-outs. On timeout/cancel the callee may still be running.
+**Call reply:** `CallResult` contains `return_value`, `last_error`, and repeated indexed `BufferCopyOut` values. On timeout/cancel the callee may still be running and `RpcStatus.outcome_unknown` is set.
 
-**`CallVtable` extras:** `obj`, `index`, `arg_count`, `prepend_this`, `thread_mode`, `timeout_ms`, a reserved zero field, then args. When `prepend_this != 0`, a synthetic `this` is prepended if missing. The envelope deadline is authoritative for remote calls.
+**`CallVtable` extras:** the typed request carries `object`, `index`, repeated arguments, `prepend_this`, and `thread_mode`. When `prepend_this` is true, a synthetic `this` is prepended if missing. The envelope deadline is the only remote call timeout.
 
 ---
 
@@ -389,9 +374,9 @@ Session-based pipeline: seed candidates → constraint / action evidence → sta
 
 **Field predicates (`HDL_PRED_*`):** eq i32/f32/u64, range/le i32, readable ptr, vtable ptr — relative to object base; object size capped at 4096, alignment 8.
 
-**Ranking:** default is **frame-aware** — walk `HdlHookHit.frames[]`, `ResolveFunction` each frame, skip System32/SysWOW64/`hdllib`, weight by `max(1, 8−depth)`, bucket by function start. Pass `HDL_RANK_CALLER_ONLY` (1) to rank immediate `caller` return sites instead. IPC request includes a `flags` pod after the action name.
+**Ranking:** default is **frame-aware** — walk `HdlHookHit.frames[]`, `ResolveFunction` each frame, skip System32/SysWOW64/`hdllib`, weight by `max(1, 8−depth)`, bucket by function start. Pass `HDL_RANK_CALLER_ONLY` (1) in the typed request flags to rank immediate `caller` return sites instead.
 
-**Heat:** 1-byte diffs merged into aligned 1/2/4/8 runs; `HdlHeatField.reserved` holds run **size**; `changes` **accumulates** across actions (not cleared on `ActionBegin` — only on region re-register or `ResetHeat`).
+**Heat:** 1-byte diffs merge into aligned 1/2/4/8 runs; protobuf `HeatField.size` names the run size explicitly. `changes` **accumulates** across actions (not cleared on `ActionBegin` — only on region re-register or `ResetHeat`).
 
 **Typical workflow:**
 
@@ -431,7 +416,7 @@ Concrete `hdlclient` command sequences for these pipelines (and recipes that wra
 | `DisasmGetBackend` | Active backend id | `HdlDisasmGetBackend` |
 | `DisasmSetBackend` | Select Zydis / Capstone / custom | `HdlDisasmSetBackend` |
 
-Built-in: **Zydis** (default) and **Capstone**. Remote surface is Enum/Get/Set only (no custom-engine registration over the pipe).
+Built-in: **Zydis** (default) and **Capstone**. The remote surface includes typed Enum/Get/Set plus the server-streaming `Disasm` method; custom-engine registration remains local-only.
 
 ---
 
@@ -515,15 +500,16 @@ The schema groups methods by domain. Method names, rather than assigned numbers,
 
 | Service | Capability group |
 |---------|------------------|
-| `Control` | Connectivity, logging, health, lifecycle, events |
-| `Process` | Process fingerprint, modules, regions, threads |
+| `Control` | Connectivity, logging, health configuration, lifecycle |
+| `Process` | Process health, events, fingerprint, modules, regions, threads |
 | `Memory` | Read, write, allocate, protect, and placement |
 | `Search` | Stateless and stateful memory search |
 | `Call` | Exports, calls, and vtable calls |
 | `Hook` | Function/import hooks and hit polling |
 | `Locate` | Patterns, pointer paths, xrefs, and probes |
 | `Discover` | Discovery sessions, ranking, evidence, and import/export |
-| `Code` | Disassembly, stubs, patches, PE metadata, and function graph |
+| `Code` | Disassembly, stubs, and patches |
+| `Pe` | PE sections, exports, and imports |
 | `Watch` | Hardware/page watches and hit polling |
 | `Injection` | DLL injection, unload, and tracking |
 
@@ -628,7 +614,8 @@ Stub CLI kinds match DLL templates (no text assembler): `abs_jmp` / `rel_jmp32` 
 
 | File | Contents |
 |------|----------|
-| [`src/protocol.hpp`](../src/protocol.hpp) | RPC method enum, stream flags, encode/decode |
+| [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1) | RPC method inventory, typed messages, envelopes, and contract golden |
+| [`tools/rpc_codegen`](../tools/rpc_codegen) | Generated method traits, typed clients/handlers, and dispatch |
 | [`src/ipc_server.hpp`](../src/ipc_server.hpp) / [`src/ipc_server.cpp`](../src/ipc_server.cpp) | Public IPC start/stop + frame helpers |
 | [`src/ipc/`](../src/ipc/) | Server loop, framing, dispatch, handlers by domain |
 | [`include/hdllib/hdllib.h`](../include/hdllib/hdllib.h) | C API, structs, enums |

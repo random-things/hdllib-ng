@@ -1,0 +1,79 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message DiscoverCreateResponse { fixed64 session_id = 1; }
+message DiscoverCloseRequest { fixed64 session_id = 1; }
+message DiscoverAddCandidateRequest { fixed64 session_id = 1; CandidateKind kind = 2; fixed64 address = 3; string tag = 4; }
+message DiscoverAddCandidateResponse { fixed64 candidate_id = 1; }
+message DiscoverScanValueRequest {
+  fixed64 session_id = 1;
+  SearchScope scope = 2;
+  SearchValue value = 3;
+  SearchComparison comparison = 4;
+  SearchAlignment alignment = 5;
+  uint32 max_results = 6;
+  string tag = 7;
+}
+message DiscoverScanValueResponse { uint32 added_count = 1; }
+message DiscoverConstraintScanRequest {
+  fixed64 session_id = 1;
+  uint32 object_size = 2;
+  repeated FieldPredicate predicates = 3;
+  SearchScope scope = 4;
+  uint32 max_results = 5;
+  string tag = 6;
+}
+message DiscoverSynthesizePatternRequest {
+  fixed64 session_id = 1;
+  fixed64 candidate_id = 2;
+  uint32 bytes_before = 3;
+  uint32 bytes_after = 4;
+  SearchScope scope = 5;
+}
+message DiscoverSynthesizePatternResponse { SynthesizedPattern pattern = 1; }
+message DiscoverPathConsensusRequest {
+  fixed64 target = 1;
+  uint32 max_depth = 2;
+  uint32 max_offset = 3;
+  uint32 max_results = 4;
+  SearchScope scope = 5;
+}
+message DiscoverPathConsensusResponse { repeated PointerPath paths = 1; }
+message DiscoverPathValidateRequest { fixed64 expected = 1; repeated PointerPath paths = 2; }
+message DiscoverPathValidateResponse { repeated PointerPath paths = 1; }
+message DiscoverWatchRequest { fixed64 session_id = 1; fixed64 function = 2; uint32 argument_count = 3; }
+message DiscoverUnwatchAllRequest { fixed64 session_id = 1; }
+message DiscoverActionBeginRequest { fixed64 session_id = 1; string name = 2; }
+message DiscoverActionEndRequest { fixed64 session_id = 1; }
+message DiscoverWatchRegionRequest { fixed64 session_id = 1; fixed64 base = 2; uint32 size = 3; }
+message DiscoverGetHeatRequest { fixed64 session_id = 1; fixed64 base = 2; uint32 max_fields = 3; }
+message DiscoverGetHeatResponse { repeated HeatField fields = 1; }
+message DiscoverRankFunctionsRequest { fixed64 session_id = 1; string action_name = 2; uint32 flags = 3; uint32 max_results = 4; }
+message DiscoverRankFunctionsResponse { repeated Candidate candidates = 1; }
+message DiscoverWatchImportRequest {
+  fixed64 session_id = 1;
+  string module = 2;
+  string dll = 3;
+  string import_name = 4;
+  uint32 argument_count = 5;
+}
+message DiscoverResetHeatRequest { fixed64 session_id = 1; fixed64 base = 2; }
+message DiscoverExportRequest { fixed64 session_id = 1; }
+message DiscoverExportResponse { string json = 1; }
+message DiscoverImportRequest { fixed64 session_id = 1; string json = 2; }
+message DiscoverDiffObjectsRequest { fixed64 session_id = 1; repeated fixed64 addresses = 2; uint32 max_size = 3; uint32 max_fields = 4; }
+message DiscoverDiffObjectsResponse { repeated HeatField fields = 1; }
+message DiscoverApplyWatchHitsRequest { fixed64 session_id = 1; fixed64 object_base = 2; uint32 size = 3; }
+message DiscoverGetEvidenceRequest { fixed64 session_id = 1; fixed64 candidate_id = 2; }
+message DiscoverGetEvidenceResponse { string evidence = 1; }
+message DiscoverClusterTypeRequest {
+  fixed64 session_id = 1;
+  fixed64 seed = 2;
+  uint32 object_size = 3;
+  SearchScope scope = 4;
+  uint32 max_results = 5;
+}
+message DiscoverGetCandidatesRequest { fixed64 session_id = 1; uint32 max_results = 2; }
+message DiscoverGetCandidatesResponse { repeated Candidate candidates = 1; }

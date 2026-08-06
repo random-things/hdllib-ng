@@ -1,0 +1,11 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message EnumSectionsRequest { fixed64 module_base = 1; }
+message EnumSectionsResponse { repeated SectionInfo sections = 1; }
+message EnumExportsRequest { fixed64 module_base = 1; }
+message EnumExportsResponse { repeated ExportInfo exports = 1; }
+message EnumImportsRequest { fixed64 module_base = 1; }
+message EnumImportsResponse { repeated ImportInfo imports = 1; }

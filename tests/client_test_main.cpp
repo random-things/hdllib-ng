@@ -2,7 +2,6 @@
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
 #include "pipe_client.hpp"
-#include "protocol.hpp"
 #include "rpc/runtime.hpp"
 #include "store.hpp"
 #include "support.hpp"
@@ -493,7 +492,8 @@ void ExpectOk(Counters& c, const char* name, const ProcResult& r) {
 }
 
 void ExpectExit0(Counters& c, const char* name, const ProcResult& r) {
-    Report(c, r.exit_code == 0, false, name, "");
+    const std::string detail = r.exit_code == 0 ? std::string{} : ToNarrow(r.out);
+    Report(c, r.exit_code == 0, false, name, detail.c_str());
 }
 
 bool PipeReadExact(HANDLE pipe, void* buf, DWORD size) {
@@ -522,6 +522,295 @@ bool PipeWriteExact(HANDLE pipe, const void* buf, DWORD size) {
         remaining -= wrote;
     }
     return true;
+}
+
+bool ReadTestEnvelope(HANDLE pipe, hdl::rpc::v1::Envelope* envelope) {
+    uint32_t size = 0;
+    if (!PipeReadExact(pipe, &size, sizeof(size)) || size > hdl::rpc::kMaxFrameBytes) {
+        return false;
+    }
+    std::vector<uint8_t> bytes(size);
+    return (!size || PipeReadExact(pipe, bytes.data(), size)) &&
+           hdl::rpc::ParseEnvelope(bytes.data(), bytes.size(), envelope);
+}
+
+bool WriteTestEnvelope(HANDLE pipe, const hdl::rpc::v1::Envelope& envelope) {
+    std::vector<uint8_t> bytes;
+    if (!hdl::rpc::SerializeEnvelope(envelope, &bytes)) {
+        return false;
+    }
+    const uint32_t size = static_cast<uint32_t>(bytes.size());
+    return PipeWriteExact(pipe, &size, sizeof(size)) &&
+           (!size || PipeWriteExact(pipe, bytes.data(), size));
+}
+
+enum class TestPeerFault {
+    WrongRequestId,
+    InvalidUnaryPayload,
+    WrongStreamSequence,
+    AbortStream,
+    TerminalStreamError,
+    PartialFailure
+};
+
+void RunClientResponseValidation(Counters& c, TestPeerFault fault, uint32_t pid,
+                                 const char* test_name) {
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        Report(c, false, false, test_name, "pipe name format failed");
+        return;
+    }
+    HANDLE pipe =
+        CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                         1, 4096, 4096, 0, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        Report(c, false, false, test_name, "CreateNamedPipe failed");
+        return;
+    }
+
+    const bool streaming = fault == TestPeerFault::WrongStreamSequence ||
+                           fault == TestPeerFault::AbortStream ||
+                           fault == TestPeerFault::TerminalStreamError;
+    std::atomic<bool> served{false};
+    std::thread server([&] {
+        const BOOL connected =
+            ConnectNamedPipe(pipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        char preface[hdl::rpc::kConnectionPrefaceSize]{};
+        hdl::rpc::v1::Envelope envelope;
+        if (!connected || !PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) ||
+            std::memcmp(preface, hdl::rpc::kConnectionPreface, sizeof(preface)) != 0 ||
+            !ReadTestEnvelope(pipe, &envelope) || !envelope.has_client_hello()) {
+            return;
+        }
+        envelope.Clear();
+        auto* hello = envelope.mutable_server_hello();
+        hello->set_protocol_major(hdl::rpc::kProtocolMajor);
+        hello->set_protocol_minor(hdl::rpc::kProtocolMinor);
+        auto* limits = hello->mutable_limits();
+        limits->set_max_frame_bytes(hdl::rpc::kMaxFrameBytes);
+        limits->set_max_in_flight(1);
+        limits->set_max_stream_chunk_bytes(hdl::rpc::kMaxStreamChunkBytes);
+        auto* method = hello->add_methods();
+        method->set_name(streaming ? "hdl.rpc.v1.Process/EnumRegions" : "hdl.rpc.v1.Control/Ping");
+        method->set_server_streaming(streaming);
+        if (!WriteTestEnvelope(pipe, envelope) || !ReadTestEnvelope(pipe, &envelope) ||
+            !envelope.has_request()) {
+            return;
+        }
+        const uint64_t request_id = envelope.request().request_id();
+        envelope.Clear();
+        auto* response = envelope.mutable_response();
+        response->set_request_id(fault == TestPeerFault::WrongRequestId ? request_id + 1
+                                                                        : request_id);
+        response->set_sequence(fault == TestPeerFault::WrongStreamSequence ? 1 : 0);
+        response->set_end_stream(!streaming || fault == TestPeerFault::WrongStreamSequence ||
+                                 fault == TestPeerFault::TerminalStreamError);
+        const int32_t response_status =
+            fault == TestPeerFault::PartialFailure
+                ? HDL_E_BUFFER_SMALL
+                : (fault == TestPeerFault::TerminalStreamError ? HDL_E_TIMEOUT : HDL_OK);
+        hdl::rpc::SetRpcStatus(response_status, response->mutable_status());
+        if (fault == TestPeerFault::InvalidUnaryPayload) {
+            response->set_payload("\x80", 1);
+        } else if (fault == TestPeerFault::AbortStream) {
+            hdl::rpc::v1::EnumRegionsResponse batch;
+            batch.add_regions()->set_base(0x1000);
+            if (!batch.SerializeToString(response->mutable_payload())) {
+                return;
+            }
+        } else if (!streaming) {
+            hdl::rpc::v1::PingResponse reply;
+            reply.set_pid(1);
+            if (!reply.SerializeToString(response->mutable_payload())) {
+                return;
+            }
+        }
+        served.store(WriteTestEnvelope(pipe, envelope));
+    });
+
+    PipeClient client(pid);
+    bool valid = false;
+    if (client.Connect(3000)) {
+        if (streaming) {
+            hdl::rpc::ProcessClient service(&client);
+            hdl::rpc::v1::Empty request;
+            const hdl::rpc::Status status = service.EnumRegions(
+                request, [](const hdl::rpc::v1::EnumRegionsResponse&) { return false; });
+            valid = fault == TestPeerFault::AbortStream
+                        ? status.hdl_status() == HDL_E_CANCELLED
+                        : (fault == TestPeerFault::TerminalStreamError
+                               ? status.hdl_status() == HDL_E_TIMEOUT
+                               : status.code() == hdl::rpc::v1::RPC_CODE_UNAVAILABLE);
+        } else {
+            hdl::rpc::ControlClient service(&client);
+            hdl::rpc::v1::Empty request;
+            const auto result = service.Ping(request);
+            valid = fault == TestPeerFault::PartialFailure
+                        ? !result.status.ok() && result.status.hdl_status() == HDL_E_BUFFER_SMALL &&
+                              result.has_response && result.response.pid() == 1
+                        : result.status.code() == hdl::rpc::v1::RPC_CODE_UNAVAILABLE;
+        }
+    }
+    server.join();
+    Report(c, valid && served.load(), false, test_name,
+           valid ? "response contract handled as expected" : "unexpected response handling");
+    CloseHandle(pipe);
+}
+
+void RunOneInFlightValidation(Counters& c) {
+    constexpr uint32_t pid = 0x71C0FFE5u;
+    wchar_t name[128];
+    if (HdlFormatPipeName(pid, name, 128) != 0) {
+        Report(c, false, false, "ipc/one_in_flight", "pipe name format failed");
+        return;
+    }
+    HANDLE pipe =
+        CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                         1, 4096, 4096, 0, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        Report(c, false, false, "ipc/one_in_flight", "CreateNamedPipe failed");
+        return;
+    }
+
+    std::atomic<bool> served{false};
+    std::atomic<bool> second_buffered{false};
+    std::thread server([&] {
+        const BOOL connected =
+            ConnectNamedPipe(pipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        char preface[hdl::rpc::kConnectionPrefaceSize]{};
+        hdl::rpc::v1::Envelope envelope;
+        if (!connected || !PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) ||
+            std::memcmp(preface, hdl::rpc::kConnectionPreface, sizeof(preface)) != 0 ||
+            !ReadTestEnvelope(pipe, &envelope) || !envelope.has_client_hello()) {
+            return;
+        }
+        envelope.Clear();
+        auto* hello = envelope.mutable_server_hello();
+        hello->set_protocol_major(hdl::rpc::kProtocolMajor);
+        hello->set_protocol_minor(hdl::rpc::kProtocolMinor);
+        hello->mutable_limits()->set_max_frame_bytes(hdl::rpc::kMaxFrameBytes);
+        hello->mutable_limits()->set_max_in_flight(1);
+        hello->mutable_limits()->set_max_stream_chunk_bytes(hdl::rpc::kMaxStreamChunkBytes);
+        auto* method = hello->add_methods();
+        method->set_name("hdl.rpc.v1.Control/Ping");
+        method->set_server_streaming(false);
+        if (!WriteTestEnvelope(pipe, envelope) || !ReadTestEnvelope(pipe, &envelope) ||
+            !envelope.has_request()) {
+            return;
+        }
+
+        auto reply = [&](uint64_t request_id) {
+            hdl::rpc::v1::Envelope response_envelope;
+            auto* response = response_envelope.mutable_response();
+            response->set_request_id(request_id);
+            response->set_sequence(0);
+            response->set_end_stream(true);
+            hdl::rpc::SetRpcStatus(HDL_OK, response->mutable_status());
+            hdl::rpc::v1::PingResponse ping;
+            ping.set_pid(pid);
+            return ping.SerializeToString(response->mutable_payload()) &&
+                   WriteTestEnvelope(pipe, response_envelope);
+        };
+
+        const uint64_t first_id = envelope.request().request_id();
+        Sleep(150);
+        DWORD available = 0;
+        if (PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
+            second_buffered.store(available != 0);
+        }
+        if (!reply(first_id) || !ReadTestEnvelope(pipe, &envelope) || !envelope.has_request() ||
+            !reply(envelope.request().request_id())) {
+            return;
+        }
+        served.store(true);
+    });
+
+    PipeClient client(pid);
+    std::atomic<int> successful{0};
+    if (client.Connect(3000)) {
+        auto ping = [&] {
+            hdl::rpc::ControlClient control(&client);
+            const auto result = control.Ping(hdl::rpc::v1::Empty{});
+            if (result.status.ok() && result.has_response && result.response.pid() == pid) {
+                successful.fetch_add(1);
+            }
+        };
+        std::thread first(ping);
+        std::thread second(ping);
+        first.join();
+        second.join();
+    }
+    server.join();
+    Report(c, served.load() && successful.load() == 2 && !second_buffered.load(), false,
+           "ipc/one_in_flight", "one PipeClient serializes concurrent calls");
+    CloseHandle(pipe);
+}
+
+HANDLE OpenNegotiatedPipe(uint32_t pid) {
+    HANDLE pipe = HdlOpenLocalPipe(pid);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        return INVALID_HANDLE_VALUE;
+    }
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
+    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+    hdl::rpc::v1::Envelope envelope;
+    envelope.mutable_client_hello()->set_protocol_major(hdl::rpc::kProtocolMajor);
+    envelope.mutable_client_hello()->set_protocol_minor(hdl::rpc::kProtocolMinor);
+    envelope.mutable_client_hello()->set_client_name("hdl_client_tests");
+    if (!PipeWriteExact(pipe, hdl::rpc::kConnectionPreface,
+                        static_cast<DWORD>(hdl::rpc::kConnectionPrefaceSize)) ||
+        !WriteTestEnvelope(pipe, envelope) || !ReadTestEnvelope(pipe, &envelope) ||
+        !envelope.has_server_hello()) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    return pipe;
+}
+
+void RunLiveTransportValidation(Counters& c, uint32_t pid) {
+    hdl::rpc::v1::Empty empty;
+    int32_t status = HDL_E_FAILED;
+    const bool unknown = hdltest::PipeCall(
+        pid, "hdl.rpc.v1.Control/Unknown", empty, [](std::string_view) { return true; }, &status,
+        5000);
+    Report(c, unknown && status == HDL_E_NOT_FOUND, false, "ipc/unknown_method",
+           "unknown method returns UNIMPLEMENTED/HDL_E_NOT_FOUND");
+
+    HANDLE pipe = OpenNegotiatedPipe(pid);
+    bool malformed_rejected = false;
+    if (pipe != INVALID_HANDLE_VALUE) {
+        hdl::rpc::v1::Envelope envelope;
+        auto* request = envelope.mutable_request();
+        request->set_request_id(1);
+        request->set_method("hdl.rpc.v1.Control/Ping");
+        request->set_payload("\x80", 1);
+        if (WriteTestEnvelope(pipe, envelope) && ReadTestEnvelope(pipe, &envelope) &&
+            envelope.has_response()) {
+            const auto& response = envelope.response();
+            malformed_rejected =
+                response.request_id() == 1 && response.end_stream() && response.has_status() &&
+                response.status().code() == hdl::rpc::v1::RPC_CODE_INVALID_ARGUMENT;
+        }
+        CloseHandle(pipe);
+    }
+    Report(c, malformed_rejected, false, "ipc/malformed_method_payload",
+           "malformed typed payload returns INVALID_ARGUMENT");
+
+    pipe = OpenNegotiatedPipe(pid);
+    bool oversized_rejected = false;
+    if (pipe != INVALID_HANDLE_VALUE) {
+        hdl::rpc::v1::Envelope envelope;
+        const uint32_t oversized = hdl::rpc::kMaxFrameBytes + 1;
+        if (PipeWriteExact(pipe, &oversized, sizeof(oversized)) &&
+            ReadTestEnvelope(pipe, &envelope) && envelope.has_go_away()) {
+            oversized_rejected =
+                envelope.go_away().status().code() == hdl::rpc::v1::RPC_CODE_RESOURCE_EXHAUSTED &&
+                envelope.go_away().status().reason() == "FRAME_TOO_LARGE";
+        }
+        CloseHandle(pipe);
+    }
+    Report(c, oversized_rejected, false, "ipc/oversized_frame",
+           "oversized request frame receives GoAway");
 }
 
 /* Peer that answers ClientHello with an incompatible major so PipeClient::Negotiate rejects. */
@@ -595,6 +884,178 @@ void RunNegotiateMismatch(Counters& c) {
     CloseHandle(pipe);
 }
 
+void RunClientDeadlineValidation(Counters& c) {
+    constexpr DWORD timeout_ms = 150;
+
+    {
+        constexpr uint32_t pid = 0x71C0FFD1u;
+        wchar_t name[128];
+        HANDLE pipe = INVALID_HANDLE_VALUE;
+        if (HdlFormatPipeName(pid, name, 128) == 0) {
+            pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX,
+                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096,
+                                    0, nullptr);
+        }
+        if (pipe == INVALID_HANDLE_VALUE) {
+            Report(c, false, false, "ipc/connect_deadline", "CreateNamedPipe failed");
+        } else {
+            HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            std::atomic<bool> hello_received{false};
+            std::thread server([&] {
+                const BOOL connected = ConnectNamedPipe(pipe, nullptr)
+                                           ? TRUE
+                                           : (GetLastError() == ERROR_PIPE_CONNECTED);
+                char preface[hdl::rpc::kConnectionPrefaceSize]{};
+                hdl::rpc::v1::Envelope hello;
+                if (connected &&
+                    PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) &&
+                    ReadTestEnvelope(pipe, &hello) && hello.has_client_hello()) {
+                    hello_received.store(true);
+                    WaitForSingleObject(release, 2000);
+                }
+            });
+
+            PipeClient client(pid);
+            const ULONGLONG start = GetTickCount64();
+            const bool connected = client.Connect(timeout_ms);
+            const ULONGLONG elapsed = GetTickCount64() - start;
+            SetEvent(release);
+            server.join();
+            const bool bounded = !connected && hello_received.load() && elapsed >= timeout_ms / 2 &&
+                                 elapsed < 1000 &&
+                                 client.NegotiateError().find("deadline") != std::string::npos;
+            Report(c, bounded, false, "ipc/connect_deadline",
+                   bounded ? "stalled ServerHello cancelled at deadline"
+                           : "connect did not honor its end-to-end deadline");
+            CloseHandle(release);
+            CloseHandle(pipe);
+        }
+    }
+
+    {
+        constexpr uint32_t pid = 0x71C0FFD2u;
+        wchar_t name[128];
+        HANDLE pipe = INVALID_HANDLE_VALUE;
+        if (HdlFormatPipeName(pid, name, 128) == 0) {
+            pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX,
+                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096,
+                                    0, nullptr);
+        }
+        if (pipe == INVALID_HANDLE_VALUE) {
+            Report(c, false, false, "ipc/unary_deadline", "CreateNamedPipe failed");
+        } else {
+            HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            std::atomic<bool> request_received{false};
+            std::thread server([&] {
+                const BOOL connected = ConnectNamedPipe(pipe, nullptr)
+                                           ? TRUE
+                                           : (GetLastError() == ERROR_PIPE_CONNECTED);
+                char preface[hdl::rpc::kConnectionPrefaceSize]{};
+                hdl::rpc::v1::Envelope envelope;
+                if (!connected ||
+                    !PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) ||
+                    !ReadTestEnvelope(pipe, &envelope) || !envelope.has_client_hello()) {
+                    return;
+                }
+                envelope.Clear();
+                auto* hello = envelope.mutable_server_hello();
+                hello->set_protocol_major(hdl::rpc::kProtocolMajor);
+                hello->set_protocol_minor(hdl::rpc::kProtocolMinor);
+                hello->mutable_limits()->set_max_frame_bytes(hdl::rpc::kMaxFrameBytes);
+                hello->mutable_limits()->set_max_in_flight(1);
+                hello->mutable_limits()->set_max_stream_chunk_bytes(hdl::rpc::kMaxStreamChunkBytes);
+                auto* method = hello->add_methods();
+                method->set_name("hdl.rpc.v1.Control/Ping");
+                method->set_server_streaming(false);
+                if (WriteTestEnvelope(pipe, envelope) && ReadTestEnvelope(pipe, &envelope) &&
+                    envelope.has_request()) {
+                    request_received.store(true);
+                    WaitForSingleObject(release, 2000);
+                }
+            });
+
+            PipeClient client(pid);
+            bool bounded = false;
+            if (client.Connect(1000)) {
+                hdl::rpc::ControlClient control(&client);
+                const ULONGLONG start = GetTickCount64();
+                const auto result =
+                    control.Ping(hdl::rpc::v1::Empty{}, hdl::rpc::CallOptions{timeout_ms});
+                const ULONGLONG elapsed = GetTickCount64() - start;
+                bounded = request_received.load() &&
+                          result.status.code() == hdl::rpc::v1::RPC_CODE_DEADLINE_EXCEEDED &&
+                          result.status.hdl_status() == HDL_E_TIMEOUT &&
+                          result.status.outcome_unknown() && elapsed >= timeout_ms / 2 &&
+                          elapsed < 1000;
+            }
+            SetEvent(release);
+            server.join();
+            Report(c, bounded, false, "ipc/unary_deadline",
+                   bounded ? "stalled response cancelled at deadline"
+                           : "unary call did not cancel stalled pipe I/O");
+            CloseHandle(release);
+            CloseHandle(pipe);
+        }
+    }
+
+    {
+        constexpr uint32_t pid = 0x71C0FFD3u;
+        wchar_t name[128];
+        HANDLE pipe = INVALID_HANDLE_VALUE;
+        if (HdlFormatPipeName(pid, name, 128) == 0) {
+            pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX,
+                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096,
+                                    0, nullptr);
+        }
+        if (pipe == INVALID_HANDLE_VALUE) {
+            Report(c, false, false, "ipc/raw_helper_deadline", "CreateNamedPipe failed");
+        } else {
+            HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            std::atomic<bool> request_received{false};
+            std::thread server([&] {
+                const BOOL connected = ConnectNamedPipe(pipe, nullptr)
+                                           ? TRUE
+                                           : (GetLastError() == ERROR_PIPE_CONNECTED);
+                char preface[hdl::rpc::kConnectionPrefaceSize]{};
+                hdl::rpc::v1::Envelope envelope;
+                if (!connected ||
+                    !PipeReadExact(pipe, preface, static_cast<DWORD>(sizeof(preface))) ||
+                    !ReadTestEnvelope(pipe, &envelope) || !envelope.has_client_hello()) {
+                    return;
+                }
+                envelope.Clear();
+                auto* hello = envelope.mutable_server_hello();
+                hello->set_protocol_major(hdl::rpc::kProtocolMajor);
+                hello->set_protocol_minor(hdl::rpc::kProtocolMinor);
+                hello->mutable_limits()->set_max_frame_bytes(hdl::rpc::kMaxFrameBytes);
+                hello->mutable_limits()->set_max_in_flight(1);
+                hello->mutable_limits()->set_max_stream_chunk_bytes(hdl::rpc::kMaxStreamChunkBytes);
+                if (WriteTestEnvelope(pipe, envelope) && ReadTestEnvelope(pipe, &envelope) &&
+                    envelope.has_request()) {
+                    request_received.store(true);
+                    WaitForSingleObject(release, 2000);
+                }
+            });
+
+            int32_t status = HDL_E_FAILED;
+            const ULONGLONG start = GetTickCount64();
+            const bool called = hdltest::PipeCall(
+                pid, "hdl.rpc.v1.Control/Ping", hdl::rpc::v1::Empty{},
+                [](std::string_view) { return true; }, &status, timeout_ms);
+            const ULONGLONG elapsed = GetTickCount64() - start;
+            SetEvent(release);
+            server.join();
+            const bool bounded =
+                !called && request_received.load() && elapsed >= timeout_ms / 2 && elapsed < 1000;
+            Report(c, bounded, false, "ipc/raw_helper_deadline",
+                   bounded ? "test helper cancelled stalled response at deadline"
+                           : "test helper did not cancel stalled pipe I/O");
+            CloseHandle(release);
+            CloseHandle(pipe);
+        }
+    }
+}
+
 void RunStoreUnit(Counters& c) {
     std::printf("\n== Client store (unit) ==\n");
     wchar_t tmp[MAX_PATH];
@@ -654,6 +1115,29 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
         if (!ok) {
             return;
         }
+    }
+
+    RunLiveTransportValidation(c, ctx.pid);
+    {
+        PipeClient first(ctx.pid);
+        PipeClient second(ctx.pid);
+        const bool connected = first.Connect(3000) && second.Connect(3000);
+        std::atomic<int> successful{0};
+        auto ping = [&](PipeClient* client) {
+            hdl::rpc::ControlClient control(client);
+            const auto result = control.Ping(hdl::rpc::v1::Empty{});
+            if (result.status.ok() && result.has_response && result.response.pid() == ctx.pid) {
+                successful.fetch_add(1);
+            }
+        };
+        if (connected) {
+            std::thread first_call(ping, &first);
+            std::thread second_call(ping, &second);
+            first_call.join();
+            second_call.join();
+        }
+        Report(c, connected && successful.load() == 2, false, "ipc/independent_connections",
+               "concurrent independent pipe connections complete");
     }
 
     ExpectOk(c, "client ping", Cli(ctx, {L"ping"}));
@@ -1321,7 +1805,8 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
             ProcResult r;
             RunProcess(ctx.client,
                        {L"--store", store_path, L"--json", std::to_wstring(ctx.pid), L"recipe",
-                        L"constrain", L"24", L"eq_i32:8:80", L"eq_i32:12:100"},
+                        L"constrain", L"24", L"eq_i32:8:50", L"eq_i32:12:100", L"--module",
+                        L"hdl_test_target.exe"},
                        nullptr, 60000, &r);
             ExpectExit0(c, "client recipe constrain exit", r);
             Report(c, JsonEnvelopeOk(r.out), false, "client recipe constrain JSON ok", "");
@@ -1691,6 +2176,20 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     RunNegotiateMismatch(c);
+    RunClientDeadlineValidation(c);
+    RunClientResponseValidation(c, TestPeerFault::WrongRequestId, 0x71C0FFE1u,
+                                "ipc/reject_wrong_request_id");
+    RunClientResponseValidation(c, TestPeerFault::InvalidUnaryPayload, 0x71C0FFE2u,
+                                "ipc/reject_invalid_unary_payload");
+    RunClientResponseValidation(c, TestPeerFault::WrongStreamSequence, 0x71C0FFE3u,
+                                "ipc/reject_wrong_stream_sequence");
+    RunClientResponseValidation(c, TestPeerFault::AbortStream, 0x71C0FFE4u,
+                                "ipc/callback_abort_closes_stream");
+    RunClientResponseValidation(c, TestPeerFault::TerminalStreamError, 0x71C0FFE7u,
+                                "ipc/terminal_stream_error");
+    RunClientResponseValidation(c, TestPeerFault::PartialFailure, 0x71C0FFE6u,
+                                "ipc/unary_partial_failure");
+    RunOneInFlightValidation(c);
     RunStoreUnit(c);
     RunClientLiveTests(c, client_full, target_full, dll_full);
 

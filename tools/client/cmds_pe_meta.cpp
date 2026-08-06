@@ -3,435 +3,275 @@
 using namespace cmds_place_detail;
 
 CommandResult CmdSections(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    uint64_t base = 0;
-    if (ctx.argc >= 4) {
-        base = _wcstoui64(ctx.argv[3], nullptr, 0);
+    hdl::rpc::v1::EnumSectionsRequest request;
+    if (ctx.argc >= 4)
+        request.set_module_base(_wcstoui64(ctx.argv[3], nullptr, 0));
+    std::vector<hdl::rpc::v1::SectionInfo> values;
+    const auto status =
+        hdl::rpc::PeClient(&ctx.client)
+            .EnumSections(request, [&values](const hdl::rpc::v1::EnumSectionsResponse& batch) {
+                values.insert(values.end(), batch.sections().begin(), batch.sections().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("sections");
+    writer.BeginArray();
+    for (const auto& value : values) {
+        writer.BeginObject();
+        writer.Key("name");
+        writer.Str(value.name());
+        writer.Key("va");
+        writer.HexStr(value.virtual_address());
+        writer.Key("vsize");
+        writer.HexStr(value.virtual_size());
+        writer.EndObject();
     }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::EnumSections);
-    AppendPod(req, base);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct SectItem {
-        char name[16];
-        uint64_t va;
-        uint64_t vsize;
-    };
-    std::vector<SectItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlSectionInfo s{};
-        if (!hdl::proto::TakeHdlSectionInfo(r, s)) {
-            return FailBadResp(ctx);
-        }
-        SectItem si;
-        strncpy_s(si.name, s.name, _TRUNCATE);
-        si.va = s.va;
-        si.vsize = s.vsize;
-        items.push_back(si);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("sections");
-    w.BeginArray();
-    for (const auto& si : items) {
-        w.BeginObject();
-        w.Key("name");
-        w.Str(si.name);
-        w.Key("va");
-        w.HexStr(si.va);
-        w.Key("vsize");
-        w.HexStr(si.vsize);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdExports(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    uint64_t base = 0;
-    if (ctx.argc >= 4) {
-        base = _wcstoui64(ctx.argv[3], nullptr, 0);
+    hdl::rpc::v1::EnumExportsRequest request;
+    if (ctx.argc >= 4)
+        request.set_module_base(_wcstoui64(ctx.argv[3], nullptr, 0));
+    std::vector<hdl::rpc::v1::ExportInfo> values;
+    const auto status =
+        hdl::rpc::PeClient(&ctx.client)
+            .EnumExports(request, [&values](const hdl::rpc::v1::EnumExportsResponse& batch) {
+                values.insert(values.end(), batch.exports().begin(), batch.exports().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("exports");
+    writer.BeginArray();
+    for (size_t i = 0; i < (std::min)(values.size(), size_t{32}); ++i) {
+        const auto& value = values[i];
+        writer.BeginObject();
+        writer.Key("name");
+        writer.Str(value.name());
+        writer.Key("ordinal");
+        writer.Num(value.ordinal());
+        writer.Key("va");
+        writer.HexStr(value.virtual_address());
+        writer.EndObject();
     }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::EnumExports);
-    AppendPod(req, base);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct ExpItem {
-        char name[256];
-        uint32_t ordinal;
-        uint64_t va;
-    };
-    std::vector<ExpItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlExportInfo e{};
-        if (!hdl::proto::TakeHdlExportInfo(r, e)) {
-            return FailBadResp(ctx);
-        }
-        ExpItem ei;
-        strncpy_s(ei.name, e.name, _TRUNCATE);
-        ei.ordinal = e.ordinal;
-        ei.va = e.va;
-        items.push_back(ei);
-    }
-    const uint32_t show = count > 32 ? 32 : count;
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("exports");
-    w.BeginArray();
-    for (uint32_t i = 0; i < show; ++i) {
-        w.BeginObject();
-        w.Key("name");
-        w.Str(items[i].name);
-        w.Key("ordinal");
-        w.Num(items[i].ordinal);
-        w.Key("va");
-        w.HexStr(items[i].va);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdImports(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    uint64_t base = 0;
-    if (ctx.argc >= 4) {
-        base = _wcstoui64(ctx.argv[3], nullptr, 0);
+    hdl::rpc::v1::EnumImportsRequest request;
+    if (ctx.argc >= 4)
+        request.set_module_base(_wcstoui64(ctx.argv[3], nullptr, 0));
+    std::vector<hdl::rpc::v1::ImportInfo> values;
+    const auto status =
+        hdl::rpc::PeClient(&ctx.client)
+            .EnumImports(request, [&values](const hdl::rpc::v1::EnumImportsResponse& batch) {
+                values.insert(values.end(), batch.imports().begin(), batch.imports().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("imports");
+    writer.BeginArray();
+    for (size_t i = 0; i < (std::min)(values.size(), size_t{32}); ++i) {
+        const auto& value = values[i];
+        writer.BeginObject();
+        writer.Key("module");
+        writer.Str(value.module());
+        writer.Key("name");
+        writer.Str(value.name().empty() ? "(ord)" : value.name());
+        writer.Key("iat");
+        writer.HexStr(value.iat_address());
+        writer.EndObject();
     }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::EnumImports);
-    AppendPod(req, base);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct ImpItem {
-        char module[128];
-        char name[256];
-        uint64_t iat_va;
-    };
-    std::vector<ImpItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlImportInfo e{};
-        if (!hdl::proto::TakeHdlImportInfo(r, e)) {
-            return FailBadResp(ctx);
-        }
-        ImpItem ii;
-        strncpy_s(ii.module, e.module, _TRUNCATE);
-        strncpy_s(ii.name, e.name[0] ? e.name : "(ord)", _TRUNCATE);
-        ii.iat_va = e.iat_va;
-        items.push_back(ii);
-    }
-    const uint32_t show = count > 32 ? 32 : count;
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("imports");
-    w.BeginArray();
-    for (uint32_t i = 0; i < show; ++i) {
-        w.BeginObject();
-        w.Key("module");
-        w.Str(items[i].module);
-        w.Key("name");
-        w.Str(items[i].name);
-        w.Key("iat");
-        w.HexStr(items[i].iat_va);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdFunctions(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    uint32_t max_results = 64;
+    hdl::rpc::v1::EnumFunctionsRequest request;
+    request.set_max_results(64);
     std::wstring module;
     for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc) {
-            max_results = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc)
+            request.set_max_results(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        }
     }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::EnumFunctions);
-    AppendPod(req, 0ull);
-    AppendPod(req, 0ull);
-    AppendPod(req, module.empty() ? 0u : HDL_SEARCH_MODULE);
-    AppendPod(req, max_results);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
+    std::string module_utf8;
+    if (!WideToUtf8(module, &module_utf8))
+        return FailArg(ctx, L"bad module");
+    request.mutable_scope()->set_module(std::move(module_utf8));
+    if (!module.empty())
+        request.mutable_scope()->set_flags(HDL_SEARCH_MODULE);
+    std::vector<hdl::rpc::v1::FunctionInfo> values;
+    const auto status =
+        hdl::rpc::LocateClient(&ctx.client)
+            .EnumFunctions(request, [&values](const hdl::rpc::v1::EnumFunctionsResponse& batch) {
+                values.insert(values.end(), batch.functions().begin(), batch.functions().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("functions");
+    writer.BeginArray();
+    for (size_t i = 0; i < (std::min)(values.size(), size_t{32}); ++i) {
+        writer.BeginObject();
+        writer.Key("start");
+        writer.HexStr(values[i].start());
+        writer.Key("conf");
+        writer.Num(values[i].confidence());
+        writer.EndObject();
     }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct FnItem {
-        uint64_t start;
-        uint32_t confidence;
-    };
-    std::vector<FnItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlFunctionInfo f{};
-        if (!hdl::proto::TakeHdlFunctionInfo(r, f)) {
-            return FailBadResp(ctx);
-        }
-        items.push_back({f.start, f.confidence});
-    }
-    const uint32_t show = count > 32 ? 32 : count;
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("functions");
-    w.BeginArray();
-    for (uint32_t i = 0; i < show; ++i) {
-        w.BeginObject();
-        w.Key("start");
-        w.HexStr(items[i].start);
-        w.Key("conf");
-        w.Num(items[i].confidence);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdXrefsFrom(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
+    hdl::rpc::v1::XrefsFromRequest request;
+    request.set_seed(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_max_depth(2);
+    request.set_max_nodes(64);
+    std::vector<hdl::rpc::v1::XrefEdge> values;
+    const auto status =
+        hdl::rpc::LocateClient(&ctx.client)
+            .XrefsFrom(request, [&values](const hdl::rpc::v1::XrefsFromResponse& batch) {
+                values.insert(values.end(), batch.edges().begin(), batch.edges().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("edges");
+    writer.BeginArray();
+    for (const auto& value : values) {
+        writer.BeginObject();
+        writer.Key("from");
+        writer.HexStr(value.from());
+        writer.Key("to");
+        writer.HexStr(value.to());
+        writer.Key("kind");
+        writer.Num(value.kind());
+        writer.EndObject();
     }
-    const uint64_t seed = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t depth = 2;
-    uint32_t nodes = 64;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::XrefsFrom);
-    AppendPod(req, seed);
-    AppendPod(req, depth);
-    AppendPod(req, nodes);
-    AppendPod(req, 0u);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct EdgeItem {
-        uint64_t from;
-        uint64_t to;
-        uint32_t kind;
-    };
-    std::vector<EdgeItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlXrefEdge e{};
-        if (!hdl::proto::TakeHdlXrefEdge(r, e)) {
-            return FailBadResp(ctx);
-        }
-        items.push_back({e.from, e.to, e.kind});
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("edges");
-    w.BeginArray();
-    for (const auto& e : items) {
-        w.BeginObject();
-        w.Key("from");
-        w.HexStr(e.from);
-        w.Key("to");
-        w.HexStr(e.to);
-        w.Key("kind");
-        w.Num(e.kind);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdResolveFunction(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
+    hdl::rpc::v1::ResolveFunctionRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
     std::wstring module;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+    for (int i = 4; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        }
-    }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::ResolveFunction);
-    AppendPod(req, addr);
-    AppendPod(req, module.empty() ? 0u : HDL_SEARCH_MODULE);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
+    std::string module_utf8;
+    if (!WideToUtf8(module, &module_utf8))
+        return FailArg(ctx, L"bad module");
+    request.mutable_scope()->set_module(std::move(module_utf8));
+    if (!module.empty())
+        request.mutable_scope()->set_flags(HDL_SEARCH_MODULE);
+    const auto result = hdl::rpc::LocateClient(&ctx.client).ResolveFunction(request);
+    if (!result.has_response)
         return FailIpc(ctx);
+    JsonWriter writer;
+    writer.BeginObject();
+    if (result.response.has_function()) {
+        const auto& fn = result.response.function();
+        writer.Key("start");
+        writer.HexStr(fn.start());
+        writer.Key("end");
+        writer.HexStr(fn.end());
+        writer.Key("conf");
+        writer.Num(fn.confidence());
+        writer.Key("flags");
+        writer.Num(fn.flags());
     }
-    Reader r(resp);
-    int32_t st = 0;
-    if (!r.TakePod(st)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    if (st == HDL_OK) {
-        HdlFunctionInfo f{};
-        if (hdl::proto::TakeHdlFunctionInfo(r, f)) {
-            w.Key("start");
-            w.HexStr(f.start);
-            w.Key("end");
-            w.HexStr(f.end);
-            w.Key("conf");
-            w.Num(f.confidence);
-            w.Key("flags");
-            w.Num(f.flags);
-        }
-    }
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdXrefsTo(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t nodes = 64;
-    uint32_t kinds = HDL_XREF_CALL | HDL_XREF_JMP | HDL_XREF_FUNC;
+    hdl::rpc::v1::XrefsToRequest request;
+    request.set_target(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_max_nodes(64);
+    request.set_kinds(HDL_XREF_CALL | HDL_XREF_JMP | HDL_XREF_FUNC);
     std::wstring module;
     for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc) {
-            nodes = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc)
+            request.set_max_nodes(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        } else if (wcscmp(ctx.argv[i], L"--exact") == 0) {
-            kinds = HDL_XREF_CALL | HDL_XREF_JMP;
-        }
+        else if (wcscmp(ctx.argv[i], L"--exact") == 0)
+            request.set_kinds(HDL_XREF_CALL | HDL_XREF_JMP);
     }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::XrefsTo);
-    AppendPod(req, target);
-    AppendPod(req, nodes);
-    AppendPod(req, kinds);
-    AppendPod(req, module.empty() ? 0u : HDL_SEARCH_MODULE);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
+    std::string module_utf8;
+    if (!WideToUtf8(module, &module_utf8))
+        return FailArg(ctx, L"bad module");
+    request.mutable_scope()->set_module(std::move(module_utf8));
+    if (!module.empty())
+        request.mutable_scope()->set_flags(HDL_SEARCH_MODULE);
+    std::vector<hdl::rpc::v1::XrefEdge> values;
+    const auto status =
+        hdl::rpc::LocateClient(&ctx.client)
+            .XrefsTo(request, [&values](const hdl::rpc::v1::XrefsToResponse& batch) {
+                values.insert(values.end(), batch.edges().begin(), batch.edges().end());
+                return true;
+            });
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(values.size());
+    writer.Key("edges");
+    writer.BeginArray();
+    for (const auto& value : values) {
+        writer.BeginObject();
+        writer.Key("from");
+        writer.HexStr(value.from());
+        writer.Key("to");
+        writer.HexStr(value.to());
+        writer.Key("kind");
+        writer.Num(value.kind());
+        writer.EndObject();
     }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    struct EdgeItem {
-        uint64_t from;
-        uint64_t to;
-        uint32_t kind;
-    };
-    std::vector<EdgeItem> items;
-    items.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlXrefEdge e{};
-        if (!hdl::proto::TakeHdlXrefEdge(r, e)) {
-            return FailBadResp(ctx);
-        }
-        items.push_back({e.from, e.to, e.kind});
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("edges");
-    w.BeginArray();
-    for (const auto& e : items) {
-        w.BeginObject();
-        w.Key("from");
-        w.HexStr(e.from);
-        w.Key("to");
-        w.HexStr(e.to);
-        w.Key("kind");
-        w.Num(e.kind);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(ctx.cmd.c_str(), st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(ctx.cmd.c_str(), status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdInvalidateFnIndex(CmdCtx& ctx) {
-    using namespace hdl::proto;
     std::wstring module;
-    for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+    for (int i = 3; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        }
-    }
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-    SetMethod(req, hdl::rpc::Method::InvalidateFnIndex);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    if (!r.TakePod(st)) {
-        return FailBadResp(ctx);
-    }
-    return FinishStatus(ctx, st);
+    std::string utf8;
+    if (!WideToUtf8(module, &utf8))
+        return FailArg(ctx, L"bad module");
+    hdl::rpc::v1::InvalidateFnIndexRequest request;
+    request.set_module(std::move(utf8));
+    const auto result = hdl::rpc::LocateClient(&ctx.client).InvalidateFnIndex(request);
+    return result.has_response ? FinishStatus(ctx, result.status.hdl_status()) : FailIpc(ctx);
 }

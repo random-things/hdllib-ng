@@ -1,0 +1,38 @@
+edition = "2023";
+package hdl.rpc.v1;
+option optimize_for = LITE_RUNTIME;
+
+enum InjectionMethod {
+  INJECTION_METHOD_CREATE_REMOTE_THREAD = 0;
+  INJECTION_METHOD_NT_CREATE_THREAD_EX = 1;
+  INJECTION_METHOD_RTL_CREATE_USER_THREAD = 2;
+  INJECTION_METHOD_QUEUE_USER_APC = 3;
+  INJECTION_METHOD_SET_WINDOWS_HOOK_EX = 4;
+  INJECTION_METHOD_THREAD_HIJACK = 5;
+  INJECTION_METHOD_MANUAL_MAP = 6;
+  INJECTION_METHOD_EARLY_BIRD_APC = 7;
+  INJECTION_METHOD_ATOM_BOMBING = 8;
+  INJECTION_METHOD_MODULE_STOMP = 9;
+  INJECTION_METHOD_SECTION_MAP = 10;
+  INJECTION_METHOD_WINDOW_SUBCLASS = 11;
+  INJECTION_METHOD_INSTRUMENTATION_CALLBACK = 12;
+  INJECTION_METHOD_KERNEL_CALLBACK_TABLE = 13;
+  INJECTION_METHOD_VEH = 14;
+  INJECTION_METHOD_SET_WIN_EVENT_HOOK = 15;
+  INJECTION_METHOD_RTL_REMOTE_CALL = 16;
+  INJECTION_METHOD_SPECIAL_USER_APC = 17;
+  INJECTION_METHOD_THREAD_POOL = 18;
+  INJECTION_METHOD_ETW_CALLBACK = 19;
+}
+
+message InjectDllRequest {
+  uint32 pid = 1;
+  InjectionMethod method = 2;
+  string dll_path = 3;
+  string executable_path = 4;
+  string hook_export = 5;
+}
+message InjectDllResponse { fixed64 base = 1; uint32 out_pid = 2; }
+message UnloadDllRequest { uint32 pid = 1; bool reload = 2; string dll_path = 3; }
+message UnloadDllResponse { fixed64 base = 1; }
+message TrackLoadedDllRequest { fixed64 base = 1; string dll_path = 2; }

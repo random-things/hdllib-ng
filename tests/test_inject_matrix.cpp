@@ -1,6 +1,4 @@
 #include "domain_api.hpp"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 #include "support.hpp"
 #include "test_runners.hpp"
 

@@ -14,7 +14,7 @@ The reviewed first-party code is approximately 35,200 lines across 137 C/C++/ASM
 | Critical | **Fixed** | IPC `ServeClient` workers are joinable (`server.cpp`); accept thread joins them before session/job map teardown. Soft 2s wait removed as primary safety. `CoreShutdownPrepare` tears down instrumentation only; session/job close runs after worker join (`ThreadMain` + `CloseDomainSessionsAndJobs` on the finish path). |
 | High | **Fixed** | Search/discover sessions use `shared_ptr` holders with per-session mutexes (`common.cpp`). Sessions remain process-global by id so multi-process CLI staging works; UAF on concurrent close is prevented by shared ownership (no disconnect auto-close). Regression: `lifecycle/search_close_vs_inflight`, `lifecycle/discover_close_vs_inflight`, `lifecycle/close_all_vs_inflight`, `lifecycle/ipc_close_vs_inflight` in `hdl_tests --lifecycle-only`. |
 | High | **Fixed** | `CoreInit` already uses `kUninit → kBootstrapping → kReady`. `ipc::Start` now returns `HDL_E_FAILED` unless the listen pipe becomes ready. |
-| High | **Fixed** | The `HDLRPC1\n` preface and protobuf `ClientHello` / `ServerHello` negotiate protocol 1.0 and advertise the schema-generated method inventory and transport limits. Field-wise LE codecs remain inside compact domain payload adapters; `hdl_pe_tests` round-trips them. |
+| High | **Fixed** | The `HDLRPC1\n` preface and protobuf `ClientHello` / `ServerHello` negotiate protocol 1.0 and advertise the schema-generated method inventory and transport limits. Every method now uses declared protobuf request/response types directly, with a descriptor-derived contract golden. |
 | High | **Fixed** | Bounds-checked `PeImageView` (`src/inject/pe_image_view.*`) used by manual map: rejects one-past-end `AddressOfEntryPoint`; shared `WalkBaseRelocDirectory` / local `ApplyRelocations` (`pe_relocs.*`) fail closed on truncated/malformed base-reloc blocks — covered by `hdl_pe_tests` fixtures that reach `ApplyRelocations`. |
 
 Residual: the `hdl_tests` host may still `TerminateProcess` after in-process `CoreShutdown` because MinHook/CRT teardown can `STATUS_STACK_BUFFER_OVERRUN` after heavy hook API tests. Injected unload remains named shutdown RPC + no-op detach.
@@ -96,7 +96,7 @@ The historical recommendations are retained below as the implementation record.
 
 - Add fuzz targets for:
 
-  - IPC `Reader` and request dispatch.
+  - RPC envelope parsing and generated typed method dispatch.
   - AOB parsing and typed scan descriptors.
   - Manual-map PE parsing.
   - Discover/store JSON import.

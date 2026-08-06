@@ -2,444 +2,303 @@
 #include "cmd_fail.hpp"
 #include "json_out.hpp"
 #include "recipes.hpp"
+#include "rpc_helpers.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-#include <cstdio>
-#include <cstring>
+#include <algorithm>
 #include <string>
 #include <vector>
 
-CommandResult CmdRip(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
+namespace {
 
-    if (ctx.argc < 4) {
+bool SetUtf8(std::wstring_view value, std::string* field) {
+    return WideToUtf8(value, field);
+}
+
+HdlPointerPath ToDomainPath(const hdl::rpc::v1::PointerPath& value) {
+    HdlPointerPath path{};
+    path.static_base = value.static_base();
+    path.depth = static_cast<uint32_t>((std::min)(value.offsets_size(), 8));
+    for (uint32_t i = 0; i < path.depth; ++i)
+        path.offsets[i] = value.offsets(i);
+    return path;
+}
+
+} // namespace
+
+CommandResult CmdRip(CmdCtx& ctx) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t disp = 3;
-    uint32_t len = 7;
+    hdl::rpc::v1::ResolveRipRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_displacement_offset(3);
+    request.set_instruction_length(7);
     for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--disp") == 0 && i + 1 < ctx.argc) {
-            disp = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--len") == 0 && i + 1 < ctx.argc) {
-            len = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
+        if (wcscmp(ctx.argv[i], L"--disp") == 0 && i + 1 < ctx.argc)
+            request.set_displacement_offset(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--len") == 0 && i + 1 < ctx.argc)
+            request.set_instruction_length(_wtoi(ctx.argv[++i]));
     }
-    SetMethod(req, hdl::rpc::Method::ResolveRip);
-    AppendPod(req, addr);
-    AppendPod(req, disp);
-    AppendPod(req, len);
-    if (!ctx.client.Request(req, resp)) {
+    const auto result = hdl::rpc::LocateClient(&ctx.client).ResolveRip(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t out = 0;
-    if (!r.TakePod(st) || !r.TakePod(out)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("addr");
-    w.HexStr(out);
-    w.EndObject();
-    return CmdStatus(L"rip", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("addr");
+    writer.HexStr(result.response.address());
+    writer.EndObject();
+    return CmdStatus(L"rip", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdPtrchain(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t base = _wcstoui64(ctx.argv[3], nullptr, 0);
-    std::vector<int64_t> offsets;
-    for (int i = 4; i < ctx.argc; ++i) {
-        offsets.push_back(_wcstoi64(ctx.argv[i], nullptr, 0));
-    }
-    SetMethod(req, hdl::rpc::Method::FollowPointers);
-    AppendPod(req, base);
-    AppendPod(req, static_cast<uint32_t>(offsets.size()));
-    for (int64_t o : offsets) {
-        AppendPod(req, o);
-    }
-    if (!ctx.client.Request(req, resp)) {
+    hdl::rpc::v1::FollowPointersRequest request;
+    request.set_base(_wcstoui64(ctx.argv[3], nullptr, 0));
+    for (int i = 4; i < ctx.argc; ++i)
+        request.add_offsets(_wcstoi64(ctx.argv[i], nullptr, 0));
+    const auto result = hdl::rpc::LocateClient(&ctx.client).FollowPointers(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t out = 0;
-    if (!r.TakePod(st) || !r.TakePod(out)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("addr");
-    w.HexStr(out);
-    w.EndObject();
-    return CmdStatus(L"ptrchain", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("addr");
+    writer.HexStr(result.response.address());
+    writer.EndObject();
+    return CmdStatus(L"ptrchain", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdModbase(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
+    hdl::rpc::v1::ModuleBaseRequest request;
     std::wstring module;
-    for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+    for (int i = 3; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        }
-    }
-    SetMethod(req, hdl::rpc::Method::ModuleBase);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
+    if (!SetUtf8(module, request.mutable_module()))
+        return FailArg(ctx, L"bad module");
+    const auto result = hdl::rpc::LocateClient(&ctx.client).ModuleBase(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t base = 0;
-    if (!r.TakePod(st) || !r.TakePod(base)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("base");
-    w.HexStr(base);
-    w.EndObject();
-    return CmdStatus(L"modbase", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("base");
+    writer.HexStr(result.response.base());
+    writer.EndObject();
+    return CmdStatus(L"modbase", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdResolvePattern(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    char pattern[1024];
-    WideCharToMultiByte(CP_UTF8, 0, ctx.argv[3], -1, pattern, sizeof(pattern), nullptr, nullptr);
-    uint32_t hit = 0;
-    int32_t off = 0;
-    uint32_t rip_disp = 0;
-    uint32_t rip_len = 0;
-    uint32_t flags = 0;
+    hdl::rpc::v1::ResolvePatternRequest request;
+    if (!SetUtf8(ctx.argv[3], request.mutable_pattern()))
+        return FailArg(ctx, L"bad pattern");
+    request.set_max_scan_hits(256);
     std::wstring module;
-    std::vector<int64_t> follows;
     for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--hit") == 0 && i + 1 < ctx.argc) {
-            hit = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--offset") == 0 && i + 1 < ctx.argc) {
-            off = _wtoi(ctx.argv[++i]);
-        } else if (wcscmp(ctx.argv[i], L"--rip-disp") == 0 && i + 1 < ctx.argc) {
-            rip_disp = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--rip-len") == 0 && i + 1 < ctx.argc) {
-            rip_len = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--follow") == 0 && i + 1 < ctx.argc) {
-            follows.push_back(_wcstoi64(ctx.argv[++i], nullptr, 0));
-        } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        if (wcscmp(ctx.argv[i], L"--hit") == 0 && i + 1 < ctx.argc)
+            request.set_hit_index(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--offset") == 0 && i + 1 < ctx.argc)
+            request.set_pattern_offset(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--rip-disp") == 0 && i + 1 < ctx.argc)
+            request.set_rip_displacement_offset(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--rip-len") == 0 && i + 1 < ctx.argc)
+            request.set_rip_instruction_length(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--follow") == 0 && i + 1 < ctx.argc)
+            request.add_follow_offsets(_wcstoi64(ctx.argv[++i], nullptr, 0));
+        else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
             module = ctx.argv[++i];
-            flags |= HDL_SEARCH_MODULE;
-        } else if (wcscmp(ctx.argv[i], L"--image") == 0) {
-            flags |= HDL_SEARCH_IMAGE;
-        } else if (wcscmp(ctx.argv[i], L"--executable") == 0) {
-            flags |= HDL_SEARCH_EXECUTABLE;
-        }
+            request.mutable_scope()->set_flags(request.scope().flags() | HDL_SEARCH_MODULE);
+        } else if (wcscmp(ctx.argv[i], L"--image") == 0)
+            request.mutable_scope()->set_flags(request.scope().flags() | HDL_SEARCH_IMAGE);
+        else if (wcscmp(ctx.argv[i], L"--executable") == 0)
+            request.mutable_scope()->set_flags(request.scope().flags() | HDL_SEARCH_EXECUTABLE);
     }
-    SetMethod(req, hdl::rpc::Method::ResolvePattern);
-    AppendString(req, pattern);
-    AppendPod(req, hit);
-    AppendPod(req, off);
-    AppendPod(req, rip_disp);
-    AppendPod(req, rip_len);
-    AppendPod(req, static_cast<uint32_t>(follows.size()));
-    AppendPod(req, flags);
-    AppendPod(req, static_cast<uint32_t>(256));
-    AppendWString(req, module.c_str());
-    for (int64_t f : follows) {
-        AppendPod(req, f);
-    }
-    if (!ctx.client.Request(req, resp)) {
+    if (!SetUtf8(module, request.mutable_scope()->mutable_module()))
+        return FailArg(ctx, L"bad module");
+    const auto result = hdl::rpc::LocateClient(&ctx.client).ResolvePattern(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    HdlPatternResult out{};
-    if (!r.TakePod(st) || !hdl::proto::TakeHdlPatternResult(r, out)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("match");
-    w.HexStr(out.match_addr);
-    w.Key("resolved");
-    w.HexStr(out.resolved_addr);
-    w.Key("base");
-    w.HexStr(out.module_base);
-    w.Key("rva");
-    w.HexStr(out.rva);
-    w.EndObject();
-    return CmdStatus(L"resolve-pattern", st, w.Take());
+    const auto& value = result.response.result();
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("match");
+    writer.HexStr(value.match_address());
+    writer.Key("resolved");
+    writer.HexStr(value.resolved_address());
+    writer.Key("base");
+    writer.HexStr(value.module_base());
+    writer.Key("rva");
+    writer.HexStr(value.rva());
+    writer.EndObject();
+    return CmdStatus(L"resolve-pattern", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdXrefs(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    char narrow[1024];
-    WideCharToMultiByte(CP_UTF8, 0, ctx.argv[3], -1, narrow, sizeof(narrow), nullptr, nullptr);
-    int is_wide = 0;
-    uint32_t xref_flags = 0;
+    hdl::rpc::v1::FindStringXrefsRequest request;
     uint32_t search_flags = HDL_SEARCH_IMAGE;
+    uint32_t xref_flags = 0;
+    bool wide = false;
     std::wstring module;
     for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--wide") == 0) {
-            is_wide = 1;
-        } else if (wcscmp(ctx.argv[i], L"--absolute") == 0) {
+        if (wcscmp(ctx.argv[i], L"--wide") == 0)
+            wide = true;
+        else if (wcscmp(ctx.argv[i], L"--absolute") == 0)
             xref_flags |= HDL_XREF_ABSOLUTE;
-        } else if (wcscmp(ctx.argv[i], L"--rip") == 0) {
+        else if (wcscmp(ctx.argv[i], L"--rip") == 0)
             xref_flags |= HDL_XREF_RIP_REL;
-        } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
             module = ctx.argv[++i];
             search_flags |= HDL_SEARCH_MODULE;
-        } else if (wcscmp(ctx.argv[i], L"--image") == 0) {
+        } else if (wcscmp(ctx.argv[i], L"--image") == 0)
             search_flags |= HDL_SEARCH_IMAGE;
-        }
     }
-    if (!xref_flags) {
-        xref_flags = HDL_XREF_ABSOLUTE | HDL_XREF_RIP_REL;
-    }
-    std::vector<uint8_t> blob;
-    if (is_wide) {
-        const size_t n = wcslen(ctx.argv[3]) * sizeof(wchar_t);
-        blob.resize(n);
-        memcpy(blob.data(), ctx.argv[3], n);
-    } else {
-        blob.assign(reinterpret_cast<uint8_t*>(narrow),
-                    reinterpret_cast<uint8_t*>(narrow) + strlen(narrow));
-    }
-    SetMethod(req, hdl::rpc::Method::FindStringXrefs);
-    AppendPod(req, static_cast<uint32_t>(blob.size()));
-    AppendPod(req, static_cast<int32_t>(is_wide));
-    AppendPod(req, xref_flags);
-    AppendPod(req, search_flags);
-    AppendPod(req, static_cast<uint32_t>(64));
-    AppendWString(req, module.c_str());
-    AppendBytes(req, blob.data(), blob.size());
-    if (!ctx.client.Request(req, resp)) {
+    std::string value;
+    if (!SetUtf8(ctx.argv[3], &value) ||
+        !SetUtf8(module, request.mutable_scope()->mutable_module()))
+        return FailArg(ctx, L"invalid text");
+    if (wide)
+        request.set_wide_value(value);
+    else
+        request.set_narrow_value(value);
+    request.set_xref_flags(xref_flags ? xref_flags : HDL_XREF_ABSOLUTE | HDL_XREF_RIP_REL);
+    request.mutable_scope()->set_flags(search_flags);
+    request.set_max_results(64);
+    const auto result = hdl::rpc::LocateClient(&ctx.client).FindStringXrefs(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    std::vector<uint64_t> addrs;
-    addrs.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        uint64_t a = 0;
-        if (!r.TakePod(a)) {
-            return FailBadResp(ctx);
-        }
-        addrs.push_back(a);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("addresses");
-    w.BeginArray();
-    for (uint64_t a : addrs) {
-        w.HexStr(a);
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(L"xrefs", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(result.response.addresses_size());
+    writer.Key("addresses");
+    writer.BeginArray();
+    for (const auto address : result.response.addresses())
+        writer.HexStr(address);
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(L"xrefs", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdPtrscan(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t target = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t depth = 2;
-    uint32_t max_off = 0x1000;
-    uint32_t max_n = 32;
-    uint32_t flags = HDL_SEARCH_IMAGE;
+    hdl::rpc::v1::PointerScanRequest request;
+    request.set_target(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_max_depth(2);
+    request.set_max_offset(0x1000);
+    request.set_max_results(32);
+    request.mutable_scope()->set_flags(HDL_SEARCH_IMAGE);
     std::wstring module;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--depth") == 0 && i + 1 < ctx.argc) {
-            depth = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--max-offset") == 0 && i + 1 < ctx.argc) {
-            max_off = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc) {
-            max_n = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
-            module = ctx.argv[++i];
-            flags |= HDL_SEARCH_MODULE;
-        }
-    }
-    SetMethod(req, hdl::rpc::Method::PointerScan);
-    AppendPod(req, target);
-    AppendPod(req, depth);
-    AppendPod(req, max_off);
-    AppendPod(req, max_n);
-    AppendPod(req, flags);
-    AppendWString(req, module.c_str());
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    std::vector<HdlPointerPath> paths;
-    paths.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlPointerPath path{};
-        if (!hdl::proto::TakeHdlPointerPath(r, path)) {
-            return FailBadResp(ctx);
-        }
-        if (i == 0) {
-            hdlcli::RememberPath(ctx.controller, path, module.empty() ? nullptr : module.c_str());
-        }
-        paths.push_back(path);
-    }
     const wchar_t* store_add = nullptr;
     for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--store-add") == 0 && i + 1 < ctx.argc) {
-            store_add = ctx.argv[i + 1];
-            break;
-        }
+        if (wcscmp(ctx.argv[i], L"--depth") == 0 && i + 1 < ctx.argc)
+            request.set_max_depth(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--max-offset") == 0 && i + 1 < ctx.argc)
+            request.set_max_offset(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--max") == 0 && i + 1 < ctx.argc)
+            request.set_max_results(_wtoi(ctx.argv[++i]));
+        else if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+            module = ctx.argv[++i];
+            request.mutable_scope()->set_flags(request.scope().flags() | HDL_SEARCH_MODULE);
+        } else if (wcscmp(ctx.argv[i], L"--store-add") == 0 && i + 1 < ctx.argc)
+            store_add = ctx.argv[++i];
     }
+    if (!SetUtf8(module, request.mutable_scope()->mutable_module()))
+        return FailArg(ctx, L"bad module");
+    const auto result = hdl::rpc::LocateClient(&ctx.client).PointerScan(request);
+    if (!result.has_response)
+        return FailIpc(ctx);
+    std::vector<HdlPointerPath> paths;
+    paths.reserve(result.response.paths_size());
+    for (const auto& value : result.response.paths())
+        paths.push_back(ToDomainPath(value));
+    if (!paths.empty())
+        hdlcli::RememberPath(ctx.controller, paths[0], module.empty() ? nullptr : module.c_str());
     if (store_add && !paths.empty()) {
-        if (!ctx.store_path || !ctx.store_path[0]) {
+        if (!ctx.store_path || !ctx.store_path[0])
             return FailArg(ctx, L"--store-add requires --store PATH");
-        }
-        hdlcli::ControllerState cst;
-        cst.client = &ctx.client;
-        cst.pid = ctx.pid;
-        cst.store_path = ctx.store_path;
+        hdlcli::ControllerState state;
+        state.client = &ctx.client;
+        state.pid = ctx.pid;
+        state.store_path = ctx.store_path;
         if (GetFileAttributesW(ctx.store_path) != INVALID_FILE_ATTRIBUTES &&
-            !cst.store.Load(ctx.store_path)) {
+            !state.store.Load(ctx.store_path))
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store load failed");
-        }
-        std::wstring err;
-        if (!hdlcli::StoreAddPathInterest(cst, WideToUtf8(store_add).c_str(), paths[0],
-                                          module.empty() ? nullptr : module.c_str(), &err)) {
-            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, err.c_str());
-        }
-        if (!cst.store.Save(ctx.store_path)) {
+        std::wstring error;
+        if (!hdlcli::StoreAddPathInterest(state, WideToUtf8(store_add).c_str(), paths[0],
+                                          module.empty() ? nullptr : module.c_str(), &error))
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, error.c_str());
+        if (!state.store.Save(ctx.store_path))
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, L"store save failed");
-        }
     }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("paths");
-    w.BeginArray();
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(paths.size());
+    writer.Key("paths");
+    writer.BeginArray();
     for (const auto& path : paths) {
-        w.BeginObject();
-        w.Key("base");
-        w.HexStr(path.static_base);
-        w.Key("depth");
-        w.Num(path.depth);
-        w.Key("offsets");
-        w.BeginArray();
-        for (uint32_t d = 0; d < path.depth && d < 8; ++d) {
-            w.Num(path.offsets[d]);
-        }
-        w.EndArray();
-        w.EndObject();
+        writer.BeginObject();
+        writer.Key("base");
+        writer.HexStr(path.static_base);
+        writer.Key("depth");
+        writer.Num(path.depth);
+        writer.Key("offsets");
+        writer.BeginArray();
+        for (uint32_t i = 0; i < path.depth; ++i)
+            writer.Num(path.offsets[i]);
+        writer.EndArray();
+        writer.EndObject();
     }
-    w.EndArray();
+    writer.EndArray();
     if (store_add) {
-        w.Key("store_add");
-        w.Str(store_add);
+        writer.Key("store_add");
+        writer.Str(store_add);
     }
-    w.EndObject();
-    return CmdStatus(L"ptrscan", st, w.Take());
+    writer.EndObject();
+    return CmdStatus(L"ptrscan", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdProbe(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t size = 64;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--size") == 0 && i + 1 < ctx.argc) {
-            size = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        }
-    }
-    SetMethod(req, hdl::rpc::Method::ProbeStruct);
-    AppendPod(req, addr);
-    AppendPod(req, size);
-    AppendPod(req, static_cast<uint32_t>(64));
-    if (!ctx.client.Request(req, resp)) {
+    hdl::rpc::v1::ProbeStructRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_size(64);
+    request.set_max_fields(64);
+    for (int i = 4; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--size") == 0 && i + 1 < ctx.argc)
+            request.set_size(_wtoi(ctx.argv[++i]));
+    const auto result = hdl::rpc::LocateClient(&ctx.client).ProbeStruct(request);
+    if (!result.has_response)
         return FailIpc(ctx);
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("count");
+    writer.Num(result.response.fields_size());
+    writer.Key("fields");
+    writer.BeginArray();
+    for (const auto& field : result.response.fields()) {
+        writer.BeginObject();
+        writer.Key("offset");
+        writer.Num(field.offset());
+        writer.Key("kind");
+        writer.Num(field.kind());
+        writer.Key("value");
+        writer.HexStr(field.value());
+        writer.EndObject();
     }
-    Reader r(resp);
-    int32_t st = 0;
-    uint32_t count = 0;
-    if (!r.TakePod(st) || !r.TakePod(count)) {
-        return FailBadResp(ctx);
-    }
-    std::vector<HdlStructField> fields;
-    fields.reserve(count);
-    for (uint32_t i = 0; i < count; ++i) {
-        HdlStructField f{};
-        if (!hdl::proto::TakeHdlStructField(r, f)) {
-            return FailBadResp(ctx);
-        }
-        fields.push_back(f);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("count");
-    w.Num(count);
-    w.Key("fields");
-    w.BeginArray();
-    for (const auto& f : fields) {
-        w.BeginObject();
-        w.Key("offset");
-        w.Num(f.offset);
-        w.Key("kind");
-        w.Num(f.kind);
-        w.Key("value");
-        w.HexStr(f.value);
-        w.EndObject();
-    }
-    w.EndArray();
-    w.EndObject();
-    return CmdStatus(L"probe", st, w.Take());
+    writer.EndArray();
+    writer.EndObject();
+    return CmdStatus(L"probe", result.status.hdl_status(), writer.Take());
 }

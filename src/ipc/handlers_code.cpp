@@ -1,579 +1,376 @@
 #include "handlers.hpp"
-#include "wire.hpp"
+
+#include "common.hpp"
+#include "convert.hpp"
 
 #include "code.hpp"
 #include "disasm/backend.hpp"
 #include "graph.hpp"
-#include "jobs.hpp"
 #include "pe_meta.hpp"
-#include "protocol.hpp"
 #include "vtable.hpp"
 #include "watch.hpp"
 
-#include <string>
-#include <thread>
 #include <vector>
 
-namespace hdl {
-namespace ipc {
+namespace hdl::ipc {
+namespace {
 
-bool HandleDisasmEnumBackends(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
+template <typename T, typename Query> HdlStatus QueryDynamic(Query query, std::vector<T>* values) {
     uint32_t count = 0;
-    HdlStatus st = disasm::EnumBackends(nullptr, &count);
-    std::vector<HdlDisasmBackendInfo> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = disasm::EnumBackends(list.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
+    HdlStatus status = query(nullptr, &count);
+    if (status == HDL_OK) {
+        values->clear();
+        return HDL_OK;
     }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlDisasmBackendInfo(resp, list[_i]);
+    if (status != HDL_E_BUFFER_SMALL) {
+        return status;
     }
-    return WriteFrame(pipe, resp);
+    values->resize(count);
+    status = query(values->data(), &count);
+    values->resize(status == HDL_OK ? count : 0);
+    return status;
 }
 
-bool HandleDisasmGetBackend(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    int32_t id = 0;
-    const HdlStatus st = disasm::GetBackend(&id);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, id);
-    return WriteFrame(pipe, resp);
+} // namespace
+
+rpc::Status
+HandleCode_DisasmEnumBackends(rpc::CallContext&, const rpc::v1::Empty&,
+                              rpc::ServerWriter<rpc::v1::DisasmEnumBackendsResponse>& writer) {
+    std::vector<HdlDisasmBackendInfo> values;
+    const HdlStatus status = QueryDynamic<HdlDisasmBackendInfo>(
+        [](HdlDisasmBackendInfo* out, uint32_t* count) { return disasm::EnumBackends(out, count); },
+        &values);
+    return WriteBatches(
+        status, values, 16, writer,
+        [](const HdlDisasmBackendInfo& value, rpc::v1::DisasmEnumBackendsResponse* batch) {
+            ToProto(value, batch->add_backends());
+            return true;
+        });
 }
 
-bool HandleDisasmSetBackend(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    int32_t id = 0;
-    if (!r.TakePod(id)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(disasm::SetBackend(id)));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_DisasmGetBackend(rpc::CallContext&, const rpc::v1::Empty&,
+                                        rpc::v1::DisasmGetBackendResponse* response) {
+    int32_t backend = 0;
+    const HdlStatus status = disasm::GetBackend(&backend);
+    response->set_backend_id(backend);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleInstrLen(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    if (!r.TakePod(addr)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint32_t len = 0;
-    const HdlStatus st = InstrLen(addr, &len);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, len);
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_DisasmSetBackend(rpc::CallContext&,
+                                        const rpc::v1::DisasmSetBackendRequest& request,
+                                        rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(disasm::SetBackend(request.backend_id()));
 }
 
-bool HandleDisasm(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint32_t max_insns = 0;
-    if (!r.TakePod(addr) || !r.TakePod(max_insns)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint32_t count = 0;
-    HdlStatus st = DisasmRange(addr, max_insns, nullptr, &count);
-    std::vector<HdlInsn> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = DisasmRange(addr, max_insns, list.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlInsn(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_InstrLen(rpc::CallContext&, const rpc::v1::InstrLenRequest& request,
+                                rpc::v1::InstrLenResponse* response) {
+    uint32_t length = 0;
+    const HdlStatus status = InstrLen(request.address(), &length);
+    response->set_length(length);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleBuildStub(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
+rpc::Status HandleCode_Disasm(rpc::CallContext&, const rpc::v1::DisasmRequest& request,
+                              rpc::ServerWriter<rpc::v1::DisasmResponse>& writer) {
+    std::vector<HdlInsn> values;
+    const HdlStatus status = QueryDynamic<HdlInsn>(
+        [&request](HdlInsn* out, uint32_t* count) {
+            return DisasmRange(request.address(), request.max_instructions(), out, count);
+        },
+        &values);
+    return WriteBatches(status, values, 64, writer,
+                        [](const HdlInsn& value, rpc::v1::DisasmResponse* batch) {
+                            ToProto(value, batch->add_instructions());
+                            return true;
+                        });
+}
+
+rpc::Status HandleCode_BuildStub(rpc::CallContext&, const rpc::v1::BuildStubRequest& request,
+                                 rpc::v1::BuildStubResponse* response) {
+    if (request.kind() < rpc::v1::STUB_KIND_ABSOLUTE_JUMP ||
+        request.kind() > rpc::v1::STUB_KIND_RAW) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
     HdlStubDesc desc{};
-    uint32_t raw_len = 0;
-    if (!r.TakePod(desc.kind) || !r.TakePod(desc.flags) || !r.TakePod(desc.target) ||
-        !r.TakePod(desc.steal_from) || !r.TakePod(desc.steal_min_bytes) ||
-        !r.TakePod(desc.reserved) || !r.TakePod(desc.alloc_rx) || !r.TakePod(raw_len)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    std::vector<uint8_t> raw;
-    if (raw_len) {
-        if (r.left < raw_len) {
-            AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-            return WriteFrame(pipe, resp);
-        }
-        raw.assign(r.p, r.p + raw_len);
-        r.p += raw_len;
-        r.left -= raw_len;
-        desc.raw = raw.data();
-        desc.raw_size = raw_len;
-    }
+    desc.kind = request.kind();
+    desc.flags = request.flags();
+    desc.target = request.target();
+    desc.steal_from = request.steal_from();
+    desc.steal_min_bytes = request.steal_min_bytes();
+    desc.raw = reinterpret_cast<const uint8_t*>(request.raw().data());
+    desc.raw_size = static_cast<uint32_t>(request.raw().size());
+    desc.alloc_rx = request.allocate_rx();
     HdlStubResult result{};
-    const HdlStatus st = BuildStub(&desc, &result);
-    AppendPod(resp, static_cast<int32_t>(st));
-    proto::AppendHdlStubResult(resp, result);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status = BuildStub(&desc, &result);
+    ToProto(result, response->mutable_result());
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandlePatchCreate(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint32_t size = 0;
-    std::string name;
-    if (!r.TakePod(addr) || !r.TakePod(size) || !r.TakeString(name) || r.left < size) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleCode_PatchCreate(rpc::CallContext&, const rpc::v1::PatchCreateRequest& request,
+                                   rpc::v1::PatchCreateResponse* response) {
+    if (request.name().find('\0') != std::string::npos || request.data().size() > UINT32_MAX) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
-    const uint8_t* bytes = r.p;
     HdlPatchHandle handle = 0;
-    const HdlStatus st =
-        PatchCreate(addr, bytes, size, name.empty() ? nullptr : name.c_str(), &handle);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, handle);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status =
+        PatchCreate(request.address(), reinterpret_cast<const uint8_t*>(request.data().data()),
+                    static_cast<uint32_t>(request.data().size()),
+                    request.name().empty() ? nullptr : request.name().c_str(), &handle);
+    response->set_handle(handle);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandlePatchEnable(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t handle = 0;
-    int32_t enable = 0;
-    if (!r.TakePod(handle) || !r.TakePod(enable)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(PatchEnable(handle, enable)));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_PatchEnable(rpc::CallContext&, const rpc::v1::PatchEnableRequest& request,
+                                   rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(PatchEnable(request.handle(), request.enabled()));
 }
 
-bool HandlePatchRemove(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t handle = 0;
-    if (!r.TakePod(handle)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(PatchRemove(handle)));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_PatchRemove(rpc::CallContext&, const rpc::v1::PatchRemoveRequest& request,
+                                   rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(PatchRemove(request.handle()));
 }
 
-bool HandlePatchEnum(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    uint32_t count = 0;
-    HdlStatus st = PatchEnum(nullptr, &count);
-    std::vector<HdlPatchInfo> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = PatchEnum(list.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, list.data(), count, 32);
-    }
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlPatchInfo(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
+rpc::Status HandleCode_PatchEnum(rpc::CallContext&, const rpc::v1::Empty&,
+                                 rpc::ServerWriter<rpc::v1::PatchEnumResponse>& writer) {
+    std::vector<HdlPatchInfo> values;
+    const HdlStatus status = QueryDynamic<HdlPatchInfo>(
+        [](HdlPatchInfo* out, uint32_t* count) { return PatchEnum(out, count); }, &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlPatchInfo& value, rpc::v1::PatchEnumResponse* batch) {
+                            ToProto(value, batch->add_patches());
+                            return true;
+                        });
 }
 
-static bool HandlePeEnum(HANDLE pipe, proto::Reader& r, int which) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t base = 0;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    if (!r.TakePod(base)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-
-    if (which == 0) {
-        uint32_t count = 0;
-        HdlStatus st = EnumSections(base, nullptr, &count);
-        std::vector<HdlSectionInfo> list;
-        if (st == HDL_E_BUFFER_SMALL && count) {
-            list.resize(count);
-            st = EnumSections(base, list.data(), &count);
-        } else if (st == HDL_OK) {
-            count = 0;
-        }
-        if (flags & HDL_IPC_REQ_STREAM) {
-            return WriteStreamed(pipe, st, list.data(), count, 32);
-        }
-        AppendPod(resp, static_cast<int32_t>(st));
-        AppendPod(resp, count);
-        if (count && st == HDL_OK) {
-            for (uint32_t _i = 0; _i < count; ++_i)
-                proto::AppendHdlSectionInfo(resp, list[_i]);
-        }
-        return WriteFrame(pipe, resp);
-    }
-    if (which == 1) {
-        uint32_t count = 0;
-        HdlStatus st = EnumExports(base, nullptr, &count);
-        std::vector<HdlExportInfo> list;
-        if (st == HDL_E_BUFFER_SMALL && count) {
-            list.resize(count);
-            st = EnumExports(base, list.data(), &count);
-        } else if (st == HDL_OK) {
-            count = 0;
-        }
-        if (flags & HDL_IPC_REQ_STREAM) {
-            return WriteStreamed(pipe, st, list.data(), count, 32);
-        }
-        AppendPod(resp, static_cast<int32_t>(st));
-        AppendPod(resp, count);
-        if (count && st == HDL_OK) {
-            for (uint32_t _i = 0; _i < count; ++_i)
-                proto::AppendHdlExportInfo(resp, list[_i]);
-        }
-        return WriteFrame(pipe, resp);
-    }
-    uint32_t count = 0;
-    HdlStatus st = EnumImports(base, nullptr, &count);
-    std::vector<HdlImportInfo> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = EnumImports(base, list.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, list.data(), count, 32);
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlImportInfo(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
+rpc::Status HandlePe_EnumSections(rpc::CallContext&, const rpc::v1::EnumSectionsRequest& request,
+                                  rpc::ServerWriter<rpc::v1::EnumSectionsResponse>& writer) {
+    std::vector<HdlSectionInfo> values;
+    const HdlStatus status = QueryDynamic<HdlSectionInfo>(
+        [&request](HdlSectionInfo* out, uint32_t* count) {
+            return EnumSections(request.module_base(), out, count);
+        },
+        &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlSectionInfo& value, rpc::v1::EnumSectionsResponse* batch) {
+                            ToProto(value, batch->add_sections());
+                            return true;
+                        });
 }
 
-bool HandleEnumSections(HANDLE pipe, proto::Reader& r) {
-    return HandlePeEnum(pipe, r, 0);
-}
-bool HandleEnumExports(HANDLE pipe, proto::Reader& r) {
-    return HandlePeEnum(pipe, r, 1);
-}
-bool HandleEnumImports(HANDLE pipe, proto::Reader& r) {
-    return HandlePeEnum(pipe, r, 2);
+rpc::Status HandlePe_EnumExports(rpc::CallContext&, const rpc::v1::EnumExportsRequest& request,
+                                 rpc::ServerWriter<rpc::v1::EnumExportsResponse>& writer) {
+    std::vector<HdlExportInfo> values;
+    const HdlStatus status = QueryDynamic<HdlExportInfo>(
+        [&request](HdlExportInfo* out, uint32_t* count) {
+            return EnumExports(request.module_base(), out, count);
+        },
+        &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlExportInfo& value, rpc::v1::EnumExportsResponse* batch) {
+                            ToProto(value, batch->add_exports());
+                            return true;
+                        });
 }
 
-bool HandleEnumFunctions(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t start = 0;
-    uint64_t size = 0;
-    uint32_t search_flags = 0;
-    uint32_t max_results = 0;
+rpc::Status HandlePe_EnumImports(rpc::CallContext&, const rpc::v1::EnumImportsRequest& request,
+                                 rpc::ServerWriter<rpc::v1::EnumImportsResponse>& writer) {
+    std::vector<HdlImportInfo> values;
+    const HdlStatus status = QueryDynamic<HdlImportInfo>(
+        [&request](HdlImportInfo* out, uint32_t* count) {
+            return EnumImports(request.module_base(), out, count);
+        },
+        &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlImportInfo& value, rpc::v1::EnumImportsResponse* batch) {
+                            ToProto(value, batch->add_imports());
+                            return true;
+                        });
+}
+
+rpc::Status HandleLocate_EnumFunctions(rpc::CallContext&,
+                                       const rpc::v1::EnumFunctionsRequest& request,
+                                       rpc::ServerWriter<rpc::v1::EnumFunctionsResponse>& writer) {
     std::wstring module;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    if (!r.TakePod(start) || !r.TakePod(size) || !r.TakePod(search_flags) ||
-        !r.TakePod(max_results) || !r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
-    volatile int cancel = 0;
-    uint32_t count = 0;
-    HdlStatus st =
-        EnumFunctions(start, size, search_flags, module.empty() ? nullptr : module.c_str(),
-                      max_results, nullptr, &count, &cancel);
-    std::vector<HdlFunctionInfo> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = EnumFunctions(start, size, search_flags, module.empty() ? nullptr : module.c_str(),
-                           max_results, list.data(), &count, &cancel);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, list.data(), count, 64);
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlFunctionInfo(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleXrefsFrom(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t seed = 0;
-    uint32_t max_depth = 0;
-    uint32_t max_nodes = 0;
-    uint32_t kinds = 0;
-    if (!r.TakePod(seed) || !r.TakePod(max_depth) || !r.TakePod(max_nodes) || !r.TakePod(kinds)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!Utf8ToWide(request.scope().module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     volatile int cancel = 0;
-    uint32_t count = 0;
-    HdlStatus st = XrefsFrom(seed, max_depth, max_nodes, kinds, nullptr, &count, &cancel);
-    std::vector<HdlXrefEdge> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = XrefsFrom(seed, max_depth, max_nodes, kinds, list.data(), &count, &cancel);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlXrefEdge(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
+    std::vector<HdlFunctionInfo> values;
+    const HdlStatus status = QueryDynamic<HdlFunctionInfo>(
+        [&request, &module, &cancel](HdlFunctionInfo* out, uint32_t* count) {
+            return EnumFunctions(request.scope().start(), request.scope().size(),
+                                 request.scope().flags(), module.empty() ? nullptr : module.c_str(),
+                                 request.max_results(), out, count, &cancel);
+        },
+        &values);
+    return WriteBatches(status, values, 64, writer,
+                        [](const HdlFunctionInfo& value, rpc::v1::EnumFunctionsResponse* batch) {
+                            ToProto(value, batch->add_functions());
+                            return true;
+                        });
 }
 
-bool HandleResolveFunction(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint32_t search_flags = 0;
-    std::wstring module;
-    if (!r.TakePod(addr) || !r.TakePod(search_flags) || !r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
+rpc::Status HandleLocate_XrefsFrom(rpc::CallContext&, const rpc::v1::XrefsFromRequest& request,
+                                   rpc::ServerWriter<rpc::v1::XrefsFromResponse>& writer) {
     volatile int cancel = 0;
-    HdlFunctionInfo fi{};
-    const HdlStatus st = ResolveFunction(addr, search_flags,
-                                         module.empty() ? nullptr : module.c_str(), &fi, &cancel);
-    AppendPod(resp, static_cast<int32_t>(st));
-    if (st == HDL_OK) {
-        proto::AppendHdlFunctionInfo(resp, fi);
-    }
-    return WriteFrame(pipe, resp);
+    std::vector<HdlXrefEdge> values;
+    const HdlStatus status = QueryDynamic<HdlXrefEdge>(
+        [&request, &cancel](HdlXrefEdge* out, uint32_t* count) {
+            return XrefsFrom(request.seed(), request.max_depth(), request.max_nodes(),
+                             request.kinds(), out, count, &cancel);
+        },
+        &values);
+    return WriteBatches(status, values, 64, writer,
+                        [](const HdlXrefEdge& value, rpc::v1::XrefsFromResponse* batch) {
+                            ToProto(value, batch->add_edges());
+                            return true;
+                        });
 }
 
-bool HandleXrefsTo(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t target = 0;
-    uint32_t max_nodes = 0;
-    uint32_t kinds = 0;
-    uint32_t search_flags = 0;
-    std::wstring module;
-    if (!r.TakePod(target) || !r.TakePod(max_nodes) || !r.TakePod(kinds) ||
-        !r.TakePod(search_flags) || !r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    volatile int cancel = 0;
-    uint32_t count = 0;
-    HdlStatus st = XrefsTo(target, max_nodes, kinds, search_flags,
-                           module.empty() ? nullptr : module.c_str(), nullptr, &count, &cancel);
-    std::vector<HdlXrefEdge> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = XrefsTo(target, max_nodes, kinds, search_flags,
-                     module.empty() ? nullptr : module.c_str(), list.data(), &count, &cancel);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlXrefEdge(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleInvalidateFnIndex(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    std::wstring module;
-    if (!r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(
-                        InvalidateFunctionIndex(module.empty() ? nullptr : module.c_str())));
-    return WriteFrame(pipe, resp);
-}
-
-bool HandleWalkVtable(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    int32_t is_object = 0;
-    if (!r.TakePod(addr) || !r.TakePod(is_object)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint32_t count = 0;
-    HdlStatus st = WalkVtable(addr, is_object, nullptr, &count);
+rpc::Status HandleLocate_WalkVtable(rpc::CallContext&, const rpc::v1::WalkVtableRequest& request,
+                                    rpc::ServerWriter<rpc::v1::WalkVtableResponse>& writer) {
     std::vector<uint64_t> slots;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        slots.resize(count);
-        st = WalkVtable(addr, is_object, slots.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
+    const HdlStatus status = QueryDynamic<uint64_t>(
+        [&request](uint64_t* out, uint32_t* count) {
+            return WalkVtable(request.address(), request.is_object(), out, count);
+        },
+        &slots);
+    if (status != HDL_OK) {
+        return rpc::Status::FromHdl(status);
     }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        AppendBytes(resp, slots.data(), count * sizeof(uint64_t));
+    for (size_t offset = 0; offset < slots.size(); offset += 128) {
+        rpc::v1::WalkVtableResponse response;
+        const size_t end = (std::min)(slots.size(), offset + 128);
+        for (size_t index = offset; index < end; ++index)
+            response.add_slots(slots[index]);
+        if (!writer.Write(response))
+            return rpc::Status::FromHdl(HDL_E_CANCELLED);
     }
-    return WriteFrame(pipe, resp);
+    return rpc::Status::Ok();
 }
 
-bool HandleQueryRttiName(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    int32_t is_object = 0;
-    if (!r.TakePod(addr) || !r.TakePod(is_object)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
+rpc::Status HandleLocate_QueryRttiName(rpc::CallContext&,
+                                       const rpc::v1::QueryRttiNameRequest& request,
+                                       rpc::v1::QueryRttiNameResponse* response) {
     char name[256]{};
-    const HdlStatus st = QueryRttiName(addr, is_object, name, sizeof(name));
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendString(resp, name);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status =
+        QueryRttiName(request.address(), request.is_object(), name, sizeof(name));
+    if (status == HDL_OK)
+        response->set_name(name);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleWatchHw(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint32_t size = 0;
-    uint32_t access = 0;
-    uint32_t tid = 0;
-    if (!r.TakePod(addr) || !r.TakePod(size) || !r.TakePod(access) || !r.TakePod(tid)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleLocate_ResolveFunction(rpc::CallContext&,
+                                         const rpc::v1::ResolveFunctionRequest& request,
+                                         rpc::v1::ResolveFunctionResponse* response) {
+    std::wstring module;
+    if (!Utf8ToWide(request.scope().module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    volatile int cancel = 0;
+    HdlFunctionInfo function{};
+    const HdlStatus status =
+        ResolveFunction(request.address(), request.scope().flags(),
+                        module.empty() ? nullptr : module.c_str(), &function, &cancel);
+    if (status == HDL_OK)
+        ToProto(function, response->mutable_function());
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleLocate_XrefsTo(rpc::CallContext&, const rpc::v1::XrefsToRequest& request,
+                                 rpc::ServerWriter<rpc::v1::XrefsToResponse>& writer) {
+    std::wstring module;
+    if (!Utf8ToWide(request.scope().module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    volatile int cancel = 0;
+    std::vector<HdlXrefEdge> values;
+    const HdlStatus status = QueryDynamic<HdlXrefEdge>(
+        [&request, &module, &cancel](HdlXrefEdge* out, uint32_t* count) {
+            return XrefsTo(request.target(), request.max_nodes(), request.kinds(),
+                           request.scope().flags(), module.empty() ? nullptr : module.c_str(), out,
+                           count, &cancel);
+        },
+        &values);
+    return WriteBatches(status, values, 64, writer,
+                        [](const HdlXrefEdge& value, rpc::v1::XrefsToResponse* batch) {
+                            ToProto(value, batch->add_edges());
+                            return true;
+                        });
+}
+
+rpc::Status HandleLocate_InvalidateFnIndex(rpc::CallContext&,
+                                           const rpc::v1::InvalidateFnIndexRequest& request,
+                                           rpc::v1::Empty*) {
+    std::wstring module;
+    if (!Utf8ToWide(request.module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
+    }
+    return rpc::Status::FromHdl(InvalidateFunctionIndex(module.empty() ? nullptr : module.c_str()));
+}
+
+rpc::Status HandleWatch_WatchHw(rpc::CallContext&, const rpc::v1::WatchHwRequest& request,
+                                rpc::v1::WatchHwResponse* response) {
+    if (request.access() < rpc::v1::WATCH_HARDWARE_ACCESS_EXECUTE ||
+        request.access() > rpc::v1::WATCH_HARDWARE_ACCESS_READ_WRITE) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     HdlWatchHandle handle = 0;
-    const HdlStatus st = WatchHw(addr, size, access, tid, &handle);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, handle);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status =
+        WatchHw(request.address(), request.size(), request.access(), request.thread_id(), &handle);
+    response->set_handle(handle);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleWatchPage(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint64_t size = 0;
-    uint32_t mode = 0;
-    if (!r.TakePod(addr) || !r.TakePod(size) || !r.TakePod(mode)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+rpc::Status HandleWatch_WatchPage(rpc::CallContext&, const rpc::v1::WatchPageRequest& request,
+                                  rpc::v1::WatchPageResponse* response) {
+    if (request.mode() < rpc::v1::WATCH_PAGE_MODE_GUARD ||
+        request.mode() > rpc::v1::WATCH_PAGE_MODE_NO_ACCESS) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
     HdlWatchHandle handle = 0;
-    const HdlStatus st = WatchPage(addr, static_cast<size_t>(size), mode, &handle);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, handle);
-    return WriteFrame(pipe, resp);
+    const HdlStatus status =
+        WatchPage(request.address(), static_cast<size_t>(request.size()), request.mode(), &handle);
+    response->set_handle(handle);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleUnwatch(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t handle = 0;
-    if (!r.TakePod(handle)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(Unwatch(handle)));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleWatch_Unwatch(rpc::CallContext&, const rpc::v1::UnwatchRequest& request,
+                                rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(Unwatch(request.handle()));
 }
 
-bool HandleEnumWatches(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    uint32_t count = 0;
-    HdlStatus st = EnumWatches(nullptr, &count);
-    std::vector<HdlWatchInfo> list;
-    if (st == HDL_E_BUFFER_SMALL && count) {
-        list.resize(count);
-        st = EnumWatches(list.data(), &count);
-    } else if (st == HDL_OK) {
-        count = 0;
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlWatchInfo(resp, list[_i]);
-    }
-    return WriteFrame(pipe, resp);
+rpc::Status HandleWatch_EnumWatches(rpc::CallContext&, const rpc::v1::Empty&,
+                                    rpc::ServerWriter<rpc::v1::EnumWatchesResponse>& writer) {
+    std::vector<HdlWatchInfo> values;
+    const HdlStatus status = QueryDynamic<HdlWatchInfo>(
+        [](HdlWatchInfo* out, uint32_t* count) { return EnumWatches(out, count); }, &values);
+    return WriteBatches(status, values, 32, writer,
+                        [](const HdlWatchInfo& value, rpc::v1::EnumWatchesResponse* batch) {
+                            ToProto(value, batch->add_watches());
+                            return true;
+                        });
 }
 
-bool HandleWatchRefresh(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    (void)r;
-    std::vector<uint8_t> resp;
-    AppendPod(resp, static_cast<int32_t>(WatchRefresh()));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleWatch_WatchRefresh(rpc::CallContext&, const rpc::v1::Empty&, rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(WatchRefresh());
 }
 
-bool HandlePollWatchHits(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t max_hits = 0;
-    uint32_t timeout_ms = 0;
-    if (!r.TakePod(max_hits) || !r.TakePod(timeout_ms)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    if (max_hits == 0 || max_hits > 64) {
-        max_hits = 64;
-    }
-    std::vector<HdlWatchHit> hits(max_hits);
-    uint32_t count = max_hits;
-    const HdlStatus st = PollWatchHits(hits.data(), &count, timeout_ms);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlWatchHit(resp, hits[_i]);
-    }
-    return WriteFrame(pipe, resp);
+rpc::Status HandleWatch_PollWatchHits(rpc::CallContext&,
+                                      const rpc::v1::PollWatchHitsRequest& request,
+                                      rpc::ServerWriter<rpc::v1::PollWatchHitsResponse>& writer) {
+    uint32_t maximum = request.max_hits();
+    if (!maximum || maximum > 64)
+        maximum = 64;
+    std::vector<HdlWatchHit> hits(maximum);
+    uint32_t count = maximum;
+    const HdlStatus status = PollWatchHits(hits.data(), &count, request.wait_timeout_ms());
+    hits.resize(status == HDL_OK ? count : 0);
+    return WriteBatches(status, hits, 16, writer,
+                        [](const HdlWatchHit& value, rpc::v1::PollWatchHitsResponse* batch) {
+                            ToProto(value, batch->add_hits());
+                            return true;
+                        });
 }
 
-} // namespace ipc
-} // namespace hdl
+} // namespace hdl::ipc

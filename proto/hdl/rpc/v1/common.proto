@@ -24,11 +24,27 @@ enum RpcCode {
   RPC_CODE_UNAUTHENTICATED = 16;
 }
 
+enum HdlStatusCode {
+  HDL_STATUS_OK = 0;
+  HDL_STATUS_INVALID_ARGUMENT = 1;
+  HDL_STATUS_ACCESS_DENIED = 2;
+  HDL_STATUS_NOT_FOUND = 3;
+  HDL_STATUS_NO_MEMORY = 4;
+  HDL_STATUS_BUSY = 5;
+  HDL_STATUS_FAILED = 6;
+  HDL_STATUS_BUFFER_TOO_SMALL = 7;
+  HDL_STATUS_CANCELLED = 8;
+  HDL_STATUS_NOT_INITIALIZED = 9;
+  HDL_STATUS_TIMEOUT = 10;
+}
+
+message Empty {}
+
 message RpcStatus {
   RpcCode code = 1;
   string reason = 2;
   string message = 3;
-  int32 hdl_status = 4;
+  HdlStatusCode hdl_status = 4;
   bool outcome_unknown = 5;
 }
 
@@ -43,10 +59,4 @@ message TransportLimits {
   uint32 max_frame_bytes = 1;
   uint32 max_in_flight = 2;
   uint32 max_stream_chunk_bytes = 3;
-}
-
-// Domain fields use hdllib's compact field codec inside this protobuf message.
-// Method identity is generated from services.proto and is never encoded here.
-message Payload {
-  bytes value = 1;
 }

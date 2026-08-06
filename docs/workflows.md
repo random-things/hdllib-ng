@@ -315,10 +315,11 @@ object rather than hard-coding all of its bytes. A common starting point is a
 vtable-shaped pointer at offset zero plus one or two plausible scalar fields:
 
 ```text
-recipe constrain 56 vtable:0 eq_i32:8:100 eq_i32:12:100
+recipe constrain 56 vtable:0 eq_i32:8:100 eq_i32:12:100 --module game.exe
 ```
 
-Constraint scanning examines aligned candidates and deliberately caps result
+Use `--module NAME` when the object is known to live in one image; omit it for
+the existing whole-image behavior. Constraint scanning examines aligned candidates and deliberately caps result
 counts. The current implementation limits object size and watched-region size
 to 4096 bytes, and constraint candidates are scanned at 8-byte alignment.
 

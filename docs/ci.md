@@ -119,12 +119,13 @@ runner itself can continue to run without administrator rights. To remove both
 the Defender exclusion and its machine configuration marker, run the same script
 elevated with `-Remove`.
 
-## Coverage and fuzzing
+## Coverage and parser robustness
 
-`FuzzSmoke` runs each clang-cl/libFuzzer harness for 5,000 iterations;
-`FuzzExtended` runs each for 300 seconds. Harnesses parse IPC framing/wire data,
-search patterns/descriptors, PE data, JSON/store/discover data, and one-shot CLI
-invocations. They never dispatch operational IPC handlers.
+`FuzzSmoke` runs each clang-cl/libFuzzer parser-robustness harness for 5,000
+iterations; `FuzzExtended` runs each for 300 seconds. Harnesses parse protobuf
+envelopes and typed request payloads, search patterns/descriptors, PE data,
+JSON/store/discover data, and one-shot CLI invocations. They never dispatch
+operational IPC handlers.
 
 `Coverage` runs deterministic headless tests with clang source coverage, emits
 LLVM JSON and HTML reports, and gates only the first-party sources listed in
@@ -136,6 +137,19 @@ fails. After reviewing an intentional change, update the baseline locally with:
 ```
 
 Baseline updates are rejected in CI.
+
+The report uses only the current top-level instrumented test binaries and DLL;
+copied payloads and obsolete executables left by an older build are excluded.
+
+Coverage runs the recipe constraint fixture with `--module
+hdl_test_target.exe`. This preserves the command's normal whole-image default
+while keeping the instrumented regression bounded and deterministic.
+
+MSVC AddressSanitizer still instruments all first-party targets. Because the
+pinned Protobuf and Abseil static libraries are not sanitizer-instrumented,
+CMake disables MSVC's STL container annotation metadata for first-party C++ in
+that profile. This prevents cross-library annotation mismatches without
+disabling address instrumentation in project code.
 
 ## Dependency and CodeQL reproducibility
 

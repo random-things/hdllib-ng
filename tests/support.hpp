@@ -6,15 +6,18 @@
 #include <TlHelp32.h>
 #include <sddl.h>
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
-#include "protocol.hpp"
+#include "rpc/pipe_io.hpp"
 #include "rpc/runtime.hpp"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -290,35 +293,57 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
     return true;
 }
 
-inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
-                        std::vector<uint8_t>& resp, DWORD timeout_ms = 15000);
+inline bool PipeCall(uint32_t pid, std::string_view method,
+                     const google::protobuf::MessageLite& request,
+                     const std::function<bool(std::string_view)>& on_payload, int32_t* out_status,
+                     DWORD timeout_ms = 15000);
+
+template <hdl::rpc::Method M>
+bool PipeUnary(uint32_t pid, const typename hdl::rpc::MethodTraits<M>::Request& request,
+               typename hdl::rpc::MethodTraits<M>::Response* response,
+               int32_t* out_status = nullptr, DWORD timeout_ms = 15000) {
+    bool parsed = false;
+    return PipeCall(
+               pid, hdl::rpc::MethodName(M), request,
+               [response, &parsed](std::string_view bytes) {
+                   parsed = response &&
+                            response->ParseFromArray(bytes.data(), static_cast<int>(bytes.size()));
+                   return parsed;
+               },
+               out_status, timeout_ms) &&
+           parsed;
+}
+
+template <hdl::rpc::Method M, typename Callback>
+bool PipeStream(uint32_t pid, const typename hdl::rpc::MethodTraits<M>::Request& request,
+                Callback&& callback, int32_t* out_status = nullptr, DWORD timeout_ms = 15000) {
+    return PipeCall(
+        pid, hdl::rpc::MethodName(M), request,
+        [&callback](std::string_view bytes) {
+            typename hdl::rpc::MethodTraits<M>::Response response;
+            return response.ParseFromArray(bytes.data(), static_cast<int>(bytes.size())) &&
+                   callback(response);
+        },
+        out_status, timeout_ms);
+}
 
 inline bool PingPipe(uint32_t pid, DWORD timeout_ms = 8000) {
-    hdl::rpc::PreparedRequest request;
-    hdl::rpc::SetMethod(request, hdl::rpc::Method::Ping);
-    std::vector<uint8_t> response;
-    if (!PipeRequest(pid, request, response, timeout_ms) || response.size() < sizeof(int32_t)) {
-        return false;
-    }
+    hdl::rpc::v1::PingResponse response;
     int32_t status = HDL_E_FAILED;
-    memcpy(&status, response.data(), sizeof(status));
-    return status == HDL_OK;
+    return PipeUnary<hdl::rpc::Method::Control_Ping>(pid, hdl::rpc::v1::Empty{}, &response, &status,
+                                                     timeout_ms) &&
+           status == HDL_OK;
 }
 
 inline bool PipeShutdown(uint32_t pid, uint32_t flags, int32_t* out_status = nullptr) {
-    hdl::rpc::PreparedRequest request;
-    hdl::rpc::SetMethod(request, hdl::rpc::Method::Shutdown);
-    hdl::proto::AppendPod(request, flags);
-    std::vector<uint8_t> response;
-    if (!PipeRequest(pid, request, response) || response.size() < sizeof(int32_t)) {
-        return false;
-    }
+    hdl::rpc::v1::ShutdownRequest request;
+    request.set_flags(flags);
+    hdl::rpc::v1::Empty response;
     int32_t status = HDL_E_FAILED;
-    memcpy(&status, response.data(), sizeof(status));
-    if (out_status) {
+    const bool ok = PipeUnary<hdl::rpc::Method::Control_Shutdown>(pid, request, &response, &status);
+    if (out_status)
         *out_status = status;
-    }
-    return true;
+    return ok;
 }
 
 inline bool VerifyInjected(uint32_t pid, const wchar_t* dll_path, int method, uint64_t base) {
@@ -447,56 +472,44 @@ inline const char* MethodName(int method) {
     }
 }
 
-inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
-                        std::vector<uint8_t>& resp, DWORD timeout_ms) {
-    const DWORD start = GetTickCount();
+inline bool PipeCall(uint32_t pid, std::string_view method,
+                     const google::protobuf::MessageLite& input,
+                     const std::function<bool(std::string_view)>& on_payload, int32_t* out_status,
+                     DWORD timeout_ms) {
+    const hdl::rpc::PipeDeadline deadline(timeout_ms);
     HANDLE pipe = INVALID_HANDLE_VALUE;
-    for (;;) {
-        pipe = HdlOpenLocalPipe(pid);
-        if (pipe != INVALID_HANDLE_VALUE) {
-            break;
-        }
-        if (GetTickCount() - start > timeout_ms) {
-            return false;
-        }
-        HdlWaitLocalPipe(pid, 200);
-        Sleep(50);
+    HANDLE completion_port = nullptr;
+    if (hdl::rpc::ConnectLocalPipe(pid, deadline, &pipe, &completion_port) !=
+        hdl::rpc::PipeIoResult::Ok) {
+        return false;
     }
-    DWORD mode = PIPE_READMODE_BYTE | PIPE_WAIT;
-    SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+    struct PipeHandles {
+        HANDLE pipe;
+        HANDLE completion_port;
+        ~PipeHandles() {
+            CloseHandle(pipe);
+            CloseHandle(completion_port);
+        }
+    } handles{pipe, completion_port};
 
-    auto write_exact = [pipe](const void* data, DWORD size) {
-        const auto* cursor = static_cast<const uint8_t*>(data);
-        while (size != 0) {
-            DWORD wrote = 0;
-            if (!WriteFile(pipe, cursor, size, &wrote, nullptr) || wrote == 0)
-                return false;
-            cursor += wrote;
-            size -= wrote;
-        }
-        return true;
+    auto write_exact = [pipe, completion_port, &deadline](const void* data, DWORD size) {
+        return hdl::rpc::WritePipeExact(pipe, completion_port, data, size, deadline) ==
+               hdl::rpc::PipeIoResult::Ok;
     };
-    auto read_frame = [pipe](std::vector<uint8_t>* frame) {
+    auto read_frame = [pipe, completion_port, &deadline](std::vector<uint8_t>* frame) {
         uint32_t size = 0;
-        DWORD got = 0;
-        if (!ReadFile(pipe, &size, sizeof(size), &got, nullptr) || got != sizeof(size) ||
-            size > hdl::rpc::kMaxFrameBytes)
+        if (hdl::rpc::ReadPipeExact(pipe, completion_port, &size, sizeof(size), deadline) !=
+                hdl::rpc::PipeIoResult::Ok ||
+            size > hdl::rpc::kMaxFrameBytes) {
             return false;
-        frame->resize(size);
-        size_t offset = 0;
-        while (offset < frame->size()) {
-            if (!ReadFile(pipe, frame->data() + offset, static_cast<DWORD>(frame->size() - offset),
-                          &got, nullptr) ||
-                got == 0)
-                return false;
-            offset += got;
         }
-        return true;
+        frame->resize(size);
+        return !size || hdl::rpc::ReadPipeExact(pipe, completion_port, frame->data(), size,
+                                                deadline) == hdl::rpc::PipeIoResult::Ok;
     };
 
     if (!write_exact(hdl::rpc::kConnectionPreface,
                      static_cast<DWORD>(hdl::rpc::kConnectionPrefaceSize))) {
-        CloseHandle(pipe);
         return false;
     }
     hdl::rpc::v1::Envelope hello;
@@ -505,7 +518,6 @@ inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
     hello.mutable_client_hello()->set_client_name("hdl_tests");
     std::vector<uint8_t> frame;
     if (!hdl::rpc::SerializeEnvelope(hello, &frame)) {
-        CloseHandle(pipe);
         return false;
     }
     uint32_t frame_size = static_cast<uint32_t>(frame.size());
@@ -513,33 +525,39 @@ inline bool PipeRequest(uint32_t pid, const hdl::rpc::PreparedRequest& req,
         !read_frame(&frame) || !hdl::rpc::ParseEnvelope(frame.data(), frame.size(), &hello) ||
         !hello.has_server_hello() ||
         hello.server_hello().protocol_major() != hdl::rpc::kProtocolMajor) {
-        CloseHandle(pipe);
         return false;
     }
 
-    hdl::rpc::v1::Payload payload;
-    payload.set_value(req.payload.data(), req.payload.size());
     hdl::rpc::v1::Envelope envelope;
     auto* request = envelope.mutable_request();
     request->set_request_id(1);
-    const std::string_view method = hdl::rpc::MethodName(req.method);
     request->set_method(method.data(), method.size());
-    request->set_timeout_ms(req.timeout_ms);
-    if (!req.has_method || !payload.SerializeToString(request->mutable_payload()) ||
+    request->set_timeout_ms(timeout_ms);
+    if (!input.SerializeToString(request->mutable_payload()) ||
         !hdl::rpc::SerializeEnvelope(envelope, &frame)) {
-        CloseHandle(pipe);
         return false;
     }
     frame_size = static_cast<uint32_t>(frame.size());
-    if (!write_exact(&frame_size, sizeof(frame_size)) || !write_exact(frame.data(), frame_size) ||
-        !read_frame(&frame) || !hdl::rpc::ParseEnvelope(frame.data(), frame.size(), &envelope) ||
-        !envelope.has_response() || envelope.response().request_id() != 1 ||
-        !payload.ParseFromString(envelope.response().payload())) {
-        CloseHandle(pipe);
+    if (!write_exact(&frame_size, sizeof(frame_size)) || !write_exact(frame.data(), frame_size)) {
         return false;
     }
-    resp.assign(payload.value().begin(), payload.value().end());
-    CloseHandle(pipe);
+    uint32_t sequence = 0;
+    bool terminal = false;
+    while (!terminal) {
+        if (!read_frame(&frame) ||
+            !hdl::rpc::ParseEnvelope(frame.data(), frame.size(), &envelope) ||
+            !envelope.has_response() || envelope.response().request_id() != 1 ||
+            envelope.response().sequence() != sequence++) {
+            return false;
+        }
+        const auto& response = envelope.response();
+        if (response.has_payload() && !on_payload(response.payload())) {
+            return false;
+        }
+        terminal = response.end_stream();
+        if (terminal && response.has_status() && out_status)
+            *out_status = static_cast<int32_t>(response.status().hdl_status());
+    }
     return true;
 }
 

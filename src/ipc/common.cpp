@@ -2,7 +2,6 @@
 
 #include "discover.hpp"
 #include "memory.hpp"
-#include "rpc/runtime.hpp"
 
 #include <atomic>
 #include <mutex>
@@ -56,54 +55,6 @@ RequestJobScope::~RequestJobScope() {
 
 std::shared_ptr<Job> CurrentRequestJob() {
     return g_request_job;
-}
-
-bool WriteFrame(HANDLE pipe, const std::vector<uint8_t>& resp) {
-    return rpc::WriteHandlerResponse(pipe, resp.data(), static_cast<uint32_t>(resp.size()));
-}
-
-void TakeOptionalJobTimeoutFlags(proto::Reader& r, uint64_t* job_id, uint32_t* timeout_ms,
-                                 uint32_t* flags) {
-    if (job_id) {
-        *job_id = 0;
-    }
-    if (timeout_ms) {
-        *timeout_ms = 0;
-    }
-    if (flags) {
-        *flags = 0;
-    }
-    if (job_id && r.left >= sizeof(uint64_t)) {
-        r.TakePod(*job_id);
-    }
-    if (timeout_ms && r.left >= sizeof(uint32_t)) {
-        r.TakePod(*timeout_ms);
-    }
-    if (flags && r.left >= sizeof(uint32_t)) {
-        r.TakePod(*flags);
-    }
-}
-
-std::shared_ptr<Job> BindJob(uint64_t job_id, uint32_t timeout_ms) {
-    if (auto current = CurrentRequestJob()) {
-        if (timeout_ms && current->deadline_tick == 0) {
-            current->timeout_ms = timeout_ms;
-            current->deadline_tick = GetTickCount64() + timeout_ms;
-        }
-        return current;
-    }
-    if (job_id) {
-        auto existing = JobFind(job_id);
-        if (existing && timeout_ms && existing->deadline_tick == 0) {
-            existing->timeout_ms = timeout_ms;
-            existing->deadline_tick = GetTickCount64() + timeout_ms;
-        }
-        return existing;
-    }
-    if (timeout_ms) {
-        return JobCreate(timeout_ms);
-    }
-    return nullptr;
 }
 
 std::shared_ptr<SearchSessionHolder> FindSession(uint64_t id) {

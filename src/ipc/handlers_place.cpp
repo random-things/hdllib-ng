@@ -1,53 +1,36 @@
 #include "handlers.hpp"
-#include "wire.hpp"
+
+#include "common.hpp"
+#include "convert.hpp"
 
 #include "alloc.hpp"
-#include "jobs.hpp"
 #include "place.hpp"
-#include "protocol.hpp"
 
-#include <string>
 #include <thread>
 #include <vector>
 
-namespace hdl {
-namespace ipc {
+namespace hdl::ipc {
 
-bool HandleFindCaves(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint32_t min_size = 0;
-    uint32_t fill_byte = 0;
-    uint32_t search_flags = 0;
-    uint32_t max_results = 0;
-    uint64_t near_addr = 0;
-    uint64_t max_distance = 0;
+rpc::Status HandleMemory_FindCaves(rpc::CallContext&, const rpc::v1::FindCavesRequest& request,
+                                   rpc::ServerWriter<rpc::v1::FindCavesResponse>& writer) {
     std::wstring module;
-    uint64_t job_id = 0;
-    uint32_t timeout_ms = 0;
-    uint32_t flags = 0;
-    if (!r.TakePod(min_size) || !r.TakePod(fill_byte) || !r.TakePod(search_flags) ||
-        !r.TakePod(max_results) || !r.TakePod(near_addr) || !r.TakePod(max_distance) ||
-        !r.TakeWString(module)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
+    if (!Utf8ToWide(request.scope().module(), &module)) {
+        return rpc::Status::FromHdl(HDL_E_INVALID_ARG);
     }
-    TakeOptionalJobTimeoutFlags(r, &job_id, &timeout_ms, &flags);
+    HdlCaveQuery query{};
+    query.min_size = request.min_size();
+    query.fill_byte = request.fill_byte();
+    query.search_flags = request.scope().flags();
+    query.max_results = request.max_results();
+    query.near_addr = request.near_address();
+    query.max_distance = request.max_distance();
+    query.module_or_null = module.empty() ? nullptr : module.c_str();
 
-    HdlCaveQuery q{};
-    q.min_size = min_size;
-    q.fill_byte = fill_byte;
-    q.search_flags = search_flags;
-    q.max_results = max_results;
-    q.near_addr = near_addr;
-    q.max_distance = max_distance;
-    q.module_or_null = module.empty() ? nullptr : module.c_str();
-
-    auto job = BindJob(job_id, timeout_ms);
+    const auto job = CurrentRequestJob();
     volatile int cancel = 0;
     std::thread watcher;
-    if (job) {
-        watcher = std::thread([job, &cancel]() {
+    if (job && job->deadline_tick) {
+        watcher = std::thread([job, &cancel] {
             while (!cancel) {
                 if (JobCheck(job) != HDL_OK) {
                     cancel = 1;
@@ -59,12 +42,13 @@ bool HandleFindCaves(HANDLE pipe, proto::Reader& r) {
     }
 
     uint32_t count = 0;
-    HdlStatus st = FindCaves(&q, nullptr, &count, &cancel);
+    HdlStatus status = FindCaves(&query, nullptr, &count, &cancel);
     std::vector<HdlCaveInfo> caves;
-    if (st == HDL_E_BUFFER_SMALL && count > 0) {
+    if (status == HDL_E_BUFFER_SMALL && count) {
         caves.resize(count);
-        st = FindCaves(&q, caves.data(), &count, &cancel);
-    } else if (st == HDL_OK) {
+        status = FindCaves(&query, caves.data(), &count, &cancel);
+        caves.resize(status == HDL_OK ? count : 0);
+    } else if (status == HDL_OK) {
         count = 0;
     }
     if (watcher.joinable()) {
@@ -72,73 +56,42 @@ bool HandleFindCaves(HANDLE pipe, proto::Reader& r) {
         watcher.join();
     }
     if (job) {
-        const HdlStatus cs = JobCheck(job);
-        if (cs != HDL_OK && st == HDL_OK) {
-            st = cs;
+        const HdlStatus cancellation = JobCheck(job);
+        if (cancellation != HDL_OK && status == HDL_OK) {
+            status = cancellation;
         }
     }
-
-    if (flags & HDL_IPC_REQ_STREAM) {
-        return WriteStreamed(pipe, st, caves.data(), count, 64);
-    }
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, count);
-    if (count && st == HDL_OK) {
-        for (uint32_t _i = 0; _i < count; ++_i)
-            proto::AppendHdlCaveInfo(resp, caves[_i]);
-    }
-    return WriteFrame(pipe, resp);
+    return WriteBatches(status, caves, 64, writer,
+                        [](const HdlCaveInfo& value, rpc::v1::FindCavesResponse* batch) {
+                            ToProto(value, batch->add_caves());
+                            return true;
+                        });
 }
 
-bool HandleAllocNear(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t near_addr = 0;
-    uint64_t max_distance = 0;
-    uint64_t size = 0;
-    uint32_t protect = 0;
-    if (!r.TakePod(near_addr) || !r.TakePod(max_distance) || !r.TakePod(size) ||
-        !r.TakePod(protect)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint64_t addr = 0;
-    const HdlStatus st =
-        AllocNear(near_addr, max_distance, static_cast<size_t>(size), protect, &addr);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, addr);
-    return WriteFrame(pipe, resp);
+rpc::Status HandleMemory_AllocNear(rpc::CallContext&, const rpc::v1::AllocNearRequest& request,
+                                   rpc::v1::AllocNearResponse* response) {
+    uint64_t address = 0;
+    const HdlStatus status =
+        AllocNear(request.near_address(), request.max_distance(),
+                  static_cast<size_t>(request.size()), request.protection(), &address);
+    response->set_address(address);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleProtectMemory(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint64_t size = 0;
-    uint32_t protect = 0;
-    if (!r.TakePod(addr) || !r.TakePod(size) || !r.TakePod(protect)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    uint32_t old = 0;
-    const HdlStatus st = ProtectMemory(addr, static_cast<size_t>(size), protect, &old);
-    AppendPod(resp, static_cast<int32_t>(st));
-    AppendPod(resp, old);
-    return WriteFrame(pipe, resp);
+rpc::Status HandleMemory_ProtectMemory(rpc::CallContext&,
+                                       const rpc::v1::ProtectMemoryRequest& request,
+                                       rpc::v1::ProtectMemoryResponse* response) {
+    uint32_t old_protection = 0;
+    const HdlStatus status = ProtectMemory(request.address(), static_cast<size_t>(request.size()),
+                                           request.protection(), &old_protection);
+    response->set_old_protection(old_protection);
+    return rpc::Status::FromHdl(status);
 }
 
-bool HandleFlushICache(HANDLE pipe, proto::Reader& r) {
-    using namespace proto;
-    std::vector<uint8_t> resp;
-    uint64_t addr = 0;
-    uint64_t size = 0;
-    if (!r.TakePod(addr) || !r.TakePod(size)) {
-        AppendPod(resp, static_cast<int32_t>(HDL_E_INVALID_ARG));
-        return WriteFrame(pipe, resp);
-    }
-    AppendPod(resp, static_cast<int32_t>(FlushICache(addr, static_cast<size_t>(size))));
-    return WriteFrame(pipe, resp);
+rpc::Status HandleMemory_FlushICache(rpc::CallContext&, const rpc::v1::FlushICacheRequest& request,
+                                     rpc::v1::Empty*) {
+    return rpc::Status::FromHdl(
+        FlushICache(request.address(), static_cast<size_t>(request.size())));
 }
 
-} // namespace ipc
-} // namespace hdl
+} // namespace hdl::ipc

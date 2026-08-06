@@ -1,391 +1,228 @@
 #include "cmd.hpp"
 #include "cmd_fail.hpp"
 #include "json_out.hpp"
+#include "rpc_helpers.hpp"
 #include "usage.hpp"
 #include "util.hpp"
 
+#include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
-#include "ipc/wire.hpp"
-#include "protocol.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
 #include <cstdio>
-#include <cstring>
 #include <string>
 #include <vector>
 
-bool EncodeCallArg(const wchar_t* s, int32_t* kind, uint32_t* size, uint64_t* u64,
-                   std::vector<uint8_t>* blob) {
-    if (!s || !kind || !size || !u64 || !blob) {
+namespace {
+
+bool EncodeCallArgument(const wchar_t* text, hdl::rpc::v1::CallArgument* argument) {
+    if (!text || !argument)
         return false;
-    }
-    *size = 0;
-    *u64 = 0;
-    blob->clear();
-    if (wcsncmp(s, L"u64:", 4) == 0) {
-        *kind = HDL_CALL_ARG_U64;
-        *u64 = _wcstoui64(s + 4, nullptr, 0);
-        return true;
-    }
-    if (wcsncmp(s, L"i64:", 4) == 0) {
-        *kind = HDL_CALL_ARG_I64;
-        *u64 = static_cast<uint64_t>(_wcstoi64(s + 4, nullptr, 0));
-        return true;
-    }
-    if (wcsncmp(s, L"f32:", 4) == 0) {
-        *kind = HDL_CALL_ARG_F32;
-        float f = static_cast<float>(_wtof(s + 4));
-        uint32_t bits = 0;
-        memcpy(&bits, &f, sizeof(bits));
-        *u64 = bits;
-        return true;
-    }
-    if (wcsncmp(s, L"f64:", 4) == 0) {
-        *kind = HDL_CALL_ARG_F64;
-        double d = _wtof(s + 4);
-        memcpy(u64, &d, sizeof(d));
-        return true;
-    }
-    if (wcsncmp(s, L"ptr:", 4) == 0) {
-        *kind = HDL_CALL_ARG_PTR;
-        *u64 = _wcstoui64(s + 4, nullptr, 0);
-        return true;
-    }
-    if (wcsncmp(s, L"cstr:", 5) == 0) {
-        *kind = HDL_CALL_ARG_CSTR;
-        char buf[1024];
-        WideCharToMultiByte(CP_UTF8, 0, s + 5, -1, buf, sizeof(buf), nullptr, nullptr);
-        blob->assign(reinterpret_cast<uint8_t*>(buf),
-                     reinterpret_cast<uint8_t*>(buf) + strlen(buf) + 1);
-        return true;
-    }
-    if (wcsncmp(s, L"wstr:", 5) == 0) {
-        *kind = HDL_CALL_ARG_WSTR;
-        const size_t n = (wcslen(s + 5) + 1) * sizeof(wchar_t);
-        blob->resize(n);
-        memcpy(blob->data(), s + 5, n);
-        return true;
-    }
-    if (wcsncmp(s, L"buf:", 4) == 0) {
-        *kind = HDL_CALL_ARG_BUF;
-        if (!ParseHexBytes(s + 4, *blob) || blob->empty()) {
+    if (wcsncmp(text, L"u64:", 4) == 0)
+        argument->set_unsigned_value(_wcstoui64(text + 4, nullptr, 0));
+    else if (wcsncmp(text, L"i64:", 4) == 0)
+        argument->set_signed_value(_wcstoi64(text + 4, nullptr, 0));
+    else if (wcsncmp(text, L"f32:", 4) == 0)
+        argument->set_float_value(static_cast<float>(_wtof(text + 4)));
+    else if (wcsncmp(text, L"f64:", 4) == 0)
+        argument->set_double_value(_wtof(text + 4));
+    else if (wcsncmp(text, L"ptr:", 4) == 0)
+        argument->set_pointer_value(_wcstoui64(text + 4, nullptr, 0));
+    else if (wcsncmp(text, L"cstr:", 5) == 0) {
+        std::string value;
+        if (!WideToUtf8(text + 5, &value))
             return false;
-        }
-        *size = static_cast<uint32_t>(blob->size());
-        return true;
-    }
-    return false;
+        argument->set_narrow_string(std::move(value));
+    } else if (wcsncmp(text, L"wstr:", 5) == 0) {
+        std::string value;
+        if (!WideToUtf8(text + 5, &value))
+            return false;
+        argument->set_wide_string(std::move(value));
+    } else if (wcsncmp(text, L"buf:", 4) == 0) {
+        std::vector<uint8_t> value;
+        if (!ParseHexBytes(text + 4, value) || value.empty())
+            return false;
+        argument->set_buffer(value.data(), value.size());
+    } else
+        return false;
+    return true;
 }
 
-void AppendCallArg(std::vector<uint8_t>& req, int32_t kind, uint32_t size, uint64_t u64,
-                   const std::vector<uint8_t>& blob) {
-    using namespace hdl::proto;
-    AppendPod(req, kind);
-    AppendPod(req, size);
-    AppendPod(req, u64);
-    if (kind == HDL_CALL_ARG_CSTR || kind == HDL_CALL_ARG_WSTR || kind == HDL_CALL_ARG_BUF) {
-        AppendPod(req, static_cast<uint32_t>(blob.size()));
-        AppendBytes(req, blob.data(), blob.size());
-    }
-}
-
-static CommandResult PrintCallReply(CmdCtx& ctx, const wchar_t* verb,
-                                    const std::vector<uint8_t>& resp) {
-    using namespace hdl::proto;
-    Reader r(resp);
-    int32_t st = 0;
-    HdlCallResult result{};
-    if (!r.TakePod(st) || !hdl::proto::TakeHdlCallResult(r, result)) {
-        return FailBadResp(ctx);
-    }
-
-    struct BufDump {
-        uint32_t idx = 0;
-        std::string hex;
-    };
-    std::vector<BufDump> bufs;
-    uint32_t buf_n = 0;
-    if (r.TakePod(buf_n)) {
-        for (uint32_t i = 0; i < buf_n; ++i) {
-            uint32_t idx = 0;
-            uint32_t sz = 0;
-            if (!r.TakePod(idx) || !r.TakePod(sz) || r.left < sz) {
-                return FailBadResp(ctx);
+CommandResult PrintCallReply(const wchar_t* verb, const hdl::rpc::Status& status,
+                             const hdl::rpc::v1::CallResult& result) {
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("return");
+    writer.HexStr(result.return_value());
+    writer.Key("last_error");
+    writer.Num(result.last_error());
+    if (!result.buffer_copy_outs().empty()) {
+        writer.Key("bufs");
+        writer.BeginArray();
+        for (const auto& copy : result.buffer_copy_outs()) {
+            std::string hex;
+            hex.reserve(copy.data().size() * 2);
+            for (unsigned char byte : copy.data()) {
+                char value[3];
+                snprintf(value, sizeof(value), "%02x", byte);
+                hex += value;
             }
-            BufDump bd;
-            bd.idx = idx;
-            bd.hex.reserve(sz * 2);
-            for (uint32_t b = 0; b < sz; ++b) {
-                char tmp[3];
-                snprintf(tmp, sizeof(tmp), "%02x", r.p[b]);
-                bd.hex += tmp;
-            }
-            bufs.push_back(std::move(bd));
-            r.p += sz;
-            r.left -= sz;
+            writer.BeginObject();
+            writer.Key("index");
+            writer.Num(copy.argument_index());
+            writer.Key("hex");
+            writer.Str(hex);
+            writer.EndObject();
         }
+        writer.EndArray();
     }
-
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("return");
-    w.HexStr(result.return_value);
-    w.Key("last_error");
-    w.Num(result.last_error);
-    if (!bufs.empty()) {
-        w.Key("bufs");
-        w.BeginArray();
-        for (const auto& bd : bufs) {
-            w.BeginObject();
-            w.Key("index");
-            w.Num(bd.idx);
-            w.Key("hex");
-            w.Str(bd.hex);
-            w.EndObject();
-        }
-        w.EndArray();
-    }
-    w.EndObject();
-
-    for (const auto& bd : bufs) {
-        wchar_t prefix[32];
-        swprintf_s(prefix, L"buf[%u]=", bd.idx);
-        for (size_t i = 0; i < bd.hex.size(); i += 2) {
-            wchar_t pair[4];
-            swprintf_s(pair, L"%lc%lc", bd.hex[i], bd.hex[i + 1]);
-        }
-    }
-    return CmdStatus(verb, st, w.Take());
+    writer.EndObject();
+    return CmdStatus(verb, status.hdl_status(), writer.Take());
 }
+
+} // namespace
 
 CommandResult CmdResolve(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
     std::wstring module;
     const wchar_t* export_name = nullptr;
     for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        } else if (!export_name) {
+        else if (!export_name)
             export_name = ctx.argv[i];
-        }
     }
-    if (!export_name) {
+    if (!export_name)
         return FailUsage(ctx);
-    }
-    char name[256];
-    WideCharToMultiByte(CP_UTF8, 0, export_name, -1, name, sizeof(name), nullptr, nullptr);
-    SetMethod(req, hdl::rpc::Method::ResolveExport);
-    AppendWString(req, module.c_str());
-    AppendString(req, name);
-    if (!ctx.client.Request(req, resp)) {
+    std::string module_utf8, name;
+    if (!WideToUtf8(module, &module_utf8) || !WideToUtf8(export_name, &name))
+        return FailArg(ctx, L"invalid name");
+    hdl::rpc::v1::ResolveExportRequest request;
+    request.set_module(std::move(module_utf8));
+    request.set_name(std::move(name));
+    const auto result = hdl::rpc::CallClient(&ctx.client).ResolveExport(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t addr = 0;
-    if (!r.TakePod(st) || !r.TakePod(addr)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("addr");
-    w.HexStr(addr);
-    w.EndObject();
-    return CmdStatus(L"resolve", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("addr");
+    writer.HexStr(result.response.address());
+    writer.EndObject();
+    return CmdStatus(L"resolve", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdCall(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
     std::wstring module;
     const wchar_t* export_name = nullptr;
-    uint64_t addr = 0;
-    bool have_addr = false;
+    uint64_t address = 0;
+    bool have_address = false;
     bool main_thread = false;
-    uint32_t timeout_ms = 0;
-    std::vector<std::wstring> arg_texts;
+    uint32_t timeout = 0;
+    std::vector<std::wstring> arguments;
     for (int i = 3; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc) {
+        if (wcscmp(ctx.argv[i], L"--module") == 0 && i + 1 < ctx.argc)
             module = ctx.argv[++i];
-        } else if (wcscmp(ctx.argv[i], L"--addr") == 0 && i + 1 < ctx.argc) {
-            addr = _wcstoui64(ctx.argv[++i], nullptr, 0);
-            have_addr = true;
-        } else if (wcscmp(ctx.argv[i], L"--main") == 0) {
+        else if (wcscmp(ctx.argv[i], L"--addr") == 0 && i + 1 < ctx.argc) {
+            address = _wcstoui64(ctx.argv[++i], nullptr, 0);
+            have_address = true;
+        } else if (wcscmp(ctx.argv[i], L"--main") == 0)
             main_thread = true;
-        } else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
-            timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else if (!have_addr && !export_name) {
+        else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc)
+            timeout = _wtoi(ctx.argv[++i]);
+        else if (!have_address && !export_name)
             export_name = ctx.argv[i];
-        } else {
-            arg_texts.push_back(ctx.argv[i]);
-        }
+        else
+            arguments.emplace_back(ctx.argv[i]);
     }
-    if (!have_addr && !export_name) {
+    if (!have_address && !export_name)
         return FailUsage(ctx);
+    hdl::rpc::CallOptions options{timeout};
+    hdl::rpc::CallClient client(&ctx.client);
+    if (have_address) {
+        hdl::rpc::v1::CallRequest request;
+        request.set_address(address);
+        request.set_thread_mode(main_thread ? hdl::rpc::v1::CALL_THREAD_MODE_MAIN
+                                            : hdl::rpc::v1::CALL_THREAD_MODE_WORKER);
+        for (const auto& text : arguments)
+            if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
+                return FailArg(ctx, text.c_str());
+        const auto result = client.Call(request, options);
+        if (!result.has_response)
+            return FailIpc(ctx);
+        return PrintCallReply(L"call", result.status, result.response.result());
     }
-
-    if (have_addr) {
-        SetMethod(req, hdl::rpc::Method::Call);
-        req.timeout_ms = timeout_ms;
-        AppendPod(req, addr);
-        AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
-        AppendPod(req, static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN
-                                                         : HDL_CALL_THREAD_WORKER));
-        AppendPod(req, timeout_ms);
-        AppendPod(req, static_cast<uint64_t>(0));
-    } else {
-        char name[256];
-        WideCharToMultiByte(CP_UTF8, 0, export_name, -1, name, sizeof(name), nullptr, nullptr);
-        SetMethod(req, hdl::rpc::Method::CallExport);
-        req.timeout_ms = timeout_ms;
-        AppendWString(req, module.c_str());
-        AppendString(req, name);
-        AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
-        AppendPod(req, timeout_ms);
-        AppendPod(req, static_cast<uint64_t>(0));
-    }
-    for (const auto& t : arg_texts) {
-        int32_t kind = 0;
-        uint32_t size = 0;
-        uint64_t u64 = 0;
-        std::vector<uint8_t> blob;
-        if (!EncodeCallArg(t.c_str(), &kind, &size, &u64, &blob)) {
-            return FailArg(ctx, t.c_str());
-        }
-        if (kind == HDL_CALL_ARG_PTR) {
-            AppendPod(req, kind);
-            AppendPod(req, size);
-            AppendPod(req, u64);
-        } else {
-            AppendCallArg(req.payload, kind, size, u64, blob);
-        }
-    }
-    if (!ctx.client.Request(req, resp)) {
+    std::string module_utf8, name;
+    if (!WideToUtf8(module, &module_utf8) || !WideToUtf8(export_name, &name))
+        return FailArg(ctx, L"invalid name");
+    hdl::rpc::v1::CallExportRequest request;
+    request.set_module(std::move(module_utf8));
+    request.set_name(std::move(name));
+    for (const auto& text : arguments)
+        if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
+            return FailArg(ctx, text.c_str());
+    const auto result = client.CallExport(request, options);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    return PrintCallReply(ctx, L"call", resp);
+    return PrintCallReply(L"call", result.status, result.response.result());
 }
 
 CommandResult CmdVcall(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 5) {
+    if (ctx.argc < 5)
         return FailUsage(ctx);
-    }
-    const uint64_t obj = _wcstoui64(ctx.argv[3], nullptr, 0);
-    const uint32_t index = static_cast<uint32_t>(_wtoi(ctx.argv[4]));
-    bool main_thread = false;
-    int32_t prepend_this = 1;
-    uint32_t timeout_ms = 0;
-    std::vector<std::wstring> arg_texts;
+    hdl::rpc::v1::CallVtableRequest request;
+    request.set_object(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_index(_wtoi(ctx.argv[4]));
+    request.set_prepend_this(true);
+    request.set_thread_mode(hdl::rpc::v1::CALL_THREAD_MODE_WORKER);
+    uint32_t timeout = 0;
+    std::vector<std::wstring> arguments;
     for (int i = 5; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--main") == 0) {
-            main_thread = true;
-        } else if (wcscmp(ctx.argv[i], L"--no-this") == 0) {
-            prepend_this = 0;
-        } else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc) {
-            timeout_ms = static_cast<uint32_t>(_wtoi(ctx.argv[++i]));
-        } else {
-            arg_texts.push_back(ctx.argv[i]);
-        }
+        if (wcscmp(ctx.argv[i], L"--main") == 0)
+            request.set_thread_mode(hdl::rpc::v1::CALL_THREAD_MODE_MAIN);
+        else if (wcscmp(ctx.argv[i], L"--no-this") == 0)
+            request.set_prepend_this(false);
+        else if (wcscmp(ctx.argv[i], L"--timeout") == 0 && i + 1 < ctx.argc)
+            timeout = _wtoi(ctx.argv[++i]);
+        else
+            arguments.emplace_back(ctx.argv[i]);
     }
-    SetMethod(req, hdl::rpc::Method::CallVtable);
-    req.timeout_ms = timeout_ms;
-    AppendPod(req, obj);
-    AppendPod(req, index);
-    AppendPod(req, static_cast<uint32_t>(arg_texts.size()));
-    AppendPod(req, prepend_this);
-    AppendPod(req,
-              static_cast<uint32_t>(main_thread ? HDL_CALL_THREAD_MAIN : HDL_CALL_THREAD_WORKER));
-    AppendPod(req, timeout_ms);
-    AppendPod(req, static_cast<uint64_t>(0));
-    for (const auto& t : arg_texts) {
-        int32_t kind = 0;
-        uint32_t size = 0;
-        uint64_t u64 = 0;
-        std::vector<uint8_t> blob;
-        if (!EncodeCallArg(t.c_str(), &kind, &size, &u64, &blob)) {
-            return FailArg(ctx, t.c_str());
-        }
-        if (kind == HDL_CALL_ARG_PTR) {
-            AppendPod(req, kind);
-            AppendPod(req, size);
-            AppendPod(req, u64);
-        } else {
-            AppendCallArg(req.payload, kind, size, u64, blob);
-        }
-    }
-    if (!ctx.client.Request(req, resp)) {
+    for (const auto& text : arguments)
+        if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
+            return FailArg(ctx, text.c_str());
+    const auto result = hdl::rpc::CallClient(&ctx.client).CallVtable(request, {timeout});
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    return PrintCallReply(ctx, L"vcall", resp);
+    return PrintCallReply(L"vcall", result.status, result.response.result());
 }
 
 CommandResult CmdAlloc(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t size = _wcstoui64(ctx.argv[3], nullptr, 0);
-    uint32_t protect = PAGE_READWRITE;
-    for (int i = 4; i < ctx.argc; ++i) {
-        if (wcscmp(ctx.argv[i], L"--protect") == 0 && i + 1 < ctx.argc) {
-            ++i;
-            if (_wcsicmp(ctx.argv[i], L"RWX") == 0 || _wcsicmp(ctx.argv[i], L"rwx") == 0) {
-                protect = PAGE_EXECUTE_READWRITE;
-            } else {
-                protect = PAGE_READWRITE;
-            }
-        }
-    }
-    SetMethod(req, hdl::rpc::Method::Alloc);
-    AppendPod(req, size);
-    AppendPod(req, protect);
-    if (!ctx.client.Request(req, resp)) {
+    hdl::rpc::v1::AllocRequest request;
+    request.set_size(_wcstoui64(ctx.argv[3], nullptr, 0));
+    request.set_protection(PAGE_READWRITE);
+    for (int i = 4; i < ctx.argc; ++i)
+        if (wcscmp(ctx.argv[i], L"--protect") == 0 && i + 1 < ctx.argc)
+            request.set_protection(_wcsicmp(ctx.argv[++i], L"RWX") == 0 ? PAGE_EXECUTE_READWRITE
+                                                                        : PAGE_READWRITE);
+    const auto result = hdl::rpc::MemoryClient(&ctx.client).Alloc(request);
+    if (!result.has_response)
         return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    uint64_t addr = 0;
-    if (!r.TakePod(st) || !r.TakePod(addr)) {
-        return FailBadResp(ctx);
-    }
-    JsonWriter w;
-    w.BeginObject();
-    w.Key("addr");
-    w.HexStr(addr);
-    w.EndObject();
-    return CmdStatus(L"alloc", st, w.Take());
+    JsonWriter writer;
+    writer.BeginObject();
+    writer.Key("addr");
+    writer.HexStr(result.response.address());
+    writer.EndObject();
+    return CmdStatus(L"alloc", result.status.hdl_status(), writer.Take());
 }
 
 CommandResult CmdFree(CmdCtx& ctx) {
-    using namespace hdl::proto;
-    PreparedRequest req;
-    std::vector<uint8_t> resp;
-
-    if (ctx.argc < 4) {
+    if (ctx.argc < 4)
         return FailUsage(ctx);
-    }
-    const uint64_t addr = _wcstoui64(ctx.argv[3], nullptr, 0);
-    SetMethod(req, hdl::rpc::Method::Free);
-    AppendPod(req, addr);
-    if (!ctx.client.Request(req, resp)) {
-        return FailIpc(ctx);
-    }
-    Reader r(resp);
-    int32_t st = 0;
-    r.TakePod(st);
-    return CmdStatus(L"free", st, "{}");
+    hdl::rpc::v1::FreeRequest request;
+    request.set_address(_wcstoui64(ctx.argv[3], nullptr, 0));
+    const auto result = hdl::rpc::MemoryClient(&ctx.client).Free(request);
+    return result.has_response ? CmdStatus(L"free", result.status.hdl_status(), "{}")
+                               : FailIpc(ctx);
 }

@@ -1,0 +1,13 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message WatchHwRequest { fixed64 address = 1; uint32 size = 2; WatchHardwareAccess access = 3; uint32 thread_id = 4; }
+message WatchHwResponse { fixed64 handle = 1; }
+message WatchPageRequest { fixed64 address = 1; uint64 size = 2; WatchPageMode mode = 3; }
+message WatchPageResponse { fixed64 handle = 1; }
+message UnwatchRequest { fixed64 handle = 1; }
+message EnumWatchesResponse { repeated WatchInfo watches = 1; }
+message PollWatchHitsRequest { uint32 max_hits = 1; uint32 wait_timeout_ms = 2; }
+message PollWatchHitsResponse { repeated WatchHit hits = 1; }

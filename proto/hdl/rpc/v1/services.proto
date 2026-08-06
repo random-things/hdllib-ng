@@ -3,138 +3,150 @@ edition = "2023";
 package hdl.rpc.v1;
 
 import "hdl/rpc/v1/common.proto";
+import "hdl/rpc/v1/control.proto";
+import "hdl/rpc/v1/process.proto";
+import "hdl/rpc/v1/memory.proto";
+import "hdl/rpc/v1/search.proto";
+import "hdl/rpc/v1/call.proto";
+import "hdl/rpc/v1/hook.proto";
+import "hdl/rpc/v1/locate.proto";
+import "hdl/rpc/v1/discover.proto";
+import "hdl/rpc/v1/code.proto";
+import "hdl/rpc/v1/pe.proto";
+import "hdl/rpc/v1/watch.proto";
+import "hdl/rpc/v1/injection.proto";
 
 option optimize_for = LITE_RUNTIME;
 
 service Control {
-  rpc Ping(Payload) returns (Payload);
-  rpc SetLogLevel(Payload) returns (Payload);
-  rpc SetLogFile(Payload) returns (Payload);
-  rpc SetHealthVeh(Payload) returns (Payload);
-  rpc GetHealthVeh(Payload) returns (Payload);
-  rpc Shutdown(Payload) returns (Payload);
+  rpc Ping(Empty) returns (PingResponse);
+  rpc SetLogLevel(SetLogLevelRequest) returns (Empty);
+  rpc SetLogFile(SetLogFileRequest) returns (Empty);
+  rpc SetHealthVeh(SetHealthVehRequest) returns (Empty);
+  rpc GetHealthVeh(Empty) returns (GetHealthVehResponse);
+  rpc Shutdown(ShutdownRequest) returns (Empty);
 }
 
 service Process {
-  rpc GetHealth(Payload) returns (Payload);
-  rpc EnumRegions(Payload) returns (stream Payload);
-  rpc EnumModules(Payload) returns (stream Payload);
-  rpc EnumThreads(Payload) returns (stream Payload);
-  rpc PollEvents(Payload) returns (stream Payload);
-  rpc Fingerprint(Payload) returns (stream Payload);
+  rpc GetHealth(Empty) returns (GetHealthResponse);
+  rpc EnumRegions(Empty) returns (stream EnumRegionsResponse);
+  rpc EnumModules(Empty) returns (stream EnumModulesResponse);
+  rpc EnumThreads(Empty) returns (stream EnumThreadsResponse);
+  rpc PollEvents(PollEventsRequest) returns (stream PollEventsResponse);
+  rpc Fingerprint(FingerprintRequest) returns (stream FingerprintResponse);
 }
 
 service Memory {
-  rpc ReadMemory(Payload) returns (Payload);
-  rpc WriteMemory(Payload) returns (Payload);
-  rpc Alloc(Payload) returns (Payload);
-  rpc Free(Payload) returns (Payload);
-  rpc FindCaves(Payload) returns (stream Payload);
-  rpc AllocNear(Payload) returns (Payload);
-  rpc ProtectMemory(Payload) returns (Payload);
-  rpc FlushICache(Payload) returns (Payload);
+  rpc ReadMemory(ReadMemoryRequest) returns (ReadMemoryResponse);
+  rpc WriteMemory(WriteMemoryRequest) returns (WriteMemoryResponse);
+  rpc Alloc(AllocRequest) returns (AllocResponse);
+  rpc Free(FreeRequest) returns (Empty);
+  rpc FindCaves(FindCavesRequest) returns (stream FindCavesResponse);
+  rpc AllocNear(AllocNearRequest) returns (AllocNearResponse);
+  rpc ProtectMemory(ProtectMemoryRequest) returns (ProtectMemoryResponse);
+  rpc FlushICache(FlushICacheRequest) returns (Empty);
 }
 
 service Search {
-  rpc SearchMemory(Payload) returns (stream Payload);
-  rpc SearchCreate(Payload) returns (Payload);
-  rpc SearchClose(Payload) returns (Payload);
-  rpc SearchReset(Payload) returns (Payload);
-  rpc SearchFirst(Payload) returns (stream Payload);
-  rpc SearchNext(Payload) returns (Payload);
-  rpc SearchGetHits(Payload) returns (stream Payload);
+  rpc SearchMemory(SearchMemoryRequest) returns (stream SearchMemoryResponse);
+  rpc SearchCreate(Empty) returns (SearchCreateResponse);
+  rpc SearchClose(SearchCloseRequest) returns (Empty);
+  rpc SearchReset(SearchResetRequest) returns (Empty);
+  rpc SearchFirst(SearchFirstRequest) returns (stream SearchFirstResponse);
+  rpc SearchNext(SearchNextRequest) returns (SearchNextResponse);
+  rpc SearchGetHits(SearchGetHitsRequest) returns (stream SearchGetHitsResponse);
 }
 
 service Call {
-  rpc ResolveExport(Payload) returns (Payload);
-  rpc CallExport(Payload) returns (Payload);
-  rpc Call(Payload) returns (Payload);
-  rpc CallVtable(Payload) returns (Payload);
+  rpc ResolveExport(ResolveExportRequest) returns (ResolveExportResponse);
+  rpc CallExport(CallExportRequest) returns (CallExportResponse);
+  rpc Call(CallRequest) returns (CallResponse);
+  rpc CallVtable(CallVtableRequest) returns (CallVtableResponse);
 }
 
 service Hook {
-  rpc HookTrace(Payload) returns (Payload);
-  rpc Hook(Payload) returns (Payload);
-  rpc EnableHook(Payload) returns (Payload);
-  rpc Unhook(Payload) returns (Payload);
-  rpc PollHookHits(Payload) returns (stream Payload);
-  rpc HookImport(Payload) returns (Payload);
+  rpc HookTrace(HookTraceRequest) returns (HookTraceResponse);
+  rpc Hook(HookRequest) returns (HookResponse);
+  rpc EnableHook(EnableHookRequest) returns (Empty);
+  rpc Unhook(UnhookRequest) returns (Empty);
+  rpc PollHookHits(PollHookHitsRequest) returns (stream PollHookHitsResponse);
+  rpc HookImport(HookImportRequest) returns (HookImportResponse);
 }
 
 service Locate {
-  rpc ResolveRip(Payload) returns (Payload);
-  rpc FollowPointers(Payload) returns (Payload);
-  rpc ModuleBase(Payload) returns (Payload);
-  rpc ResolvePattern(Payload) returns (Payload);
-  rpc FindStringXrefs(Payload) returns (Payload);
-  rpc PointerScan(Payload) returns (Payload);
-  rpc ProbeStruct(Payload) returns (Payload);
-  rpc EnumFunctions(Payload) returns (stream Payload);
-  rpc XrefsFrom(Payload) returns (stream Payload);
-  rpc WalkVtable(Payload) returns (stream Payload);
-  rpc QueryRttiName(Payload) returns (Payload);
-  rpc ResolveFunction(Payload) returns (Payload);
-  rpc XrefsTo(Payload) returns (stream Payload);
-  rpc InvalidateFnIndex(Payload) returns (Payload);
+  rpc ResolveRip(ResolveRipRequest) returns (ResolveRipResponse);
+  rpc FollowPointers(FollowPointersRequest) returns (FollowPointersResponse);
+  rpc ModuleBase(ModuleBaseRequest) returns (ModuleBaseResponse);
+  rpc ResolvePattern(ResolvePatternRequest) returns (ResolvePatternResponse);
+  rpc FindStringXrefs(FindStringXrefsRequest) returns (FindStringXrefsResponse);
+  rpc PointerScan(PointerScanRequest) returns (PointerScanResponse);
+  rpc ProbeStruct(ProbeStructRequest) returns (ProbeStructResponse);
+  rpc EnumFunctions(EnumFunctionsRequest) returns (stream EnumFunctionsResponse);
+  rpc XrefsFrom(XrefsFromRequest) returns (stream XrefsFromResponse);
+  rpc WalkVtable(WalkVtableRequest) returns (stream WalkVtableResponse);
+  rpc QueryRttiName(QueryRttiNameRequest) returns (QueryRttiNameResponse);
+  rpc ResolveFunction(ResolveFunctionRequest) returns (ResolveFunctionResponse);
+  rpc XrefsTo(XrefsToRequest) returns (stream XrefsToResponse);
+  rpc InvalidateFnIndex(InvalidateFnIndexRequest) returns (Empty);
 }
 
 service Discover {
-  rpc DiscoverCreate(Payload) returns (Payload);
-  rpc DiscoverClose(Payload) returns (Payload);
-  rpc DiscoverAddCandidate(Payload) returns (Payload);
-  rpc DiscoverScanValue(Payload) returns (Payload);
-  rpc DiscoverConstraintScan(Payload) returns (Payload);
-  rpc DiscoverSynthesizePattern(Payload) returns (Payload);
-  rpc DiscoverPathConsensus(Payload) returns (Payload);
-  rpc DiscoverPathValidate(Payload) returns (Payload);
-  rpc DiscoverWatch(Payload) returns (Payload);
-  rpc DiscoverUnwatchAll(Payload) returns (Payload);
-  rpc DiscoverActionBegin(Payload) returns (Payload);
-  rpc DiscoverActionEnd(Payload) returns (Payload);
-  rpc DiscoverWatchRegion(Payload) returns (Payload);
-  rpc DiscoverGetHeat(Payload) returns (Payload);
-  rpc DiscoverRankFunctions(Payload) returns (Payload);
-  rpc DiscoverWatchImport(Payload) returns (Payload);
-  rpc DiscoverResetHeat(Payload) returns (Payload);
-  rpc DiscoverExport(Payload) returns (Payload);
-  rpc DiscoverImport(Payload) returns (Payload);
-  rpc DiscoverDiffObjects(Payload) returns (Payload);
-  rpc DiscoverApplyWatchHits(Payload) returns (Payload);
-  rpc DiscoverGetEvidence(Payload) returns (Payload);
-  rpc DiscoverClusterType(Payload) returns (Payload);
-  rpc DiscoverGetCandidates(Payload) returns (stream Payload);
+  rpc DiscoverCreate(Empty) returns (DiscoverCreateResponse);
+  rpc DiscoverClose(DiscoverCloseRequest) returns (Empty);
+  rpc DiscoverAddCandidate(DiscoverAddCandidateRequest) returns (DiscoverAddCandidateResponse);
+  rpc DiscoverScanValue(DiscoverScanValueRequest) returns (DiscoverScanValueResponse);
+  rpc DiscoverConstraintScan(DiscoverConstraintScanRequest) returns (Empty);
+  rpc DiscoverSynthesizePattern(DiscoverSynthesizePatternRequest) returns (DiscoverSynthesizePatternResponse);
+  rpc DiscoverPathConsensus(DiscoverPathConsensusRequest) returns (DiscoverPathConsensusResponse);
+  rpc DiscoverPathValidate(DiscoverPathValidateRequest) returns (DiscoverPathValidateResponse);
+  rpc DiscoverWatch(DiscoverWatchRequest) returns (Empty);
+  rpc DiscoverUnwatchAll(DiscoverUnwatchAllRequest) returns (Empty);
+  rpc DiscoverActionBegin(DiscoverActionBeginRequest) returns (Empty);
+  rpc DiscoverActionEnd(DiscoverActionEndRequest) returns (Empty);
+  rpc DiscoverWatchRegion(DiscoverWatchRegionRequest) returns (Empty);
+  rpc DiscoverGetHeat(DiscoverGetHeatRequest) returns (DiscoverGetHeatResponse);
+  rpc DiscoverRankFunctions(DiscoverRankFunctionsRequest) returns (DiscoverRankFunctionsResponse);
+  rpc DiscoverWatchImport(DiscoverWatchImportRequest) returns (Empty);
+  rpc DiscoverResetHeat(DiscoverResetHeatRequest) returns (Empty);
+  rpc DiscoverExport(DiscoverExportRequest) returns (DiscoverExportResponse);
+  rpc DiscoverImport(DiscoverImportRequest) returns (Empty);
+  rpc DiscoverDiffObjects(DiscoverDiffObjectsRequest) returns (DiscoverDiffObjectsResponse);
+  rpc DiscoverApplyWatchHits(DiscoverApplyWatchHitsRequest) returns (Empty);
+  rpc DiscoverGetEvidence(DiscoverGetEvidenceRequest) returns (DiscoverGetEvidenceResponse);
+  rpc DiscoverClusterType(DiscoverClusterTypeRequest) returns (Empty);
+  rpc DiscoverGetCandidates(DiscoverGetCandidatesRequest) returns (stream DiscoverGetCandidatesResponse);
 }
 
 service Code {
-  rpc DisasmEnumBackends(Payload) returns (stream Payload);
-  rpc DisasmGetBackend(Payload) returns (Payload);
-  rpc DisasmSetBackend(Payload) returns (Payload);
-  rpc InstrLen(Payload) returns (Payload);
-  rpc Disasm(Payload) returns (stream Payload);
-  rpc BuildStub(Payload) returns (Payload);
-  rpc PatchCreate(Payload) returns (Payload);
-  rpc PatchEnable(Payload) returns (Payload);
-  rpc PatchRemove(Payload) returns (Payload);
-  rpc PatchEnum(Payload) returns (stream Payload);
+  rpc DisasmEnumBackends(Empty) returns (stream DisasmEnumBackendsResponse);
+  rpc DisasmGetBackend(Empty) returns (DisasmGetBackendResponse);
+  rpc DisasmSetBackend(DisasmSetBackendRequest) returns (Empty);
+  rpc InstrLen(InstrLenRequest) returns (InstrLenResponse);
+  rpc Disasm(DisasmRequest) returns (stream DisasmResponse);
+  rpc BuildStub(BuildStubRequest) returns (BuildStubResponse);
+  rpc PatchCreate(PatchCreateRequest) returns (PatchCreateResponse);
+  rpc PatchEnable(PatchEnableRequest) returns (Empty);
+  rpc PatchRemove(PatchRemoveRequest) returns (Empty);
+  rpc PatchEnum(Empty) returns (stream PatchEnumResponse);
 }
 
 service Pe {
-  rpc EnumSections(Payload) returns (stream Payload);
-  rpc EnumExports(Payload) returns (stream Payload);
-  rpc EnumImports(Payload) returns (stream Payload);
+  rpc EnumSections(EnumSectionsRequest) returns (stream EnumSectionsResponse);
+  rpc EnumExports(EnumExportsRequest) returns (stream EnumExportsResponse);
+  rpc EnumImports(EnumImportsRequest) returns (stream EnumImportsResponse);
 }
 
 service Watch {
-  rpc WatchHw(Payload) returns (Payload);
-  rpc WatchPage(Payload) returns (Payload);
-  rpc Unwatch(Payload) returns (Payload);
-  rpc EnumWatches(Payload) returns (stream Payload);
-  rpc WatchRefresh(Payload) returns (Payload);
-  rpc PollWatchHits(Payload) returns (stream Payload);
+  rpc WatchHw(WatchHwRequest) returns (WatchHwResponse);
+  rpc WatchPage(WatchPageRequest) returns (WatchPageResponse);
+  rpc Unwatch(UnwatchRequest) returns (Empty);
+  rpc EnumWatches(Empty) returns (stream EnumWatchesResponse);
+  rpc WatchRefresh(Empty) returns (Empty);
+  rpc PollWatchHits(PollWatchHitsRequest) returns (stream PollWatchHitsResponse);
 }
 
 service Injection {
-  rpc InjectDll(Payload) returns (Payload);
-  rpc UnloadDll(Payload) returns (Payload);
-  rpc TrackLoadedDll(Payload) returns (Payload);
+  rpc InjectDll(InjectDllRequest) returns (InjectDllResponse);
+  rpc UnloadDll(UnloadDllRequest) returns (UnloadDllResponse);
+  rpc TrackLoadedDll(TrackLoadedDllRequest) returns (Empty);
 }

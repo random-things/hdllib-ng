@@ -1,105 +1,62 @@
 #include "hdl/rpc/v1/services.rpc.hpp"
 
 #include <cstdio>
-#include <cstring>
 #include <set>
 #include <string>
 
 namespace {
-
-int g_pass = 0;
-int g_fail = 0;
-
+int passed = 0, failed = 0;
 #define CHECK(condition, ...)                                                                      \
     do {                                                                                           \
         if (!(condition)) {                                                                        \
             std::printf("FAIL: " __VA_ARGS__);                                                     \
             std::printf("\n");                                                                     \
-            ++g_fail;                                                                              \
-        } else {                                                                                   \
-            ++g_pass;                                                                              \
-        }                                                                                          \
+            ++failed;                                                                              \
+        } else                                                                                     \
+            ++passed;                                                                              \
     } while (0)
 
-std::set<std::string> LoadDeclaredHandlers(const char* path) {
-    std::set<std::string> out;
-    FILE* file = nullptr;
-    if (fopen_s(&file, path, "rb") != 0 || !file) {
-        return out;
-    }
-    std::string text;
-    char buffer[4096];
-    while (const size_t size = fread(buffer, 1, sizeof(buffer), file)) {
-        text.append(buffer, size);
-    }
-    fclose(file);
-
-    const char* begin = text.c_str();
-    const char* cursor = begin;
-    while (const char* handle = std::strstr(cursor, "Handle")) {
-        const char* scan = handle;
-        while (scan > begin && (scan[-1] == ' ' || scan[-1] == '\t')) {
-            --scan;
-        }
-        if (scan >= begin + 4 && std::strncmp(scan - 4, "bool", 4) == 0) {
-            const char* end = handle;
-            while ((*end >= 'A' && *end <= 'Z') || (*end >= 'a' && *end <= 'z') ||
-                   (*end >= '0' && *end <= '9') || *end == '_') {
-                ++end;
-            }
-            const char* open = end;
-            while (*open == ' ' || *open == '\t') {
-                ++open;
-            }
-            if (*open == '(' && end > handle) {
-                out.emplace(handle, end);
-            }
-        }
-        cursor = handle + 6;
-    }
-    return out;
-}
-
 void TestGeneratedInventory() {
-    std::set<std::string> names;
-    std::set<std::string> generated_handlers;
-    for (const auto& method : hdl::rpc::kMethods) {
-        CHECK(!method.name.empty(), "generated RPC method has an empty name");
-        CHECK(method.name.starts_with("hdl.rpc.v1."), "method is outside hdl.rpc.v1: %.*s",
-              static_cast<int>(method.name.size()), method.name.data());
-        CHECK(names.emplace(method.name).second, "duplicate method: %.*s",
-              static_cast<int>(method.name.size()), method.name.data());
+    std::set<std::string> methods, services, handlers;
+    size_t streams = 0;
+    for (const auto& metadata : hdl::rpc::kMethods) {
+        CHECK(!metadata.name.empty(), "generated RPC method has an empty name");
+        CHECK(metadata.name.starts_with("hdl.rpc.v1."), "method outside hdl.rpc.v1: %.*s",
+              static_cast<int>(metadata.name.size()), metadata.name.data());
+        CHECK(methods.emplace(metadata.name).second, "duplicate method: %.*s",
+              static_cast<int>(metadata.name.size()), metadata.name.data());
+        CHECK(handlers.emplace(metadata.handler_name).second, "duplicate handler: %.*s",
+              static_cast<int>(metadata.handler_name.size()), metadata.handler_name.data());
+        CHECK(!metadata.request_type.ends_with(".Payload") &&
+                  !metadata.response_type.ends_with(".Payload"),
+              "legacy Payload remains: %.*s", static_cast<int>(metadata.name.size()),
+              metadata.name.data());
         hdl::rpc::Method parsed{};
-        CHECK(hdl::rpc::ParseMethod(method.name, &parsed) && parsed == method.method,
-              "generated ParseMethod round-trip failed: %.*s", static_cast<int>(method.name.size()),
-              method.name.data());
-        const size_t slash = method.name.rfind('/');
-        CHECK(slash != std::string_view::npos, "method has no service separator: %.*s",
-              static_cast<int>(method.name.size()), method.name.data());
+        CHECK(hdl::rpc::ParseMethod(metadata.name, &parsed) && parsed == metadata.method,
+              "ParseMethod failed: %.*s", static_cast<int>(metadata.name.size()),
+              metadata.name.data());
+        const size_t slash = metadata.name.rfind('/');
+        CHECK(slash != std::string_view::npos, "method has no service separator");
         if (slash != std::string_view::npos) {
-            generated_handlers.emplace("Handle" + std::string(method.name.substr(slash + 1)));
+            services.emplace(metadata.name.substr(0, slash));
+            const size_t dot = metadata.name.rfind('.', slash);
+            const std::string expected =
+                "Handle" + std::string(metadata.name.substr(dot + 1, slash - dot - 1)) + "_" +
+                std::string(metadata.name.substr(slash + 1));
+            CHECK(metadata.handler_name == expected, "handler is not service-qualified: %.*s",
+                  static_cast<int>(metadata.handler_name.size()), metadata.handler_name.data());
         }
+        streams += metadata.server_streaming ? 1 : 0;
     }
-    CHECK(!names.empty(), "protobuf schema generated no RPC methods");
-
-#ifndef HDL_HANDLERS_HPP
-#error "HDL_HANDLERS_HPP must name src/ipc/handlers.hpp"
-#endif
-    const auto declared = LoadDeclaredHandlers(HDL_HANDLERS_HPP);
-    CHECK(!declared.empty(), "failed to parse handlers from %s", HDL_HANDLERS_HPP);
-    for (const auto& handler : declared) {
-        CHECK(generated_handlers.contains(handler), "handler absent from protobuf schema: %s",
-              handler.c_str());
-    }
-    for (const auto& handler : generated_handlers) {
-        CHECK(declared.contains(handler), "schema method has no handler: %s", handler.c_str());
-    }
+    CHECK(std::size(hdl::rpc::kMethods) == 97, "expected 97 methods, got %zu",
+          std::size(hdl::rpc::kMethods));
+    CHECK(services.size() == 12, "expected 12 services, got %zu", services.size());
+    CHECK(streams == 23, "expected 23 server streams, got %zu", streams);
 }
-
 } // namespace
 
 int main() {
     TestGeneratedInventory();
-    std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
-    return g_fail == 0 ? 0 : 1;
+    std::printf("\n%d passed, %d failed\n", passed, failed);
+    return failed ? 1 : 0;
 }

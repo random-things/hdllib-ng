@@ -28,7 +28,7 @@ message Request {
   string method = 2;
   uint32 timeout_ms = 3;
   bytes payload = 4;
-  bool stream_response = 5;
+  reserved 5;
 }
 
 message Response {

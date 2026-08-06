@@ -1,0 +1,52 @@
+edition = "2023";
+package hdl.rpc.v1;
+import "hdl/rpc/v1/types.proto";
+option optimize_for = LITE_RUNTIME;
+
+message ResolveRipRequest { fixed64 address = 1; uint32 displacement_offset = 2; uint32 instruction_length = 3; }
+message ResolveRipResponse { fixed64 address = 1; }
+message FollowPointersRequest { fixed64 base = 1; repeated sint64 offsets = 2; }
+message FollowPointersResponse { fixed64 address = 1; }
+message ModuleBaseRequest { string module = 1; }
+message ModuleBaseResponse { fixed64 base = 1; }
+message ResolvePatternRequest {
+  string pattern = 1;
+  uint32 hit_index = 2;
+  sint32 pattern_offset = 3;
+  uint32 rip_displacement_offset = 4;
+  uint32 rip_instruction_length = 5;
+  repeated sint64 follow_offsets = 6;
+  SearchScope scope = 7;
+  uint32 max_scan_hits = 8;
+}
+message ResolvePatternResponse { PatternResult result = 1; }
+message FindStringXrefsRequest {
+  oneof value { bytes narrow_value = 1; string wide_value = 2; }
+  uint32 xref_flags = 3;
+  SearchScope scope = 4;
+  uint32 max_results = 5;
+}
+message FindStringXrefsResponse { repeated fixed64 addresses = 1; }
+message PointerScanRequest {
+  fixed64 target = 1;
+  uint32 max_depth = 2;
+  uint32 max_offset = 3;
+  uint32 max_results = 4;
+  SearchScope scope = 5;
+}
+message PointerScanResponse { repeated PointerPath paths = 1; }
+message ProbeStructRequest { fixed64 address = 1; uint32 size = 2; uint32 max_fields = 3; }
+message ProbeStructResponse { repeated StructField fields = 1; }
+message EnumFunctionsRequest { SearchScope scope = 1; uint32 max_results = 2; }
+message EnumFunctionsResponse { repeated FunctionInfo functions = 1; }
+message XrefsFromRequest { fixed64 seed = 1; uint32 max_depth = 2; uint32 max_nodes = 3; uint32 kinds = 4; }
+message XrefsFromResponse { repeated XrefEdge edges = 1; }
+message WalkVtableRequest { fixed64 address = 1; bool is_object = 2; }
+message WalkVtableResponse { repeated fixed64 slots = 1; }
+message QueryRttiNameRequest { fixed64 address = 1; bool is_object = 2; }
+message QueryRttiNameResponse { string name = 1; }
+message ResolveFunctionRequest { fixed64 address = 1; SearchScope scope = 2; }
+message ResolveFunctionResponse { FunctionInfo function = 1; }
+message XrefsToRequest { fixed64 target = 1; uint32 max_nodes = 2; uint32 kinds = 3; SearchScope scope = 4; }
+message XrefsToResponse { repeated XrefEdge edges = 1; }
+message InvalidateFnIndexRequest { string module = 1; }
