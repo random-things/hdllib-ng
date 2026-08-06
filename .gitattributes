@@ -1,0 +1,2 @@
+# The RPC contract is byte-compared with generator output, which always uses LF.
+/proto/hdl/rpc/v1/contract.json text eol=lf
