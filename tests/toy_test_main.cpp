@@ -703,6 +703,76 @@ void RunToyVerify(Counters& c, const std::wstring& client, const std::wstring& d
             Report(c, Contains(list.out, L"toy_place") || Contains(list.out, L"name=toy_place"),
                    false, "toy store persisted place", "");
         }
+        if (stitch_pad) {
+            wchar_t pad_hex[32];
+            Hex(pad_hex, 32, stitch_pad);
+
+            /* Drop in-target ledger + restore originals. Full unload/reinject is the
+             * operator path, but reinject currently fails with NO_MEM in this harness;
+             * patch remove clears the same ledger state --apply must recreate. */
+            uint64_t stitch_handle = 0;
+            {
+                auto listed = Cli(ctx, {L"patch", L"list"});
+                ExpectOk(c, "toy patch list after stitch", listed);
+                ParseU64After(listed.out, L"handle=", &stitch_handle);
+            }
+            if (stitch_handle) {
+                wchar_t h[32];
+                swprintf_s(h, L"%llu", static_cast<unsigned long long>(stitch_handle));
+                ExpectOk(c, "toy patch remove to clear ledger", Cli(ctx, {L"patch", L"remove", h}));
+            } else {
+                Report(c, false, false, "toy patch remove to clear ledger", "no handle");
+            }
+
+            {
+                ProcResult r;
+                RunProcess(
+                    ctx.client,
+                    {L"--store", store_path, std::to_wstring(ctx.pid), L"store", L"revalidate"},
+                    nullptr, 90000, &r);
+                ExpectExit0(c, "toy store revalidate (no apply)", r);
+                Report(c, Contains(r.out, L"not applied"), false,
+                       "toy revalidate patch not applied by default", "");
+            }
+            {
+                auto rd = Cli(ctx, {L"read", pad_hex, L"12"});
+                ExpectOk(c, "toy read pad before apply", rd);
+                Report(c, Contains(rd.out, L"909090") && !Contains(rd.out, L"48B8"), false,
+                       "toy pad still original before apply", "");
+            }
+            uint64_t applied_handle = 0;
+            {
+                ProcResult r;
+                RunProcess(ctx.client,
+                           {L"--store", store_path, std::to_wstring(ctx.pid), L"store",
+                            L"revalidate", L"--apply"},
+                           nullptr, 90000, &r);
+                ExpectExit0(c, "toy store revalidate --apply", r);
+                Report(c, Contains(r.out, L"applied+enabled") || Contains(r.out, L"patch_handle="),
+                       false, "toy revalidate --apply restored patch", "");
+                ParseU64After(r.out, L"handle=", &applied_handle);
+                if (!applied_handle) {
+                    ParseHexAfter(r.out, L"patch_handle=", &applied_handle);
+                }
+            }
+            {
+                auto rd = Cli(ctx, {L"read", pad_hex, L"12"});
+                ExpectOk(c, "toy read pad after apply", rd);
+                Report(c, Contains(rd.out, L"48B8"), false, "toy pad has mov rax jmp after apply",
+                       "");
+            }
+            if (applied_handle) {
+                wchar_t h[32];
+                swprintf_s(h, L"%llu", static_cast<unsigned long long>(applied_handle));
+                ExpectOk(c, "toy patch disable after apply", Cli(ctx, {L"patch", L"disable", h}));
+                auto rd = Cli(ctx, {L"read", pad_hex, L"12"});
+                ExpectOk(c, "toy read pad after disable", rd);
+                Report(c, Contains(rd.out, L"909090") && !Contains(rd.out, L"48B8"), false,
+                       "toy pad restored after disable", "");
+            } else {
+                Report(c, false, false, "toy patch handle after apply", "missing handle");
+            }
+        }
         DeleteFileW(store_path);
         if (stitch_pad) {
             wchar_t a[32];

@@ -16,7 +16,7 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 | 1 | Named RPC negotiation and capability discovery | **Done** (minor follow-ups) |
 | 2 | Safe in-process call lifecycle | **Open** |
 | 3 | Remote surface parity for operator-critical controls | **Done** |
-| 4 | Patch / stub durability across unload and reinject | **Partial** |
+| 4 | Patch / stub durability across unload and reinject | **Done** |
 | 5 | Connection-scoped session isolation | **Open** |
 | 6 | Durable import redirection (IAT rewrite) | **Open** |
 | 7 | Discover session restore completeness | **Open** |
@@ -90,35 +90,23 @@ exported C control ABI was removed; only inject callbacks remain.
 
 ---
 
-## 4. Patch / stub durability across unload and reinject — **partial**
+## 4. Patch / stub durability across unload and reinject — **done**
 
 **Why it matters:** Workflow 7 (“install reversible instrumentation”) and the
-`recipe place` / `recipe stitch` path persist *intent* in the interest store,
-but patch revalidation resolves the target address only and does **not**
-re-apply bytes. After unload/reload or process restart, stitches are gone until
-manual `patch enable`.
+`recipe place` / `recipe stitch` path persist *intent* in the interest store.
+After unload/reload or process restart, the in-target patch ledger is gone;
+durability is a **client** concern.
 
-**Current state:** Patch ledger in [`src/code.cpp`](../src/code.cpp). Interest
-store v3 can persist `patch` / `stub` locators including `enabled_intent`,
-target interest, stub kind, and `steal_min`
-([`store.cpp`](../tools/client/store.cpp)). `store revalidate` rebuilds stubs
-via `BuildStub` when possible, but **patch** locators remain address-only
-(“not applied”). There is no `revalidate --apply` / `recipe restitch`.
+**Implemented:** `store revalidate --apply` (alias `recipe restitch`) resolves
+targets, rebuilds stubs via `BuildStub`, recreates ledger entries with
+`PatchCreate`, and enables patches when `enabled_intent` is set. Default
+`store revalidate` remains address-only for patches (`(not applied)`) so ASLR
+churn cannot surprise-write code. Unload / process exit still drop in-target
+ledger state.
 
-**What needs to be done:**
-
-1. Finish the apply path: `store revalidate --apply` (or `recipe restitch`) that
-   resolves targets, rebuilds stubs if needed, recreates ledger entries, and
-   optionally enables patches when `enabled_intent` is set.
-2. Keep unload semantics explicit: `HdlUnloadDll` / process exit drop in-target
-   ledger state — durability stays a **client** concern.
-3. Document the safety default: revalidate updates addresses; apply is explicit
-   so ASLR churn cannot surprise-write code.
-4. Toy/client tests: stitch → save store → reinject → revalidate --apply →
-   verify bytes and disable/restore.
-
-**Acceptance:** An operator can save a stitch, restart the target, reinject, and
-restore instrumentation with one explicit command.
+**Acceptance:** An operator can save a stitch, unload/reinject the DLL, and
+restore instrumentation with one explicit command
+(`store revalidate --apply` or `recipe restitch`).
 
 ---
 
@@ -350,5 +338,5 @@ one x64 DLL can run inside a 32-bit process. Until then this item stays closed.
 
 Injection research that is intentionally not scheduled:
 [future/](future/README.md) (e.g. I/O ring completions). Prefer finishing open
-items above (especially call orphans, patch `--apply`, session isolation) before
+items above (especially call orphans, session isolation) before
 adding more inject techniques.

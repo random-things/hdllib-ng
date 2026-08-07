@@ -65,6 +65,70 @@ uint64_t ResolveInterestAddr(ControllerState& st, const char* name) {
     return 0;
 }
 
+Locator* FindSiblingStub(Interest& in) {
+    for (auto& loc : in.locators) {
+        if (loc.type == Locator::Stub) {
+            return &loc;
+        }
+    }
+    return nullptr;
+}
+
+const Locator* FindSiblingStub(const Interest& in) {
+    for (const auto& loc : in.locators) {
+        if (loc.type == Locator::Stub) {
+            return &loc;
+        }
+    }
+    return nullptr;
+}
+
+bool EncodeJmpToStub(PipeClient& client, uint64_t stub_va, uint32_t steal_min,
+                     std::vector<uint8_t>* out, LogFn& log) {
+    if (!out || !stub_va) {
+        return false;
+    }
+    HdlStubDesc jmp{};
+    jmp.kind = HDL_STUB_MOV_RAX_JMP;
+    jmp.target = stub_va;
+    jmp.alloc_rx = 0;
+    HdlStubResult jmp_bytes{};
+    auto s = BuildStub(client, jmp, &jmp_bytes);
+    if (!s || !jmp_bytes.code_size) {
+        Wlog(log, L"jmp stub encode failed status=%ls", StatusName(s.status));
+        return false;
+    }
+    const uint32_t patch_len =
+        steal_min ? (std::max)(steal_min, jmp_bytes.code_size) : jmp_bytes.code_size;
+    out->assign(patch_len, 0x90);
+    memcpy(out->data(), jmp_bytes.code, jmp_bytes.code_size);
+    return true;
+}
+
+bool CreateAndMaybeEnablePatch(PipeClient& client, uint64_t addr, const uint8_t* bytes,
+                               uint32_t size, const char* name, int enabled_intent,
+                               uint64_t* out_handle, LogFn& log) {
+    if (!bytes || !size || !out_handle) {
+        return false;
+    }
+    uint64_t handle = 0;
+    auto s = PatchCreate(client, addr, bytes, size, name, &handle);
+    if (!s) {
+        Wlog(log, L"PatchCreate failed status=%ls", StatusName(s.status));
+        return false;
+    }
+    if (enabled_intent) {
+        s = PatchEnable(client, handle, 1);
+        if (!s) {
+            Wlog(log, L"PatchEnable failed status=%ls", StatusName(s.status));
+            PatchRemove(client, handle);
+            return false;
+        }
+    }
+    *out_handle = handle;
+    return true;
+}
+
 } // namespace
 
 void RememberPath(ControllerState* st, const HdlPointerPath& path, const wchar_t* module_or_null) {
@@ -122,194 +186,273 @@ bool EnsureDiscoverSession(ControllerState& st, LogFn log) {
     return true;
 }
 
-int RevalidateStore(ControllerState& st, LogFn log) {
+int RevalidateStore(ControllerState& st, LogFn log, bool apply) {
     if (!st.client) {
         return 0;
     }
     int ok = 0;
-    for (auto& in : st.store.interests) {
-        for (auto& loc : in.locators) {
-            loc.last_ok = false;
-            loc.last_addr = 0;
-            if (loc.type == Locator::Pattern) {
-                std::wstring mod = Widen(loc.pattern.module.c_str());
-                HdlPatternResult pr{};
-                auto s = ResolvePattern(*st.client, loc.pattern.pattern.c_str(), 0,
-                                        loc.pattern.pattern_offset, loc.pattern.rip_disp,
-                                        loc.pattern.rip_len, {},
-                                        HDL_SEARCH_IMAGE | (mod.empty() ? 0u : HDL_SEARCH_MODULE),
-                                        mod.empty() ? nullptr : mod.c_str(), &pr);
-                if (s) {
-                    loc.last_addr = pr.resolved_addr;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs pattern -> %016llx", in.name.c_str(),
-                         static_cast<unsigned long long>(pr.resolved_addr));
-                } else {
-                    Wlog(log, L"[FAIL] %hs pattern status=%ls", in.name.c_str(),
-                         StatusName(s.status));
-                }
-            } else if (loc.type == Locator::Path) {
-                std::wstring mod = Widen(loc.path.module.c_str());
-                uint64_t base = 0;
-                auto mb = ModBase(*st.client, mod.empty() ? nullptr : mod.c_str(), &base);
+
+    auto revalidate_non_patch = [&](Interest& in, Locator& loc) {
+        loc.last_ok = false;
+        loc.last_addr = 0;
+        if (loc.type == Locator::Pattern) {
+            std::wstring mod = Widen(loc.pattern.module.c_str());
+            HdlPatternResult pr{};
+            auto s = ResolvePattern(*st.client, loc.pattern.pattern.c_str(), 0,
+                                    loc.pattern.pattern_offset, loc.pattern.rip_disp,
+                                    loc.pattern.rip_len, {},
+                                    HDL_SEARCH_IMAGE | (mod.empty() ? 0u : HDL_SEARCH_MODULE),
+                                    mod.empty() ? nullptr : mod.c_str(), &pr);
+            if (s) {
+                loc.last_addr = pr.resolved_addr;
+                loc.last_ok = true;
+                ++ok;
+                Wlog(log, L"[OK] %hs pattern -> %016llx", in.name.c_str(),
+                     static_cast<unsigned long long>(pr.resolved_addr));
+            } else {
+                Wlog(log, L"[FAIL] %hs pattern status=%ls", in.name.c_str(), StatusName(s.status));
+            }
+        } else if (loc.type == Locator::Path) {
+            std::wstring mod = Widen(loc.path.module.c_str());
+            uint64_t base = 0;
+            auto mb = ModBase(*st.client, mod.empty() ? nullptr : mod.c_str(), &base);
+            if (!mb || !base) {
+                Wlog(log, L"[FAIL] %hs path modbase", in.name.c_str());
+                return;
+            }
+            std::vector<int64_t> offs;
+            for (int32_t o : loc.path.offsets) {
+                offs.push_back(o);
+            }
+            uint64_t addr = 0;
+            auto s = FollowPointers(*st.client, base + loc.path.static_rva, offs, &addr);
+            if (s) {
+                loc.last_addr = addr;
+                loc.last_ok = true;
+                ++ok;
+                Wlog(log, L"[OK] %hs path -> %016llx", in.name.c_str(),
+                     static_cast<unsigned long long>(addr));
+            } else {
+                Wlog(log, L"[FAIL] %hs path status=%ls", in.name.c_str(), StatusName(s.status));
+            }
+        } else if (loc.type == Locator::Export) {
+            std::wstring mod = Widen(loc.exp.module.c_str());
+            uint64_t addr = 0;
+            auto s = ResolveExport(*st.client, mod.empty() ? nullptr : mod.c_str(),
+                                   loc.exp.name.c_str(), &addr);
+            if (s && addr) {
+                loc.last_addr = addr;
+                loc.last_ok = true;
+                ++ok;
+                Wlog(log, L"[OK] %hs export %hs -> %016llx", in.name.c_str(), loc.exp.name.c_str(),
+                     static_cast<unsigned long long>(addr));
+            } else {
+                Wlog(log, L"[FAIL] %hs export status=%ls", in.name.c_str(), StatusName(s.status));
+            }
+        } else if (loc.type == Locator::Import) {
+            std::wstring mod = Widen(loc.imp.module.c_str());
+            uint64_t base = 0;
+            if (!loc.imp.module.empty()) {
+                auto mb = ModBase(*st.client, mod.c_str(), &base);
                 if (!mb || !base) {
-                    Wlog(log, L"[FAIL] %hs path modbase", in.name.c_str());
-                    continue;
-                }
-                std::vector<int64_t> offs;
-                for (int32_t o : loc.path.offsets) {
-                    offs.push_back(o);
-                }
-                uint64_t addr = 0;
-                auto s = FollowPointers(*st.client, base + loc.path.static_rva, offs, &addr);
-                if (s) {
-                    loc.last_addr = addr;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs path -> %016llx", in.name.c_str(),
-                         static_cast<unsigned long long>(addr));
-                } else {
-                    Wlog(log, L"[FAIL] %hs path status=%ls", in.name.c_str(), StatusName(s.status));
-                }
-            } else if (loc.type == Locator::Export) {
-                std::wstring mod = Widen(loc.exp.module.c_str());
-                uint64_t addr = 0;
-                auto s = ResolveExport(*st.client, mod.empty() ? nullptr : mod.c_str(),
-                                       loc.exp.name.c_str(), &addr);
-                if (s && addr) {
-                    loc.last_addr = addr;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs export %hs -> %016llx", in.name.c_str(),
-                         loc.exp.name.c_str(), static_cast<unsigned long long>(addr));
-                } else {
-                    Wlog(log, L"[FAIL] %hs export status=%ls", in.name.c_str(),
-                         StatusName(s.status));
-                }
-            } else if (loc.type == Locator::Import) {
-                std::wstring mod = Widen(loc.imp.module.c_str());
-                uint64_t base = 0;
-                if (!loc.imp.module.empty()) {
-                    auto mb = ModBase(*st.client, mod.c_str(), &base);
-                    if (!mb || !base) {
-                        Wlog(log, L"[FAIL] %hs import modbase", in.name.c_str());
-                        continue;
-                    }
-                }
-                std::vector<HdlImportInfo> imports;
-                auto s = EnumImports(*st.client, base, &imports);
-                bool found = false;
-                if (s) {
-                    for (const auto& info : imports) {
-                        if (_stricmp(info.module, loc.imp.dll.c_str()) != 0) {
-                            std::string want = loc.imp.dll;
-                            if (want.find('.') == std::string::npos) {
-                                want += ".dll";
-                            }
-                            if (_stricmp(info.module, want.c_str()) != 0) {
-                                continue;
-                            }
-                        }
-                        if (!info.name[0] || _stricmp(info.name, loc.imp.name.c_str()) != 0) {
-                            continue;
-                        }
-                        if (info.bound_va) {
-                            loc.last_addr = info.bound_va;
-                            loc.last_ok = true;
-                            ++ok;
-                            found = true;
-                            Wlog(log, L"[OK] %hs import %hs!%hs -> %016llx", in.name.c_str(),
-                                 loc.imp.dll.c_str(), loc.imp.name.c_str(),
-                                 static_cast<unsigned long long>(info.bound_va));
-                            break;
-                        }
-                    }
-                }
-                if (!found) {
-                    Wlog(log, L"[FAIL] %hs import %hs!%hs status=%ls", in.name.c_str(),
-                         loc.imp.dll.c_str(), loc.imp.name.c_str(), StatusName(s.status));
-                }
-            } else if (loc.type == Locator::Cave) {
-                uint64_t near_addr = loc.cave.near_abs;
-                if (!near_addr && loc.cave.near_rva) {
-                    std::wstring mod = Widen(loc.cave.module.c_str());
-                    uint64_t base = 0;
-                    if (ModBase(*st.client, mod.empty() ? nullptr : mod.c_str(), &base)) {
-                        near_addr = base + loc.cave.near_rva;
-                    }
-                }
-                HdlCaveQuery q{};
-                q.min_size = loc.cave.min_size ? loc.cave.min_size : 16;
-                q.fill_byte = loc.cave.fill;
-                q.max_results = 64;
-                q.near_addr = near_addr;
-                q.max_distance = near_addr ? 0x7FFFFFFFull : 0;
-                std::wstring mod = Widen(loc.cave.module.c_str());
-                q.module_or_null = mod.empty() ? nullptr : mod.c_str();
-                if (!mod.empty()) {
-                    q.search_flags = HDL_SEARCH_MODULE | HDL_SEARCH_IMAGE;
-                }
-                std::vector<HdlCaveInfo> caves;
-                auto s = FindCaves(*st.client, q, &caves);
-                const size_t bi = ScoreBestCave(caves, near_addr ? near_addr : 0);
-                if (s && bi != static_cast<size_t>(-1)) {
-                    loc.last_addr = caves[bi].addr;
-                    loc.cave.last_size = caves[bi].size;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs cave -> %016llx size=%llu", in.name.c_str(),
-                         static_cast<unsigned long long>(caves[bi].addr),
-                         static_cast<unsigned long long>(caves[bi].size));
-                } else {
-                    Wlog(log, L"[FAIL] %hs cave status=%ls", in.name.c_str(), StatusName(s.status));
-                }
-            } else if (loc.type == Locator::Patch) {
-                /* Address-only revalidate: resolve target interest or keep last_addr */
-                uint64_t addr = loc.last_addr;
-                if (!loc.patch.target_interest.empty()) {
-                    const uint64_t t = ResolveInterestAddr(st, loc.patch.target_interest.c_str());
-                    if (t) {
-                        addr = t;
-                    }
-                }
-                if (addr) {
-                    loc.last_addr = addr;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs patch target -> %016llx (not applied)", in.name.c_str(),
-                         static_cast<unsigned long long>(addr));
-                } else {
-                    Wlog(log, L"[FAIL] %hs patch no target addr", in.name.c_str());
-                }
-            } else if (loc.type == Locator::Stub) {
-                uint64_t target = loc.stub.target_abs;
-                if (!target && !loc.stub.target_interest.empty()) {
-                    target = ResolveInterestAddr(st, loc.stub.target_interest.c_str());
-                }
-                if (!target) {
-                    Wlog(log, L"[FAIL] %hs stub no target", in.name.c_str());
-                    continue;
-                }
-                HdlStubDesc desc{};
-                desc.kind = loc.stub.kind;
-                desc.target = target;
-                desc.steal_from = loc.stub.steal_min ? target : 0;
-                desc.steal_min_bytes = loc.stub.steal_min;
-                desc.alloc_rx = 1;
-                HdlStubResult result{};
-                auto s = BuildStub(*st.client, desc, &result);
-                if (s && result.stub_va) {
-                    loc.stub.last_stub_va = result.stub_va;
-                    loc.last_addr = result.stub_va;
-                    loc.last_ok = true;
-                    ++ok;
-                    Wlog(log, L"[OK] %hs stub -> %016llx", in.name.c_str(),
-                         static_cast<unsigned long long>(result.stub_va));
-                } else {
-                    Wlog(log, L"[FAIL] %hs stub status=%ls", in.name.c_str(), StatusName(s.status));
+                    Wlog(log, L"[FAIL] %hs import modbase", in.name.c_str());
+                    return;
                 }
             }
+            std::vector<HdlImportInfo> imports;
+            auto s = EnumImports(*st.client, base, &imports);
+            bool found = false;
+            if (s) {
+                for (const auto& info : imports) {
+                    if (_stricmp(info.module, loc.imp.dll.c_str()) != 0) {
+                        std::string want = loc.imp.dll;
+                        if (want.find('.') == std::string::npos) {
+                            want += ".dll";
+                        }
+                        if (_stricmp(info.module, want.c_str()) != 0) {
+                            continue;
+                        }
+                    }
+                    if (!info.name[0] || _stricmp(info.name, loc.imp.name.c_str()) != 0) {
+                        continue;
+                    }
+                    if (info.bound_va) {
+                        loc.last_addr = info.bound_va;
+                        loc.last_ok = true;
+                        ++ok;
+                        found = true;
+                        Wlog(log, L"[OK] %hs import %hs!%hs -> %016llx", in.name.c_str(),
+                             loc.imp.dll.c_str(), loc.imp.name.c_str(),
+                             static_cast<unsigned long long>(info.bound_va));
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                Wlog(log, L"[FAIL] %hs import %hs!%hs status=%ls", in.name.c_str(),
+                     loc.imp.dll.c_str(), loc.imp.name.c_str(), StatusName(s.status));
+            }
+        } else if (loc.type == Locator::Cave) {
+            uint64_t near_addr = loc.cave.near_abs;
+            if (!near_addr && loc.cave.near_rva) {
+                std::wstring mod = Widen(loc.cave.module.c_str());
+                uint64_t base = 0;
+                if (ModBase(*st.client, mod.empty() ? nullptr : mod.c_str(), &base)) {
+                    near_addr = base + loc.cave.near_rva;
+                }
+            }
+            HdlCaveQuery q{};
+            q.min_size = loc.cave.min_size ? loc.cave.min_size : 16;
+            q.fill_byte = loc.cave.fill;
+            q.max_results = 64;
+            q.near_addr = near_addr;
+            q.max_distance = near_addr ? 0x7FFFFFFFull : 0;
+            std::wstring mod = Widen(loc.cave.module.c_str());
+            q.module_or_null = mod.empty() ? nullptr : mod.c_str();
+            if (!mod.empty()) {
+                q.search_flags = HDL_SEARCH_MODULE | HDL_SEARCH_IMAGE;
+            }
+            std::vector<HdlCaveInfo> caves;
+            auto s = FindCaves(*st.client, q, &caves);
+            const size_t bi = ScoreBestCave(caves, near_addr ? near_addr : 0);
+            if (s && bi != static_cast<size_t>(-1)) {
+                loc.last_addr = caves[bi].addr;
+                loc.cave.last_size = caves[bi].size;
+                loc.last_ok = true;
+                ++ok;
+                Wlog(log, L"[OK] %hs cave -> %016llx size=%llu", in.name.c_str(),
+                     static_cast<unsigned long long>(caves[bi].addr),
+                     static_cast<unsigned long long>(caves[bi].size));
+            } else {
+                Wlog(log, L"[FAIL] %hs cave status=%ls", in.name.c_str(), StatusName(s.status));
+            }
+        } else if (loc.type == Locator::Stub) {
+            uint64_t target = loc.stub.target_abs;
+            if (!target && !loc.stub.target_interest.empty()) {
+                target = ResolveInterestAddr(st, loc.stub.target_interest.c_str());
+            }
+            if (!target) {
+                Wlog(log, L"[FAIL] %hs stub no target", in.name.c_str());
+                return;
+            }
+            HdlStubDesc desc{};
+            desc.kind = loc.stub.kind;
+            desc.target = target;
+            desc.steal_from = loc.stub.steal_min ? target : 0;
+            desc.steal_min_bytes = loc.stub.steal_min;
+            desc.alloc_rx = 1;
+            loc.stub.last_stub_va = 0;
+            HdlStubResult result{};
+            auto s = BuildStub(*st.client, desc, &result);
+            if (s && result.stub_va) {
+                loc.stub.last_stub_va = result.stub_va;
+                loc.last_addr = result.stub_va;
+                loc.last_ok = true;
+                ++ok;
+                Wlog(log, L"[OK] %hs stub -> %016llx", in.name.c_str(),
+                     static_cast<unsigned long long>(result.stub_va));
+            } else {
+                Wlog(log, L"[FAIL] %hs stub status=%ls", in.name.c_str(), StatusName(s.status));
+            }
+        }
+    };
+
+    auto revalidate_patch = [&](Interest& in, Locator& loc) {
+        const uint64_t prev_addr = loc.last_addr;
+        loc.last_ok = false;
+        loc.last_addr = 0;
+
+        uint64_t addr = prev_addr;
+        if (!loc.patch.target_interest.empty()) {
+            const uint64_t t = ResolveInterestAddr(st, loc.patch.target_interest.c_str());
+            if (t) {
+                addr = t;
+            }
+        }
+        if (!addr) {
+            if (const Locator* stub = FindSiblingStub(in)) {
+                if (stub->stub.target_abs) {
+                    addr = stub->stub.target_abs;
+                }
+            }
+        }
+        if (!addr) {
+            Wlog(log, L"[FAIL] %hs patch no target addr", in.name.c_str());
+            return;
+        }
+
+        if (!apply) {
+            loc.last_addr = addr;
+            loc.last_ok = true;
+            ++ok;
+            Wlog(log, L"[OK] %hs patch target -> %016llx (not applied)", in.name.c_str(),
+                 static_cast<unsigned long long>(addr));
+            return;
+        }
+
+        std::vector<uint8_t> patch_bytes;
+        const Locator* stub = FindSiblingStub(in);
+        if (stub) {
+            if (!stub->last_ok || !stub->stub.last_stub_va) {
+                Wlog(log, L"[FAIL] %hs patch restitch missing stub", in.name.c_str());
+                return;
+            }
+            if (!EncodeJmpToStub(*st.client, stub->stub.last_stub_va, stub->stub.steal_min,
+                                 &patch_bytes, log)) {
+                Wlog(log, L"[FAIL] %hs patch restitch encode", in.name.c_str());
+                return;
+            }
+        } else {
+            const std::wstring hex = Utf8ToWide(loc.patch.bytes_hex);
+            if (!ParseHexBytes(hex.c_str(), patch_bytes) || patch_bytes.empty()) {
+                Wlog(log, L"[FAIL] %hs patch bad bytes_hex", in.name.c_str());
+                return;
+            }
+        }
+
+        const char* patch_name = !loc.patch.name.empty() ? loc.patch.name.c_str() : in.name.c_str();
+        uint64_t handle = 0;
+        if (!CreateAndMaybeEnablePatch(*st.client, addr, patch_bytes.data(),
+                                       static_cast<uint32_t>(patch_bytes.size()), patch_name,
+                                       loc.patch.enabled_intent, &handle, log)) {
+            Wlog(log, L"[FAIL] %hs patch apply", in.name.c_str());
+            return;
+        }
+
+        loc.patch.bytes_hex = HexOf(patch_bytes.data(), patch_bytes.size());
+        loc.patch.last_handle = handle;
+        loc.last_addr = addr;
+        loc.last_ok = true;
+        ++ok;
+        st.last_patch_handle = handle;
+        st.last_patch_addr = addr;
+        st.last_patch_bytes_hex = loc.patch.bytes_hex;
+        if (loc.patch.enabled_intent) {
+            Wlog(log, L"[OK] %hs patch applied+enabled handle=%llu at %016llx", in.name.c_str(),
+                 static_cast<unsigned long long>(handle), static_cast<unsigned long long>(addr));
+        } else {
+            Wlog(log, L"[OK] %hs patch created (disabled) handle=%llu at %016llx", in.name.c_str(),
+                 static_cast<unsigned long long>(handle), static_cast<unsigned long long>(addr));
+        }
+    };
+
+    /* Pass 1: resolve/rebuild everything except patches so stub VAs and
+     * target_interest addresses are fresh before apply. */
+    for (auto& in : st.store.interests) {
+        for (auto& loc : in.locators) {
+            if (loc.type == Locator::Patch) {
+                continue;
+            }
+            revalidate_non_patch(in, loc);
+        }
+    }
+    /* Pass 2: patches (address-only or apply). */
+    for (auto& in : st.store.interests) {
+        for (auto& loc : in.locators) {
+            if (loc.type != Locator::Patch) {
+                continue;
+            }
+            revalidate_patch(in, loc);
         }
     }
     return ok;
@@ -496,32 +639,15 @@ int RecipeStitch(ControllerState& st, const char* interest_name, uint64_t target
     Wlog(log, L"stub_va=%016llx stolen=%u", static_cast<unsigned long long>(stub.stub_va),
          stub.stolen_bytes);
 
-    /* Absolute jmp to stub at target: use mov rax; jmp rax encoding from BuildStub without steal */
-    HdlStubDesc jmp{};
-    jmp.kind = HDL_STUB_MOV_RAX_JMP;
-    jmp.target = stub.stub_va;
-    jmp.alloc_rx = 0;
-    HdlStubResult jmp_bytes{};
-    s = BuildStub(*st.client, jmp, &jmp_bytes);
-    if (!s || !jmp_bytes.code_size) {
-        Wlog(log, L"jmp stub encode failed status=%ls", StatusName(s.status));
+    std::vector<uint8_t> patch;
+    if (!EncodeJmpToStub(*st.client, stub.stub_va, steal_min, &patch, log)) {
         return 1;
     }
-    const uint32_t patch_len =
-        steal_min ? (std::max)(steal_min, jmp_bytes.code_size) : jmp_bytes.code_size;
-    std::vector<uint8_t> patch(patch_len, 0x90);
-    memcpy(patch.data(), jmp_bytes.code, jmp_bytes.code_size);
 
     uint64_t handle = 0;
-    s = PatchCreate(*st.client, target_addr, patch.data(), static_cast<uint32_t>(patch.size()),
-                    interest_name, &handle);
-    if (!s) {
-        Wlog(log, L"PatchCreate failed status=%ls", StatusName(s.status));
-        return 1;
-    }
-    s = PatchEnable(*st.client, handle, 1);
-    if (!s) {
-        Wlog(log, L"PatchEnable failed status=%ls", StatusName(s.status));
+    if (!CreateAndMaybeEnablePatch(*st.client, target_addr, patch.data(),
+                                   static_cast<uint32_t>(patch.size()), interest_name, 1, &handle,
+                                   log)) {
         return 1;
     }
     st.last_patch_handle = handle;

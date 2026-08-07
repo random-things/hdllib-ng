@@ -45,7 +45,9 @@ struct StabilizeResult {
 /* Record a path result for later `store add … path`. */
 void RememberPath(ControllerState* st, const HdlPointerPath& path, const wchar_t* module_or_null);
 
-int RevalidateStore(ControllerState& st, LogFn log);
+/* Resolve locators; rebuild stubs. If apply, recreate patch ledger (and enable when
+ * enabled_intent is set). Default apply=false keeps patches address-only. */
+int RevalidateStore(ControllerState& st, LogFn log, bool apply = false);
 
 StabilizeResult RecipeAction(ControllerState& st, const char* action_name, uint64_t watch_fn,
                              LogFn log, const std::function<bool()>& wait_user);

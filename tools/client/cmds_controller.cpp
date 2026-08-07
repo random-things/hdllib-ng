@@ -332,9 +332,15 @@ CommandResult CmdStore(CmdCtx& ctx) {
     }
 
     if (sub == L"revalidate") {
+        bool apply = false;
+        for (int i = 4; i < ctx.argc; ++i) {
+            if (EqFlag(ctx.argv[i], L"--apply")) {
+                apply = true;
+            }
+        }
         std::vector<std::wstring> lines;
         auto log = [&](const std::wstring& s) { CollectLog(&lines, s); };
-        const int n = hdlcli::RevalidateStore(st, log);
+        const int n = hdlcli::RevalidateStore(st, log, apply);
         if (!SaveStoreTx(st, &err)) {
             return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, err.c_str());
         }
@@ -342,8 +348,14 @@ CommandResult CmdStore(CmdCtx& ctx) {
         w.BeginObject();
         w.Key("store");
         w.Str(st.store_path);
+        w.Key("apply");
+        w.Bool(apply);
         w.Key("ok");
         w.Num(n);
+        if (apply) {
+            w.Key("patch_handle");
+            w.HexStr(st.last_patch_handle);
+        }
         w.Key("lines");
         w.BeginArray();
         for (const auto& l : lines) {
@@ -491,7 +503,8 @@ CommandResult CmdRecipe(CmdCtx& ctx) {
         return FailUsage(ctx);
     }
     const std::wstring sub = ctx.argv[3];
-    const bool needs_store = sub == L"place" || sub == L"stitch" || sub == L"action";
+    const bool needs_store =
+        sub == L"place" || sub == L"stitch" || sub == L"restitch" || sub == L"action";
     if (needs_store && (!ctx.store_path || !ctx.store_path[0])) {
         return NeedStore(ctx);
     }
@@ -734,6 +747,21 @@ CommandResult CmdRecipe(CmdCtx& ctx) {
             w.Str(Utf8ToWide(interest));
             w.Key("stub_va");
             w.HexStr(st.last_stub_va);
+            w.Key("patch_handle");
+            w.HexStr(st.last_patch_handle);
+        });
+    }
+
+    if (sub == L"restitch") {
+        const int n = hdlcli::RevalidateStore(st, log, true);
+        if (!SaveStoreTx(st, &err)) {
+            return CmdFail(ctx.cmd.c_str(), HDL_E_FAILED, err.c_str());
+        }
+        return OkWithLines(ctx, st, lines, [&](JsonWriter& w) {
+            w.Key("apply");
+            w.Bool(true);
+            w.Key("ok");
+            w.Num(n);
             w.Key("patch_handle");
             w.HexStr(st.last_patch_handle);
         });

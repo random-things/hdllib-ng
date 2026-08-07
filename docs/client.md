@@ -309,6 +309,7 @@ Client-only. JSON file via `--store PATH`, schema **v3**. Locators survive ASLR 
 |------|---------|
 | `store list` | Load `--store` and list interests + locator counts |
 | `store revalidate` | Resolve every locator now; save on success |
+| `store revalidate --apply` | Same, then recreate patch ledger entries and enable when `enabled_intent` is set |
 | `store add <name> export N [--kind K]` | Export locator (stateless) |
 | `store add <name> --pattern AOB …` | Explicit pattern / cave / stub / patch flags |
 | `discover-pathscan` / `ptrscan … --store-add NAME` | Attach path locator in the producing process |
@@ -323,13 +324,13 @@ Client-only. JSON file via `--store PATH`, schema **v3**. Locators survive ASLR 
 | `import` | Match `EnumImports` bound VA |
 | `cave` | `FindCaves` + nearer/larger score |
 | `stub` | `BuildStub` (alloc RX) |
-| `patch` | Resolve target address only (does **not** re-apply) |
+| `patch` | Resolve target address only; with `--apply`, `PatchCreate` (+ `PatchEnable` if `enabled_intent`) |
 
 Optional interest fields: `kind` (`function` / `object` / `field` / `patch` / …), `evidence`, `struct_fields[]`.
 
 ### Recipes
 
-Recipes are top-level one-shot verbs. Place/stitch require `--store`; action requires `--wait-ms` or `--signal FILE`.
+Recipes are top-level one-shot verbs. Place/stitch/restitch require `--store`; action requires `--wait-ms` or `--signal FILE`.
 
 | Recipe | What it does |
 |--------|----------------|
@@ -338,6 +339,7 @@ Recipes are top-level one-shot verbs. Place/stitch require `--store`; action req
 | `recipe constrain <size> <pred>… [--module NAME]` | Constraint scan, optionally scoped to one module → list objects → cluster first object |
 | `recipe place <interest> <near_hex>` | Best cave near VA (or `AllocNear` fallback) → cave locator on interest |
 | `recipe stitch <interest> --target HEX [--kind …] [--steal-min N]` | BuildStub + patch jmp at target → stub + patch locators |
+| `recipe restitch` | Alias for `store revalidate --apply` (restore stubs/patches after unload) |
 | `recipe expand <base> <size>` | `discover-watch-region` + printed next steps for heat |
 | `stabilize <cand_id>` | Synth AOB → pattern interest (needs `--session` + `--store`) |
 
@@ -350,6 +352,8 @@ hdlclient --store interests.json <pid> store list
 hdlclient --store interests.json <pid> store revalidate
 hdlclient --store interests.json <pid> recipe place my_hook 0xRESOLVED_FN
 hdlclient --store interests.json <pid> recipe stitch my_hook --target 0xRESOLVED_FN --kind mov_rax_jmp --steal-min 5
+rem After unload/reinject:
+hdlclient --store interests.json <pid> store revalidate --apply
 ```
 
 **End-to-end: objects → fields → pattern**

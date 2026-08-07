@@ -106,13 +106,15 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> discover-apply-watch --session ID --addr HEX [--size N]
   hdlclient <pid> discover-evidence --session ID --id CAND_ID
   hdlclient [--store PATH] <pid> session new|show|close
-  hdlclient --store PATH <pid> store list|revalidate
+  hdlclient --store PATH <pid> store list|revalidate [--apply]
   hdlclient --store PATH <pid> store add NAME export EXP [--kind K]
   hdlclient --store PATH <pid> store add NAME --pattern AOB [--addr HEX] ...
   hdlclient --store PATH <pid> recipe place|stitch INTEREST ...
+  hdlclient --store PATH <pid> recipe restitch
   hdlclient <pid> recipe suggest|constrain|expand|action ...
     recipe constrain SIZE PRED... [--module NAME]
     recipe action NAME WATCH --wait-ms N | --signal FILE
+    recipe restitch   (alias for store revalidate --apply)
   hdlclient --store PATH <pid> stabilize CAND_ID   (requires resolved --session)
   Aliases: dcreate dclose dadd dscan … henable rpat
   hdlclient <pid> scan --next --session ID --cmp CMP [--value VAL] [--timeout MS]

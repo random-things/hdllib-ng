@@ -722,11 +722,68 @@ bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out, size_t
             if (e) {
                 raw.push_back(',');
             }
-            const bool raw_value =
-                elems[e] == "true" || elems[e] == "false" || elems[e] == "null" ||
-                (!elems[e].empty() &&
-                 (elems[e][0] == '{' || elems[e][0] == '[' || elems[e][0] == '-' ||
-                  (elems[e][0] >= '0' && elems[e][0] <= '9')));
+            /* Nested objects/arrays and scalars stay raw. Unquoted strings that
+             * merely begin with '[' (e.g. "[OK] …") must be re-quoted — otherwise
+             * reconstruction yields invalid JSON and human formatting drops the array.
+             * Peek after '[' for a real JSON token start (not a full re-parse). */
+            bool raw_value = elems[e] == "true" || elems[e] == "false" || elems[e] == "null" ||
+                             (!elems[e].empty() && (elems[e][0] == '{' || elems[e][0] == '-' ||
+                                                    (elems[e][0] >= '0' && elems[e][0] <= '9')));
+            if (!raw_value && !elems[e].empty() && elems[e][0] == '[') {
+                size_t j = 1;
+                while (j < elems[e].size() && (elems[e][j] == ' ' || elems[e][j] == '\t' ||
+                                               elems[e][j] == '\n' || elems[e][j] == '\r')) {
+                    ++j;
+                }
+                auto is_ws = [](char ch) {
+                    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+                };
+                size_t end = elems[e].size();
+                while (end > 0 && is_ws(elems[e][end - 1])) {
+                    --end;
+                }
+                auto token_end_ok = [&](size_t k) {
+                    while (k < elems[e].size() && is_ws(elems[e][k])) {
+                        ++k;
+                    }
+                    return k < elems[e].size() && (elems[e][k] == ',' || elems[e][k] == ']');
+                };
+                if (end == 0 || elems[e][end - 1] != ']') {
+                    raw_value = false;
+                } else if (j >= elems[e].size()) {
+                    raw_value = false;
+                } else {
+                    const char c = elems[e][j];
+                    if (c == ']' || c == '"' || c == '{' || c == '[') {
+                        raw_value = true;
+                    } else if (c == 't') {
+                        raw_value = elems[e].compare(j, 4, "true") == 0 && token_end_ok(j + 4);
+                    } else if (c == 'f') {
+                        raw_value = elems[e].compare(j, 5, "false") == 0 && token_end_ok(j + 5);
+                    } else if (c == 'n') {
+                        raw_value = elems[e].compare(j, 4, "null") == 0 && token_end_ok(j + 4);
+                    } else if (c == '-' || (c >= '0' && c <= '9')) {
+                        size_t k = j;
+                        if (elems[e][k] == '-') {
+                            ++k;
+                        }
+                        if (k >= elems[e].size() || elems[e][k] < '0' || elems[e][k] > '9') {
+                            raw_value = false;
+                        } else if (elems[e][k] == '0') {
+                            ++k;
+                            raw_value = token_end_ok(k);
+                        } else {
+                            while (k < elems[e].size() && elems[e][k] >= '0' &&
+                                   elems[e][k] <= '9') {
+                                ++k;
+                            }
+                            raw_value = token_end_ok(k);
+                        }
+                    } else {
+                        raw_value = false;
+                    }
+                }
+            }
             if (raw_value) {
                 raw += elems[e];
             } else {
