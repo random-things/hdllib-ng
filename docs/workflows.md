@@ -401,12 +401,14 @@ flowchart LR
 | Import | Imported API slot | Resolves the current import binding |
 | Cave | Nearby placement capacity | Searches for a suitable cave again |
 | Stub | Reconstructible executable helper | Builds a new stub and therefore allocates memory |
-| Patch | Saved target and patch intent | Re-resolves the target only; it does **not** enable the patch |
+| Patch | Saved target and patch intent | Default: re-resolves the target only (does **not** write). With `store revalidate --apply` / `recipe restitch`: recreates the ledger and enables when `enabled_intent` is set |
 
 That last distinction matters: `store revalidate` is not uniformly passive.
 A stub locator asks the target to build a fresh executable stub, while a patch
-locator only revalidates its target address and does not reapply bytes. Always
-inspect the revalidation results and current health before acting on them.
+locator only revalidates its target address and does not reapply bytes unless
+you pass `--apply`. Always inspect the revalidation results and current health
+before acting on them. Unload drops in-target ledger state; durability stays a
+client concern.
 
 Typical lifecycle:
 
@@ -416,6 +418,7 @@ store save
 # Restart or reinject.
 store load
 store revalidate
+store revalidate --apply   # or: recipe restitch
 ```
 
 Use discovery export/import when you want to preserve candidates, actions,

@@ -580,9 +580,9 @@ Call arg prefixes: `u64:`, `i64:`, `f32:`, `f64:`, `cstr:`, `wstr:`, `buf:HEX`, 
 
 `hdlclient` persists addresses as **interests** in a JSON file (`--store PATH`). Schema **version 3** (Save always writes ≥3; older files still load; unknown locator types are skipped with a warning).
 
-**Locator types:** `pattern`, `path`, `export`, `import`, `cave`, `stub`, `patch` — revalidate via ResolvePattern / FollowPointers / ResolveExport / EnumImports / FindCaves / BuildStub / address-only for patches.
+**Locator types:** `pattern`, `path`, `export`, `import`, `cave`, `stub`, `patch` — revalidate via ResolvePattern / FollowPointers / ResolveExport / EnumImports / FindCaves / BuildStub; patches are address-only unless `store revalidate --apply` (or `recipe restitch`) recreates the ledger.
 
-**Recipes:** `place`, `stitch`, `expand`, `action` (`--wait-ms`/`--signal FILE`), `constrain`, plus `stabilize <cand_id>`.
+**Recipes:** `place`, `stitch`, `restitch`, `expand`, `action` (`--wait-ms`/`--signal FILE`), `constrain`, plus `stabilize <cand_id>`.
 
 Full workflows, predicate syntax, and end-to-end examples: **[client.md § Interest store and recipes](client.md#4-interest-store-and-recipes)**.
 

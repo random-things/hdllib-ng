@@ -160,6 +160,87 @@ int main() {
            "parse array elements");
     Expect(!ParseArrayElements("[1] junk", &elems), "array elements trailing junk fail-closed");
 
+    /* Display-array reconstruction: quote log-style "[…]" strings; keep real JSON raw.
+     * Assert exact reconstructed field text — this is what human CLI formatting re-parses. */
+    auto lines_field = [&](const char* json) -> std::string {
+        Expect(ParseObjectFields(json, &fields) && fields.size() == 1 && fields[0].first == "lines",
+               "lines field present");
+        return fields.empty() ? std::string() : fields[0].second;
+    };
+    auto round_trip_elems = [&](const std::string& arr) {
+        Expect(ParseArrayElements(arr, &elems), "reconstructed lines array parses");
+        return elems;
+    };
+
+    {
+        const std::string got =
+            lines_field("{\"lines\":[\"[OK] patch target -> 00 (not applied)\",\"[FAIL] stub\"]}");
+        Expect(got == "[\"[OK] patch target -> 00 (not applied)\",\"[FAIL] stub\"]",
+               "log lines stay quoted exactly");
+        const auto e = round_trip_elems(got);
+        Expect(e.size() == 2 && e[0] == "[OK] patch target -> 00 (not applied)" &&
+                   e[1] == "[FAIL] stub",
+               "quoted log lines decode to original text");
+    }
+    {
+        /* Nested JSON arrays/objects/scalars must remain raw (no extra quotes). */
+        Expect(lines_field("{\"lines\":[[1,2],[\"x\"],[],{\"a\":1},true,false,null,-3,42]}") ==
+                   "[[1,2],[\"x\"],[],{\"a\":1},true,false,null,-3,42]",
+               "nested JSON values stay raw exactly");
+        Expect(ParseArrayElements(fields[0].second, &elems) && elems.size() == 9 &&
+                   elems[0] == "[1,2]" && elems[1] == "[\"x\"]" && elems[2] == "[]" &&
+                   elems[3] == "{\"a\":1}" && elems[4] == "true" && elems[5] == "false" &&
+                   elems[6] == "null" && elems[7] == "-3" && elems[8] == "42",
+               "nested JSON values decode without string wrapping");
+    }
+    {
+        /* Mix: log string beside a real nested array. */
+        const std::string got = lines_field("{\"lines\":[\"[OK] hi\",[1],\"plain\"]}");
+        Expect(got == "[\"[OK] hi\",[1],\"plain\"]", "mixed log + nested array exact");
+        const auto e = round_trip_elems(got);
+        Expect(e.size() == 3 && e[0] == "[OK] hi" && e[1] == "[1]" && e[2] == "plain",
+               "mixed log + nested array decodes");
+    }
+    {
+        /* Whitespace after '[' in a real nested array still counts as JSON. */
+        Expect(lines_field("{\"lines\":[ [ 1 ] ]}") == "[[1]]",
+               "nested array with inner whitespace normalizes raw");
+    }
+    {
+        /* Leading whitespace inside a log string after '[' is still a log line. */
+        const std::string got = lines_field("{\"lines\":[\"[ OK] spaced\"]}");
+        Expect(got == "[\"[ OK] spaced\"]", "log line with space after bracket stays quoted");
+        Expect(round_trip_elems(got).size() == 1 && elems[0] == "[ OK] spaced",
+               "spaced log line decodes");
+    }
+    {
+        /* Strings that peek like JSON after '[' but are not valid arrays stay quoted. */
+        const std::string got =
+            lines_field("{\"lines\":[\"[true-ish]\",\"[0xdead]\",\"[falsey]\",\"[nullish]\"]}");
+        Expect(got == "[\"[true-ish]\",\"[0xdead]\",\"[falsey]\",\"[nullish]\"]",
+               "invalid JSON-ish bracket strings stay quoted");
+        const auto e = round_trip_elems(got);
+        Expect(e.size() == 4 && e[0] == "[true-ish]" && e[1] == "[0xdead]" && e[2] == "[falsey]" &&
+                   e[3] == "[nullish]",
+               "invalid JSON-ish bracket strings decode");
+    }
+    {
+        /* A quoted string that is itself a valid JSON array may be emitted raw;
+         * decode still yields the same textual element. */
+        const std::string got = lines_field("{\"lines\":[\"[1,2]\",\"[true]\",\"[]\"]}");
+        Expect(got == "[[1,2],[true],[]]", "valid JSON array strings emitted raw");
+        const auto e = round_trip_elems(got);
+        Expect(e.size() == 3 && e[0] == "[1,2]" && e[1] == "[true]" && e[2] == "[]",
+               "valid JSON array strings decode");
+    }
+    {
+        /* Escapes inside log lines must survive reconstruction. */
+        const std::string got = lines_field("{\"lines\":[\"[OK] path\\\\file \\\"x\\\"\"]}");
+        Expect(got == "[\"[OK] path\\\\file \\\"x\\\"\"]", "escaped log line exact");
+        Expect(round_trip_elems(got).size() == 1 && elems[0] == "[OK] path\\file \"x\"",
+               "escaped log line decodes");
+    }
+
     if (g_failed) {
         fprintf(stderr, "%d json test(s) failed\n", g_failed);
         return 1;
