@@ -738,13 +738,19 @@ bool ParseDisplayValue(const std::string& s, size_t* i, std::string* out, size_t
                 auto is_ws = [](char ch) {
                     return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
                 };
+                size_t end = elems[e].size();
+                while (end > 0 && is_ws(elems[e][end - 1])) {
+                    --end;
+                }
                 auto token_end_ok = [&](size_t k) {
                     while (k < elems[e].size() && is_ws(elems[e][k])) {
                         ++k;
                     }
-                    return k >= elems[e].size() || elems[e][k] == ',' || elems[e][k] == ']';
+                    return k < elems[e].size() && (elems[e][k] == ',' || elems[e][k] == ']');
                 };
-                if (j >= elems[e].size()) {
+                if (end == 0 || elems[e][end - 1] != ']') {
+                    raw_value = false;
+                } else if (j >= elems[e].size()) {
                     raw_value = false;
                 } else {
                     const char c = elems[e][j];

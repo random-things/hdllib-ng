@@ -121,6 +121,7 @@ bool CreateAndMaybeEnablePatch(PipeClient& client, uint64_t addr, const uint8_t*
         s = PatchEnable(client, handle, 1);
         if (!s) {
             Wlog(log, L"PatchEnable failed status=%ls", StatusName(s.status));
+            PatchRemove(client, handle);
             return false;
         }
     }
@@ -340,6 +341,7 @@ int RevalidateStore(ControllerState& st, LogFn log, bool apply) {
             desc.steal_from = loc.stub.steal_min ? target : 0;
             desc.steal_min_bytes = loc.stub.steal_min;
             desc.alloc_rx = 1;
+            loc.stub.last_stub_va = 0;
             HdlStubResult result{};
             auto s = BuildStub(*st.client, desc, &result);
             if (s && result.stub_va) {
@@ -390,7 +392,11 @@ int RevalidateStore(ControllerState& st, LogFn log, bool apply) {
 
         std::vector<uint8_t> patch_bytes;
         const Locator* stub = FindSiblingStub(in);
-        if (stub && stub->stub.last_stub_va) {
+        if (stub) {
+            if (!stub->last_ok || !stub->stub.last_stub_va) {
+                Wlog(log, L"[FAIL] %hs patch restitch missing stub", in.name.c_str());
+                return;
+            }
             if (!EncodeJmpToStub(*st.client, stub->stub.last_stub_va, stub->stub.steal_min,
                                  &patch_bytes, log)) {
                 Wlog(log, L"[FAIL] %hs patch restitch encode", in.name.c_str());
