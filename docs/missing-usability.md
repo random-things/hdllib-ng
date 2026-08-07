@@ -7,9 +7,26 @@ Related: [client](client.md), [workflows](workflows.md),
 [toy-arena-walkthrough](toy-arena-walkthrough.md). Product/ABI gaps live in
 [missing-features.md](missing-features.md) (item 8 overlaps `--json` / bindings).
 
+## Status summary
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Structured output (`--json`) for CLI verbs | **Partial** (envelope done; goldens/streams thin) |
+| 2 | Expose recipes as one-shot CLI | **Done** |
+| 3 | Inject → connect as one flow | **Open** |
+| 4 | Implicit discover session in one-shot mode | **Done** |
+| 5 | Actionable error strings | **Partial** (central hints landed) |
+| 6 | Per-command help instead of one giant synopsis | **Open** |
+| 7 | Cleanup recipes | **Open** |
+| 8 | Annotated `read` / scan hit views | **Open** |
+| 9 | Auto-resolve on hook / watch hits | **Open** |
+| 10 | Make `recipe suggest` executable | **Open** |
+| 11 | Bridge interest store ↔ discover export | **Open** |
+| 12 | CE scan parity polish | **Open** |
+
 ---
 
-## 1. Structured output (`--json`) for CLI verbs
+## 1. Structured output (`--json`) for CLI verbs — **partial**
 
 **Why it matters:** One-shot `hdlclient <pid> …` is the scripting surface.
 Structured output unlocks CI, agents, and thin wrappers without a full SDK.
@@ -23,30 +40,34 @@ Default remains human text. See [client.md](client.md).
 **Remaining gaps:**
 
 1. Expand golden fixtures beyond ping/modules/error (`scan`, `discover-cands`,
-   `hookhits`, `watch hits`, `fingerprint`, `health`).
+   `hookhits`, `watch hits`, `fingerprint`, `health`) under `tests/golden/`.
 2. Stream-heavy commands emit one final JSON envelope today (not NDJSON chunks).
+3. Optional thicker PipeClient bindings remain under
+   [missing-features.md](missing-features.md) §8.
 
-**Acceptance (done):** `hdlclient --json <pid> ping` is valid JSON with the
+**Acceptance (core done):** `hdlclient --json <pid> ping` is valid JSON with the
 remote pid; handlers return `CommandResult` with structured `data_json` only and
 `Render()` selects JSON vs human text. Golden fixtures under `tests/golden/` are
-consumed by `hdl_client_tests`.
+consumed by `hdl_client_tests` for the envelopes that exist.
 
 ---
 
-## 2. Expose recipes as one-shot CLI — DONE
+## 2. Expose recipes as one-shot CLI — **done**
 
-Implemented: `hdlclient <pid> recipe …` / `store` / `session` / `stabilize` with `--store` transactions, `--wait-ms`/`--signal FILE` for `recipe action`, and JSON envelopes via `CommandResult`.
+Implemented: `hdlclient <pid> recipe …` / `store` / `session` / `stabilize` with
+`--store` transactions, `--wait-ms`/`--signal FILE` for `recipe action`, and JSON
+envelopes via `CommandResult`.
 
 ---
 
-## 3. Inject → connect as one flow
+## 3. Inject → connect as one flow — **open**
 
 **Why it matters:** The common path is `inject`, note the pid, then
 `hdlclient <pid> ping`. Failures after inject are easy to mis-attribute
 when the second process never starts.
 
 **Current state:** Local inject in [`local_inject.cpp`](../tools/client/local_inject.cpp)
-exits after load; pipe commands are a separate invocation.
+exits after load; pipe commands are a separate invocation. No `--then` flag.
 
 **What needs to be done:**
 
@@ -63,7 +84,7 @@ demo in the README.
 
 ---
 
-## 4. Implicit discover session in one-shot mode — DONE
+## 4. Implicit discover session in one-shot mode — **done**
 
 Implemented: resolve `--session` → `HDL_SESSION` → `<store>.session` /
 `%TEMP%\hdl_session_<pid>.txt`. Written by `session new` / `discover-create`;
@@ -71,36 +92,44 @@ cleared by `session close` / `discover-close`.
 
 ---
 
-## 5. Actionable error strings
+## 5. Actionable error strings — **partial**
 
 **Why it matters:** Operators see numeric `HdlStatus` or short failures
 (`HDL_E_NOT_FOUND`) without the domain hint (“no non-console HWND for
 `--main`”, “Wow64 target rejected”, “APC needs alertable thread”).
 
-**Current state:** Partial: JSON envelopes carry `error.hint`; some inject paths
-print richer text. Many pipe verbs still surface bare status names.
+**Current state:** [`StatusHint`](../tools/client/util.cpp) maps status (+ optional
+cmd) to one-line hints and is wired through
+[`EmitEnvelope`](../tools/client/json_out.cpp) / `Render()` for both JSON
+`error.hint` and human text. Coverage includes `call`/`vcall` HWND and timeout
+orphans, discover/scan missing sessions, `hook-import`, inject Wow64/access, plus
+generic per-status fallbacks. Some inject-method-specific strings (e.g. APC
+alertable thread) and deeper domain tags are still thin compared to the original
+wish list.
 
-**What needs to be done:**
+**What remains:**
 
-1. Central map from `HdlStatus` (+ optional context tag) → one-line hint.
-2. Attach hints in `Fail*` / `CmdFail` and inject failures consistently.
-3. Keep machine `status` / `error.code` stable; hints are human-facing only.
-4. Cover the high-frequency failures first (IPC, inject method, call/`--main`,
-   Wow64, session missing).
+1. Extend hints for remaining high-frequency inject-method failures (APC,
+   hijack, early-bird) with stable context tags where useful.
+2. Prefer explicit `CmdFail(..., hint)` overrides only when `StatusHint` cannot
+   be specific enough; keep machine `status` / `error.code` stable.
+3. Spot-check that `call --main` under `--json` still names the HWND constraint
+   (already true for `HDL_E_NOT_FOUND`).
 
-**Acceptance:** A failed `call --main` under `--json` includes a hint that names
-the HWND/`--main` constraint without requiring a docs dive.
+**Acceptance (mostly met):** A failed `call --main` under `--json` includes a hint
+that names the HWND/`--main` constraint without requiring a docs dive. Treat as
+done once inject-method hints are filled in; until then keep as partial.
 
 ---
 
-## 6. Per-command help instead of one giant synopsis
+## 6. Per-command help instead of one giant synopsis — **open**
 
 **Why it matters:** [`usage.cpp`](../tools/client/usage.cpp) dumps the full CLI.
 Discover predicates, scan comparisons, and watch modes are easy to miss.
 `PrintUsage()` is also the fallback on many parse errors — noisy and unfocused.
 
-**Current state:** Global `PrintUsage()`; inject has a dedicated `--help`.
-Most verbs lack `verb --help`.
+**Current state:** Global `PrintUsage()`; `inject` / `unload` / `reload` have
+dedicated `--help`. Most pipe verbs lack `verb --help`.
 
 **What needs to be done:**
 
@@ -117,7 +146,7 @@ Most verbs lack `verb --help`.
 
 ---
 
-## 7. Cleanup recipes
+## 7. Cleanup recipes — **open**
 
 **Why it matters:** [workflows.md](workflows.md) tells operators to remove hooks,
 watches, and patches when an experiment ends. Tooling does not automate that,
@@ -126,6 +155,8 @@ ranks/heats.
 
 **Current state:** Individual `unhook`, `watch unwatch`, `patch disable` /
 `remove`, `discover-unwatch`, `discover-close`, `scan --close`. No aggregate.
+`shutdown` / `Control/Shutdown` restores instrumentation and stops the pipe but
+is heavier than a selective quieting pass.
 
 **What needs to be done:**
 
@@ -146,14 +177,15 @@ leaves the helper running remains useful for long sessions.
 
 ---
 
-## 8. Annotated `read` / scan hit views
+## 8. Annotated `read` / scan hit views — **open**
 
 **Why it matters:** After a typed scan or `read`, CE-style questions (“what
 module? what neighbors? ascii?”) require extra manual commands (`modbase`,
 `probe`, `disasm`).
 
 **Current state:** `read` dumps raw hex; scan hits print addresses (and little
-context). `probe` / `disasm` exist but are separate verbs.
+context). `probe` / `disasm` exist but are separate verbs. No `--annotate` /
+`--ascii` flags.
 
 **What needs to be done:**
 
@@ -170,7 +202,7 @@ hex+ASCII window without extra typing.
 
 ---
 
-## 9. Auto-resolve on hook / watch hits
+## 9. Auto-resolve on hook / watch hits — **open**
 
 **Why it matters:** `hookhits` and `watch hits` print raw RIP / caller /
 addresses. Frame-aware discover ranking already resolves functions internally;
@@ -179,7 +211,7 @@ the interactive drain path does not show that quality of detail.
 **Current state:** Hit structs include RIP, args, frames
 ([`hdllib.h`](../include/hdllib/hdllib.h)); client printers are minimal in
 [`cmds_hooks.cpp`](../tools/client/cmds_hooks.cpp) /
-place watch commands.
+place watch commands. No `--resolve` flag.
 
 **What needs to be done:**
 
@@ -196,13 +228,13 @@ RIP without a second `resolve-function` invocation.
 
 ---
 
-## 10. Make `recipe suggest` executable
+## 10. Make `recipe suggest` executable — **open**
 
 **Why it matters:** `recipe suggest` turns fingerprint primaries into
 copy-and-paste ideas but does not run them. Triage still requires retyping.
 
 **Current state:** Suggestion printer in [`recipes.cpp`](../tools/client/recipes.cpp);
-fingerprint via `Process/Fingerprint`.
+fingerprint via `Process/Fingerprint`. Still print-only (“does not auto-run”).
 
 **What needs to be done:**
 
@@ -220,7 +252,7 @@ first recommended watch/import without retyping addresses.
 
 ---
 
-## 11. Bridge interest store ↔ discover export
+## 11. Bridge interest store ↔ discover export — **open**
 
 **Why it matters:** Two persistence models confuse operators: client interest
 JSON (revalidatable locators) vs discover session JSON (investigation snapshot).
@@ -229,6 +261,7 @@ Promotion between them is manual (`stabilize`, `--store-add`, separate export).
 **Current state:** Store v3 in [`store.cpp`](../tools/client/store.cpp);
 discover export/import in the DLL. Workflows describe them as complementary.
 `stabilize` and `--store-add` on pathscan/ptrscan cover parts of the handoff.
+No `store import-discover` / `export-discover`.
 
 **What needs to be done:**
 
@@ -246,16 +279,17 @@ locators in the interest store without hand-copying candidate ids.
 
 ---
 
-## 12. CE scan parity polish
+## 12. CE scan parity polish — **open**
 
 **Why it matters:** Typed incremental scan is already strong (exact / changed /
 increased / …) but expert-shaped. Missing conveniences from Cheat Engine–style
 tools slow value hunting.
 
-**Current state:** Search in [`src/memory.cpp`](../src/memory.cpp); CLI in
-[`cmds_scan.cpp`](../tools/client/cmds_scan.cpp). Float compares are bit-oriented;
-no first-class “between” / fuzzy float. `--max 0` and `--stream` are powerful but
-under-explained.
+**Current state:** Search in [`src/memory_search.cpp`](../src/memory_search.cpp)
+(and related); CLI in [`cmds_scan.cpp`](../tools/client/cmds_scan.cpp). Compare
+ops remain exact / unknown / changed / increased / … / greater / less
+([`memory.h`](../include/hdllib/memory.h)); float compares are bit-oriented.
+No `HDL_CMP_BETWEEN`, no fuzzy float epsilon, no first-class `--eps`.
 
 **What needs to be done:**
 
@@ -285,9 +319,12 @@ These items targeted the removed REPL/TUI surfaces and are no longer planned:
 
 If only a few items ship next:
 
-1. Broader JSON schema/golden fixtures (`scan`, `discover-cands`, …)
-2. inject `--then` (loop time)
-3. `cleanup` (parity with documented workflows)
-4. annotated hits / auto-resolve (investigation speed)
-5. CE scan polish (`between` / fuzzy float)
-6. executable `recipe suggest --run`
+1. Finish actionable inject-method hints (§5) — nearly done
+2. Broader JSON schema/golden fixtures (`scan`, `discover-cands`, …) (§1)
+3. inject `--then` (§3) — loop time
+4. `cleanup` (§7) — parity with documented workflows
+5. annotated hits / auto-resolve (§8–§9) — investigation speed
+6. CE scan polish (`between` / fuzzy float) (§12)
+7. executable `recipe suggest --run` (§10)
+8. per-command `--help` (§6)
+9. store ↔ discover bridge (§11)

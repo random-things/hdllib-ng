@@ -9,22 +9,41 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 [workflows](workflows.md), [client](client.md). Usability-only items live in
 [missing-usability.md](missing-usability.md).
 
+## Status summary
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Named RPC negotiation and capability discovery | **Done** (minor follow-ups) |
+| 2 | Safe in-process call lifecycle | **Open** |
+| 3 | Remote surface parity for operator-critical controls | **Done** |
+| 4 | Patch / stub durability across unload and reinject | **Partial** |
+| 5 | Connection-scoped session isolation | **Open** |
+| 6 | Durable import redirection (IAT rewrite) | **Open** |
+| 7 | Discover session restore completeness | **Open** |
+| 8 | Machine-readable automation surface | **Partial** (CLI `--json` done) |
+| 9 | Richer code emission | **Open** |
+| 10 | Symbol / PDB / dbghelp resolution | **Open** |
+| 11 | Active fingerprint probes (`HDL_FP_ACTIVE`) | **Open** |
+| 12 | Wow64 / 32-bit target support | **Done** (x64-only by design) |
+
 ---
 
 ## 1. Named RPC negotiation and capability discovery — **done**
 
 Implemented: the `HDLRPC1\n` preface, protobuf `ClientHello` / `ServerHello`,
 major-version rejection, generated named-method inventory, and advertised
-transport limits. `hdl_client_tests` covers mismatched-major rejection;
+transport limits. `PipeClient` rejects calls whose method is absent from the
+negotiated inventory. `hdl_client_tests` covers mismatched-major rejection;
 `hdl_rpc_schema_tests` checks schema/generated-dispatch parity. See
 [rpc.md](rpc.md) and [capabilities.md](capabilities.md).
 
-Follow-ups: warn/disable individual client verbs when the advertised method is
-missing; expand fuzzing of envelope parsing and complex typed request messages.
+**Remaining follow-ups (non-blocking):** warn/disable individual client verbs when
+the advertised method is missing (today the call fails at transport/RPC layer);
+expand fuzzing of envelope parsing and complex typed request messages.
 
 ---
 
-## 2. Safe in-process call lifecycle
+## 2. Safe in-process call lifecycle — **open**
 
 **Why it matters:** The “observe, then invoke deliberately” workflow depends on
 `HdlCall` / `HdlCallExport` / `HdlCallVtable`. Today a timeout returns
@@ -34,8 +53,10 @@ operator think the call never happened.
 
 **Current state:** Worker-thread and `HDL_CALL_THREAD_MAIN` paths in
 [`src/call.cpp`](../src/call.cpp) / [`src/call_dispatch.cpp`](../src/call_dispatch.cpp).
-Docs already warn that timeouts abandon waiting. Jobs cancel cooperatively
-elsewhere; calls are not joined after abandon.
+Docs warn that timeouts abandon waiting. The CLI attaches a
+[`StatusHint`](../tools/client/util.cpp) on timed-out `call` / `vcall`
+(“callee may still be running”), but there is still **no** in-target orphan
+registry, no refuse-overlapping-calls policy, and no `Call/EnumOrphans` RPC.
 
 **What needs to be done:**
 
@@ -50,7 +71,7 @@ elsewhere; calls are not joined after abandon.
 4. For `HDL_CALL_THREAD_MAIN`, define behavior when the UI thread never pumps
    (hung GUI): distinguish “no HWND” (`HDL_E_NOT_FOUND`) from “posted but not
    run” (timeout + orphan).
-5. Client: print orphan warnings on subsequent `call` / `events`; add tests that
+5. Client: strengthen orphan warnings on subsequent `call` / `events`; add tests that
    intentionally hang a callee and assert orphan tracking.
 
 **Acceptance:** After a timed-out call, the operator can see that work may still
@@ -59,7 +80,7 @@ acknowledgment.
 
 ---
 
-## 3. Remote surface parity for operator-critical controls — DONE
+## 3. Remote surface parity for operator-critical controls — **done**
 
 Landed as named RPC methods: `SetLogFile`, `SetHealthVeh` /
 `GetHealthVeh`, `DiscoverScanValue`, and `Hook` (target/detour VA). Client
@@ -69,7 +90,7 @@ exported C control ABI was removed; only inject callbacks remain.
 
 ---
 
-## 4. Patch / stub durability across unload and reinject
+## 4. Patch / stub durability across unload and reinject — **partial**
 
 **Why it matters:** Workflow 7 (“install reversible instrumentation”) and the
 `recipe place` / `recipe stitch` path persist *intent* in the interest store,
@@ -77,24 +98,23 @@ but patch revalidation resolves the target address only and does **not**
 re-apply bytes. After unload/reload or process restart, stitches are gone until
 manual `patch enable`.
 
-**Current state:** Patch ledger in [`src/code.cpp`](../src/code.cpp); locator
-type `patch` in [`tools/client/store.cpp`](../tools/client/store.cpp);
-architecture notes that patch revalidate is address-only.
+**Current state:** Patch ledger in [`src/code.cpp`](../src/code.cpp). Interest
+store v3 can persist `patch` / `stub` locators including `enabled_intent`,
+target interest, stub kind, and `steal_min`
+([`store.cpp`](../tools/client/store.cpp)). `store revalidate` rebuilds stubs
+via `BuildStub` when possible, but **patch** locators remain address-only
+(“not applied”). There is no `revalidate --apply` / `recipe restitch`.
 
 **What needs to be done:**
 
-1. Extend the interest-store `patch` (and optionally `stub`) locator schema to
-   hold enough to recreate: target locator (pattern/export/…), patch bytes or
-   stub kind + target, enabled flag, name.
-2. Add `store revalidate --apply` (or `recipe restitch`) that: resolves targets,
-   rebuilds stubs if needed (`BuildStub` / `AllocNear`), recreates ledger
-   entries, and optionally enables them.
-3. Decide unload semantics: `HdlUnloadDll` / process exit already drop in-target
-   ledger state — durability is therefore a **client** concern, not silent
-   DLL persistence across FreeLibrary.
-4. Document the safety default: revalidate updates addresses; apply is explicit
+1. Finish the apply path: `store revalidate --apply` (or `recipe restitch`) that
+   resolves targets, rebuilds stubs if needed, recreates ledger entries, and
+   optionally enables patches when `enabled_intent` is set.
+2. Keep unload semantics explicit: `HdlUnloadDll` / process exit drop in-target
+   ledger state — durability stays a **client** concern.
+3. Document the safety default: revalidate updates addresses; apply is explicit
    so ASLR churn cannot surprise-write code.
-5. Toy/client tests: stitch → save store → reinject → revalidate --apply →
+4. Toy/client tests: stitch → save store → reinject → revalidate --apply →
    verify bytes and disable/restore.
 
 **Acceptance:** An operator can save a stitch, restart the target, reinject, and
@@ -102,7 +122,7 @@ restore instrumentation with one explicit command.
 
 ---
 
-## 5. Connection-scoped session isolation
+## 5. Connection-scoped session isolation — **open**
 
 **Why it matters:** Search and discover session IDs are process-global. Multiple
 concurrent pipe clients (or overlapping scripts) can mutate each other’s
@@ -110,8 +130,10 @@ sessions. Architecture already warns that search mutation relies on caller
 coordination.
 
 **Current state:** ID allocation in [`src/ipc/common.cpp`](../src/ipc/common.cpp)
-(`g_next_session_id`); maps are global. Discover has per-session locks; search
-does not fully isolate concurrent Next/First.
+(`g_next_session_id`); maps are global. Concurrent close UAF was fixed via
+`shared_ptr` session holders and lifecycle tests, but **ownership is still not
+connection-scoped** — any client that knows an id can use it. Discover has
+per-session locks; search still relies on caller coordination for Next/First.
 
 **What needs to be done:**
 
@@ -131,7 +153,7 @@ typed-scan or discover state; disconnect cleans up by default.
 
 ---
 
-## 6. Durable import redirection (IAT rewrite)
+## 6. Durable import redirection (IAT rewrite) — **open**
 
 **Why it matters:** `HdlHookImport` / `Hook/HookImport` resolve a PE import and
 install `HookTrace` on the current IAT `bound_va`. Docs say “no IAT rewrite in
@@ -140,7 +162,7 @@ leaves the hook on a stale target.
 
 **Current state:** [`src/hooks.cpp`](../src/hooks.cpp) `HookImport`,
 [`src/ipc/handlers_hooks.cpp`](../src/ipc/handlers_hooks.cpp), PE import enum in
-[`src/pe_meta.cpp`](../src/pe_meta.cpp).
+[`src/pe_meta.cpp`](../src/pe_meta.cpp). Still trace-at-bound only.
 
 **What needs to be done:**
 
@@ -161,16 +183,17 @@ the IAT; rebinds are detectable (refresh/rehook helper or watch on the slot).
 
 ---
 
-## 7. Discover session restore completeness
+## 7. Discover session restore completeness — **open**
 
 **Why it matters:** `discover-export` / `discover-import` are marketed as pause/
 resume for investigations, but import is best-effort `AddCandidate` restore.
 Live watches, action windows, hook registrations, and region heat ownership are
 not restored. Operators think they resumed; they only restored leads.
 
-**Current state:** Export/import in [`src/discover.cpp`](../src/discover.cpp);
+**Current state:** Export/import in [`src/discover_serde.cpp`](../src/discover_serde.cpp);
 client verbs in [`tools/client/cmds_discover.cpp`](../tools/client/cmds_discover.cpp).
-Workflows already note hooks/watches are process resources.
+`DiscoverImport` still only restores candidate objects (address/kind/confidence/
+evidence). Workflows already note hooks/watches are process resources.
 
 **What needs to be done:**
 
@@ -190,7 +213,7 @@ action workflows can continue without manually re-entering every watch.
 
 ---
 
-## 8. Machine-readable automation surface
+## 8. Machine-readable automation surface — **partial**
 
 **Why it matters:** Agents, CI, and long scripted investigations need stable
 structured output and preferably a binding thicker than hand-rolled pipe frames.
@@ -199,6 +222,7 @@ structured output and preferably a binding thicker than hand-rolled pipe frames.
 [`EmitEnvelope`](../tools/client/json_out.cpp); see [client.md](client.md) and
 [missing-usability.md](missing-usability.md) §1). Public surfaces remain
 `hdllib.h` and the named protobuf RPC protocol; there is no thicker SDK/binding yet.
+Golden fixtures cover ping / modules / error only.
 
 **What needs to be done:**
 
@@ -206,7 +230,8 @@ structured output and preferably a binding thicker than hand-rolled pipe frames.
 2. ~~Implement `--json` on high-traffic verbs~~ (done across `cmds_*.cpp`).
 3. Optionally publish a minimal C++/Python helper that wraps `PipeClient`
    framing (even if Python is ctypes over a small shim DLL).
-4. Tie to protocol capabilities (item 1) so automation can feature-detect.
+4. Tie to protocol capabilities (item 1) so automation can feature-detect at the
+   verb level (not only fail mid-call).
 5. Keep human text as default; never break existing CLI formatting.
 6. Expand golden schema fixtures beyond ping/modules/error
    (see [missing-usability.md](missing-usability.md) §1).
@@ -214,11 +239,11 @@ structured output and preferably a binding thicker than hand-rolled pipe frames.
 **Acceptance (CLI half done):** A script can inject, scan, and drain hook hits
 without regexing console output; status codes remain aligned with `HdlStatus`.
 Handlers return structured `data_json`; `Render()` owns JSON vs text. Remaining
-acceptance is the optional PipeClient helper / bindings.
+acceptance is broader goldens + optional PipeClient helper / bindings.
 
 ---
 
-## 9. Richer code emission
+## 9. Richer code emission — **open**
 
 **Why it matters:** Place/stitch depends on `HdlBuildStub` templates. Without a
 text assembler or richer emitters, operators paste raw hex for anything beyond
@@ -227,7 +252,8 @@ displacement placeholder until a VA is known.
 
 **Current state:** Stub kinds in [`src/code.cpp`](../src/code.cpp); RIP-rel fixup
 exists when allocating RX near the steal site; CLI documents “no text
-assembler.”
+assembler.” `REL_JMP32` without alloc still emits `E9 00 00 00 00` rather than
+refusing.
 
 **What needs to be done:**
 
@@ -248,7 +274,7 @@ rel32-without-VA fails loudly; RIP-rel stolen prefixes survive allocation.
 
 ---
 
-## 10. Symbol / PDB / dbghelp resolution
+## 10. Symbol / PDB / dbghelp resolution — **open**
 
 **Why it matters:** When PDBs or exported RVAs-with-names exist, forcing AOB /
 pointer-path discovery is wasted work. Interest locators have `export` / `import`
@@ -276,7 +302,7 @@ revalidates across ASLR; without PDB, the feature is simply unavailable.
 
 ---
 
-## 11. Active fingerprint probes (`HDL_FP_ACTIVE`)
+## 11. Active fingerprint probes (`HDL_FP_ACTIVE`) — **open**
 
 **Why it matters:** Passive fingerprinting (modules + main IAT + PE subsystem)
 feeds `recipe suggest`. Reserved `HDL_FP_ACTIVE = 8` was left for probes that
@@ -284,8 +310,9 @@ confirm runtimes (e.g. safe export probes, window-class checks) without full
 RE. Without it, suggestions stay generic.
 
 **Current state:** [`src/fingerprint.cpp`](../src/fingerprint.cpp),
-[`src/fingerprint_rules.hpp`](../src/fingerprint_rules.hpp), flag comment in
-[`hdllib.h`](../include/hdllib/hdllib.h).
+[`src/fingerprint_rules.hpp`](../src/fingerprint_rules.hpp), reserved-flag
+comment in [`health.h`](../include/hdllib/health.h). No active probe path and no
+`fingerprint --active` client flag.
 
 **What needs to be done:**
 
@@ -306,33 +333,22 @@ suggestions cite probe evidence, not only module names.
 
 ---
 
-## 12. Wow64 / 32-bit target support
+## 12. Wow64 / 32-bit target support — **done** (x64-only by design)
 
-**Why it matters:** Inject selection rejects Wow64 targets. If hdllib is meant
-as a general Windows helper, a large fraction of processes are unreachable. If
-it remains x64 labware, this stays explicitly out of scope.
+**Decision:** Permanent x64-only scope. Inject selection hard-rejects Wow64
+targets ([`src/inject/select.cpp`](../src/inject/select.cpp)); docs and
+[`StatusHint`](../tools/client/util.cpp) surface crisp errors. There is no Wow64
+helper and no plan to half-implement one.
 
-**Current state:** x64-only docs; Wow64 hard-fail in
-[`src/inject/select.cpp`](../src/inject/select.cpp); tests in
-[`tests/test_select.cpp`](../tests/test_select.cpp).
-
-**What needs to be done (only if product scope expands):**
-
-1. Ship a separate WOW64 helper DLL (or 32-bit build) with matching IPC — do not
-   pretend one x64 DLL can run inside a 32-bit process.
-2. Controller: detect Wow64, pick the correct payload, and use Wow64-aware
-   inject paths where needed.
-3. Dual protocol testing; pointer width and stub emitters become arch-specific.
-4. Expect a large matrix cost (inject methods, disasm, hooks, call ABI).
-
-**Acceptance:** Either (a) documented permanent x64-only scope with crisp errors,
-or (b) `hdlclient inject` works on a 32-bit notepad with a 32-bit `hdllib`
-and ping succeeds. Do not half-implement.
+**If product scope ever expands:** ship a separate 32-bit helper DLL with
+matching IPC, Wow64-aware inject paths, and a full arch matrix — do not pretend
+one x64 DLL can run inside a 32-bit process. Until then this item stays closed.
 
 ---
 
 ## Deferred / non-goals (see also)
 
 Injection research that is intentionally not scheduled:
-[future/](future/README.md) (e.g. I/O ring completions). Prefer finishing the
-items above before adding more inject techniques.
+[future/](future/README.md) (e.g. I/O ring completions). Prefer finishing open
+items above (especially call orphans, patch `--apply`, session isolation) before
+adding more inject techniques.
