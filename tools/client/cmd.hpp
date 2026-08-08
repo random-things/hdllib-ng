@@ -105,4 +105,3 @@ CommandResult CmdRecipe(CmdCtx& ctx);
 CommandResult CmdStabilize(CmdCtx& ctx);
 
 bool ClientParsePred(const wchar_t* spec, HdlFieldPred* out);
-const CmdEntry* GetCommandTable(size_t* out_count);

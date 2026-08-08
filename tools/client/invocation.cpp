@@ -130,3 +130,26 @@ ParsedInvocation ParseInvocation(int argc, wchar_t* const* argv) {
     }
     return out;
 }
+
+ParsedInvocation ParsePipeCommandTail(uint32_t pid, int argc, wchar_t* const* argv) {
+    if (!pid || argc < 1 || !argv) {
+        ParsedInvocation out;
+        out.error = InvocationError::Usage;
+        return out;
+    }
+
+    std::vector<std::wstring> owned;
+    owned.reserve(static_cast<size_t>(argc) + 2);
+    owned.emplace_back(L"hdlclient");
+    owned.push_back(std::to_wstring(pid));
+    for (int i = 0; i < argc; ++i) {
+        owned.emplace_back(argv[i]);
+    }
+
+    std::vector<wchar_t*> synthetic_argv;
+    synthetic_argv.reserve(owned.size());
+    for (std::wstring& value : owned) {
+        synthetic_argv.push_back(value.data());
+    }
+    return ParseInvocation(static_cast<int>(synthetic_argv.size()), synthetic_argv.data());
+}

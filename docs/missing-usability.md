@@ -13,7 +13,7 @@ Related: [client](client.md), [workflows](workflows.md),
 |---|---|---|
 | 1 | Structured output (`--json`) for CLI verbs | **Partial** (envelope done; goldens/streams thin) |
 | 2 | Expose recipes as one-shot CLI | **Done** |
-| 3 | Inject → connect as one flow | **Open** |
+| 3 | Inject → connect as one flow | **Done** |
 | 4 | Implicit discover session in one-shot mode | **Done** |
 | 5 | Actionable error strings | **Partial** (central hints landed) |
 | 6 | Per-command help instead of one giant synopsis | **Open** |
@@ -60,27 +60,22 @@ envelopes via `CommandResult`.
 
 ---
 
-## 3. Inject → connect as one flow — **open**
+## 3. Inject → connect as one flow — **done**
 
 **Why it matters:** The common path is `inject`, note the pid, then
 `hdlclient <pid> ping`. Failures after inject are easy to mis-attribute
 when the second process never starts.
 
-**Current state:** Local inject in [`local_inject.cpp`](../tools/client/local_inject.cpp)
-exits after load; pipe commands are a separate invocation. No `--then` flag.
-
-**What needs to be done:**
-
-1. Add flags on inject: `--then ping` or `--then <verb…>`.
-2. After successful inject, wait for the pipe (retry with backoff) using
-   `HdlFormatPipeName` / `HDL_PIPE`, then run the follow-on command.
-3. Print the pid and pipe wait timing; on timeout, say “DLL loaded but IPC not
-   up” (distinguish inject success vs `HDL_NO_IPC` / bootstrap failure).
-4. Honor `--stealth` / early-bird `out_pid` so follow-on uses the real pid.
-5. Keep default inject behavior unchanged (no surprise follow-on).
+**Implemented:** Local inject in [`local_inject.cpp`](../tools/client/local_inject.cpp)
+accepts terminal `--then [--json] [--store PATH] <verb…>`, validates the normal
+one-shot tail before loading, waits up to 10 seconds through the shared
+`PipeClient` retry/backoff path, and dispatches the command in-process. It uses
+the resolved `out_pid`, reports wait timing, distinguishes “DLL loaded but IPC
+not up,” and keeps plain inject unchanged. JSON leaves one envelope on stdout
+and sends inject/readiness progress to stderr.
 
 **Acceptance:** `hdlclient inject <pid> hdllib.dll --then ping` is the happy-path
-demo in the README.
+demo in the README and is covered by client integration tests.
 
 ---
 
@@ -321,10 +316,9 @@ If only a few items ship next:
 
 1. Finish actionable inject-method hints (§5) — nearly done
 2. Broader JSON schema/golden fixtures (`scan`, `discover-cands`, …) (§1)
-3. inject `--then` (§3) — loop time
-4. `cleanup` (§7) — parity with documented workflows
-5. annotated hits / auto-resolve (§8–§9) — investigation speed
-6. CE scan polish (`between` / fuzzy float) (§12)
-7. executable `recipe suggest --run` (§10)
-8. per-command `--help` (§6)
-9. store ↔ discover bridge (§11)
+3. `cleanup` (§7) — parity with documented workflows
+4. annotated hits / auto-resolve (§8–§9) — investigation speed
+5. CE scan polish (`between` / fuzzy float) (§12)
+6. executable `recipe suggest --run` (§10)
+7. per-command `--help` (§6)
+8. store ↔ discover bridge (§11)

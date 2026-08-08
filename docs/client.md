@@ -47,19 +47,24 @@ On failure, `ok` is false and `error` is `{ "code", "name", "hint" }` with an ac
 ## 1. Get in: inject → talk
 
 ```bat
-hdlclient inject <pid> C:\full\path\to\hdllib.dll
+hdlclient inject <pid> C:\full\path\to\hdllib.dll --then ping
 hdlclient inject <pid> C:\path\hdllib.dll --method auto
 hdlclient inject --recommend <pid> C:\path\hdllib.dll
 hdlclient inject --title Notepad --class Notepad C:\path\hdllib.dll
 hdlclient inject --early-bird C:\Windows\System32\notepad.exe C:\path\hdllib.dll
 
-hdlclient <pid> ping
 hdlclient <pid> modules
 hdlclient <pid> fingerprint
 hdlclient <pid> health
 ```
 
-Typical first checks after inject: `ping`, then `modules` / `fingerprint` for bases and stack hints, then either a one-shot scan or `hdlclient --store interests.json <pid> session new` for a controller session. `recipe suggest` turns fingerprint primaries into concrete watch/call next steps.
+`--then` is terminal: injector options precede it, and its remaining tokens are a
+normal pipe invocation. The client waits up to 10 seconds for IPC and uses the
+actual injected PID, including early-bird launches. `--then --json ping` keeps
+the JSON envelope on stdout and sends injection/readiness progress to stderr.
+Without `--then`, local inject still exits immediately after the load.
+
+Typical first checks after the combined inject/ping are `modules` / `fingerprint` for bases and stack hints, then either a one-shot scan or `hdlclient --store interests.json <pid> session new` for a controller session. `recipe suggest` turns fingerprint primaries into concrete watch/call next steps.
 
 Quiet defaults after inject (log off, health VEH off). Raise logging with `hdlclient <pid> log 2` when debugging.
 
