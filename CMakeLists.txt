@@ -606,6 +606,7 @@ endif()
 if(HDL_BUILD_TOOLS)
   add_executable(hdlclient
     tools/client/main.cpp
+    tools/client/command_dispatch.cpp
     tools/client/invocation.cpp
     tools/client/local_inject.cpp
     tools/client/session_modules.cpp

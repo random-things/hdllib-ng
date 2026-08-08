@@ -99,15 +99,15 @@ flowchart TD
     Identify --> Recommend --> Inject --> Ping --> Inventory --> Baseline --> Suggest
 ```
 
-The recommendation command reports a method; it does not inject. After
-injection, use `ping` before launching a larger workflow so a connection
-failure is not mistaken for a discovery failure.
+The recommendation command reports a method; it does not inject. Use
+`--then ping` on the actual injection so the client waits for IPC before a
+larger workflow and a connection failure is not mistaken for a discovery
+failure.
 
 ```bat
 hdlclient inject --recommend <pid> C:\path\to\hdllib.dll
-hdlclient inject <pid> C:\path\to\hdllib.dll --method auto
+hdlclient inject <pid> C:\path\to\hdllib.dll --method auto --then ping
 
-hdlclient <pid> ping
 hdlclient <pid> modules
 hdlclient <pid> fingerprint
 hdlclient <pid> health

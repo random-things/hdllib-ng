@@ -22,3 +22,8 @@ struct ParsedInvocation {
 
 /* Parse the one-shot command grammar without connecting to a pipe or executing a command. */
 ParsedInvocation ParseInvocation(int argc, wchar_t* const* argv);
+
+/* Parse a command tail as though it followed `hdlclient <pid>`. This is used by
+ * local inject --then so global one-shot flags, aliases, and normalized argv stay
+ * identical to a standalone invocation. */
+ParsedInvocation ParsePipeCommandTail(uint32_t pid, int argc, wchar_t* const* argv);

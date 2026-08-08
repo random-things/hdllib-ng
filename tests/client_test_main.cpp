@@ -176,6 +176,7 @@ bool MatchEnvelopeGolden(const std::string& live, const std::string& golden_path
 struct ProcResult {
     DWORD exit_code = 1;
     std::wstring out;
+    std::wstring err;
 };
 
 std::wstring QuoteArg(const std::wstring& a) {
@@ -201,15 +202,27 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
     sa.bInheritHandle = TRUE;
 
     HANDLE out_r = nullptr, out_w = nullptr;
+    HANDLE err_r = nullptr, err_w = nullptr;
     HANDLE in_r = nullptr, in_w = nullptr;
-    if (!CreatePipe(&out_r, &out_w, &sa, 0)) {
+    if (!CreatePipe(&out_r, &out_w, &sa, 0) || !CreatePipe(&err_r, &err_w, &sa, 0)) {
+        if (out_r)
+            CloseHandle(out_r);
+        if (out_w)
+            CloseHandle(out_w);
+        if (err_r)
+            CloseHandle(err_r);
+        if (err_w)
+            CloseHandle(err_w);
         return false;
     }
     SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(err_r, HANDLE_FLAG_INHERIT, 0);
     if (stdin_text) {
         if (!CreatePipe(&in_r, &in_w, &sa, 0)) {
             CloseHandle(out_r);
             CloseHandle(out_w);
+            CloseHandle(err_r);
+            CloseHandle(err_w);
             return false;
         }
         SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0);
@@ -225,7 +238,7 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = out_w;
-    si.hStdError = out_w;
+    si.hStdError = err_w;
     si.hStdInput = stdin_text ? in_r : GetStdHandle(STD_INPUT_HANDLE);
 
     PROCESS_INFORMATION pi{};
@@ -234,11 +247,13 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
     const BOOL ok = CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, TRUE,
                                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(out_w);
+    CloseHandle(err_w);
     if (stdin_text) {
         CloseHandle(in_r);
     }
     if (!ok) {
         CloseHandle(out_r);
+        CloseHandle(err_r);
         if (in_w) {
             CloseHandle(in_w);
         }
@@ -257,34 +272,28 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
         CloseHandle(in_w);
     }
 
-    std::wstring collected;
-    std::string raw;
+    std::string stdout_raw;
+    std::string stderr_raw;
     char buf[4096];
     DWORD got = 0;
     const DWORD start = GetTickCount();
 
-    auto append_chunk = [&](const char* data, DWORD n) {
-        if (!n) {
-            return;
-        }
-        raw.append(data, n);
-    };
-
-    auto flush_raw_to_wide = [&]() {
+    auto raw_to_wide = [](std::string raw) {
+        std::wstring collected;
         if (raw.empty()) {
-            return;
+            return collected;
         }
-        size_t start = 0;
+        size_t raw_start = 0;
         if (raw.size() >= 2 && static_cast<unsigned char>(raw[0]) == 0xFF &&
             static_cast<unsigned char>(raw[1]) == 0xFE) {
-            start = 2;
+            raw_start = 2;
         }
-        const size_t nbytes = raw.size() - start;
+        const size_t nbytes = raw.size() - raw_start;
         bool as_utf16 = false;
         if (nbytes >= 2 && (nbytes % 2) == 0) {
             size_t nul_odd = 0;
             size_t samples = 0;
-            for (size_t i = start + 1; i < raw.size() && samples < 256; i += 2, ++samples) {
+            for (size_t i = raw_start + 1; i < raw.size() && samples < 256; i += 2, ++samples) {
                 if (raw[i] == 0) {
                     ++nul_odd;
                 }
@@ -294,7 +303,7 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
         if (as_utf16) {
             /* Copy UTF-16LE bytes into wchar_t storage (Windows wchar_t is 2 bytes). */
             std::wstring w(nbytes / sizeof(wchar_t), L'\0');
-            memcpy(w.data(), raw.data() + start, nbytes);
+            memcpy(w.data(), raw.data() + raw_start, nbytes);
             collected.append(w);
         } else {
             wchar_t wbuf[8192];
@@ -316,46 +325,50 @@ bool RunProcess(const std::wstring& exe, const std::vector<std::wstring>& args,
                 remaining -= chunk;
             }
         }
-        raw.clear();
+        return collected;
+    };
+
+    auto read_available = [&](HANDLE pipe, std::string* raw) {
+        DWORD avail = 0;
+        while (PeekNamedPipe(pipe, nullptr, 0, nullptr, &avail, nullptr) && avail) {
+            const DWORD to_read = avail > sizeof(buf) ? sizeof(buf) : avail;
+            if (!ReadFile(pipe, buf, to_read, &got, nullptr) || !got) {
+                break;
+            }
+            raw->append(buf, got);
+        }
     };
 
     for (;;) {
-        DWORD avail = 0;
-        if (PeekNamedPipe(out_r, nullptr, 0, nullptr, &avail, nullptr) && avail) {
-            const DWORD to_read = avail > sizeof(buf) ? sizeof(buf) : avail;
-            if (ReadFile(out_r, buf, to_read, &got, nullptr) && got) {
-                append_chunk(buf, got);
-            }
-        }
+        read_available(out_r, &stdout_raw);
+        read_available(err_r, &stderr_raw);
         const DWORD wr = WaitForSingleObject(pi.hProcess, 50);
         if (wr == WAIT_OBJECT_0) {
-            while (PeekNamedPipe(out_r, nullptr, 0, nullptr, &avail, nullptr) && avail) {
-                const DWORD to_read = avail > sizeof(buf) ? sizeof(buf) : avail;
-                if (ReadFile(out_r, buf, to_read, &got, nullptr) && got) {
-                    append_chunk(buf, got);
-                } else {
-                    break;
-                }
-            }
-            flush_raw_to_wide();
+            read_available(out_r, &stdout_raw);
+            read_available(err_r, &stderr_raw);
             break;
         }
         if (GetTickCount() - start > timeout_ms) {
             TerminateProcess(pi.hProcess, 1);
             WaitForSingleObject(pi.hProcess, 2000);
-            flush_raw_to_wide();
+            read_available(out_r, &stdout_raw);
+            read_available(err_r, &stderr_raw);
             CloseHandle(out_r);
+            CloseHandle(err_r);
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             out->exit_code = 1;
-            out->out = collected + L"\n[timeout]";
+            out->out = raw_to_wide(std::move(stdout_raw)) + L"\n[timeout]";
+            out->err = raw_to_wide(std::move(stderr_raw));
             return true;
         }
     }
 
     GetExitCodeProcess(pi.hProcess, &out->exit_code);
-    out->out = std::move(collected);
+    out->out = raw_to_wide(std::move(stdout_raw));
+    out->err = raw_to_wide(std::move(stderr_raw));
     CloseHandle(out_r);
+    CloseHandle(err_r);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return true;
@@ -476,7 +489,8 @@ ProcResult Cli(const ClientCtx& ctx, std::vector<std::wstring> args, DWORD timeo
 
 ProcResult CliInject(const ClientCtx& ctx) {
     ProcResult r;
-    RunProcess(ctx.client, {L"inject", std::to_wstring(ctx.pid), ctx.dll}, nullptr, 60000, &r);
+    RunProcess(ctx.client, {L"inject", std::to_wstring(ctx.pid), ctx.dll, L"--then", L"ping"},
+               nullptr, 60000, &r);
     return r;
 }
 
@@ -1107,14 +1121,71 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     ctx.dll = dll_path;
     ctx.pid = target.pid;
 
+    /* --then is validated before the load side effect, including modifiers that belong to inject.
+     */
+    {
+        ProcResult missing;
+        RunProcess(ctx.client, {L"inject", std::to_wstring(ctx.pid), ctx.dll, L"--then"}, nullptr,
+                   10000, &missing);
+        ProcResult unknown;
+        RunProcess(ctx.client,
+                   {L"inject", std::to_wstring(ctx.pid), ctx.dll, L"--stealth", L"--then",
+                    L"not-a-command"},
+                   nullptr, 10000, &unknown);
+        ProcResult recommend;
+        RunProcess(
+            ctx.client,
+            {L"inject", L"--recommend", std::to_wstring(ctx.pid), ctx.dll, L"--then", L"ping"},
+            nullptr, 10000, &recommend);
+        const bool untouched = hdltest::FindModuleBaseByPath(ctx.pid, ctx.dll.c_str()) == 0;
+        Report(c, missing.exit_code != 0 && Contains(missing.out, L"--then requires"), false,
+               "client inject --then requires verb", "");
+        Report(c, unknown.exit_code != 0 && Contains(unknown.out, L"Unknown --then pipe command"),
+               false, "client inject validates --then before stealth load", "");
+        Report(c,
+               recommend.exit_code != 0 && Contains(recommend.out, L"cannot be combined") &&
+                   untouched,
+               false, "client inject rejects recommend --then before load", "");
+    }
+
     /* Local inject via hdlclient */
     {
         const ProcResult inj = CliInject(ctx);
-        const bool ok = inj.exit_code == 0 && hdltest::PingPipe(ctx.pid, 10000);
-        Report(c, ok, false, "client inject + ping", "");
+        uint64_t remote_pid = 0;
+        const bool ok = inj.exit_code == 0 && Contains(inj.out, L"Injected into pid") &&
+                        Contains(inj.out, L"IPC ready for pid") && Contains(inj.out, L"after") &&
+                        Contains(inj.out, L"status=OK") &&
+                        ParseU64After(inj.out, L"remote_pid", &remote_pid) && remote_pid == ctx.pid;
+        Report(c, ok, false, "client inject --then ping", "");
         if (!ok) {
             return;
         }
+    }
+
+    /* Arbitrary verb arguments and full one-shot modifiers share normal dispatch/rendering. */
+    {
+        ProcResult events;
+        RunProcess(ctx.client,
+                   {L"inject", std::to_wstring(ctx.pid), ctx.dll, L"--then", L"events",
+                    L"--timeout", L"0", L"--max", L"1"},
+                   nullptr, 60000, &events);
+        Report(c,
+               events.exit_code == 0 && Contains(events.out, L"IPC ready for pid") &&
+                   Contains(events.out, L"status=OK"),
+               false, "client inject --then forwards verb args", "");
+
+        ProcResult json_ping;
+        RunProcess(ctx.client,
+                   {L"inject", std::to_wstring(ctx.pid), ctx.dll, L"--then", L"--json", L"ping"},
+                   nullptr, 60000, &json_ping);
+        uint64_t json_pid = 0;
+        const std::string json_stdout = ToNarrow(json_ping.out);
+        Report(c,
+               json_ping.exit_code == 0 && IsSingleJsonEnvelope(json_ping.out) &&
+                   hdl::json::ExtractU64(json_stdout, "remote_pid", &json_pid) &&
+                   json_pid == ctx.pid && Contains(json_ping.err, L"Injected into pid") &&
+                   Contains(json_ping.err, L"IPC ready for pid"),
+               false, "client inject --then JSON separates progress", "");
     }
 
     RunLiveTransportValidation(c, ctx.pid);
@@ -2098,6 +2169,115 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     }
 }
 
+void RunInjectThenNoIpcTest(Counters& c, const wchar_t* client_path, const wchar_t* target_path,
+                            const wchar_t* dll_path) {
+    std::printf("\n== hdlclient inject --then without IPC ==\n");
+
+    wchar_t previous[64]{};
+    const DWORD previous_length = GetEnvironmentVariableW(L"HDL_NO_IPC", previous, 64);
+    SetEnvironmentVariableW(L"HDL_NO_IPC", L"1");
+
+    TargetProfile profile{};
+    profile.name = "client_no_ipc";
+    profile.alertable = true;
+    profile.integrity = IlLevel::Medium;
+    TargetProc target;
+    const bool spawned = hdltest::SpawnTarget(target_path, profile, target);
+
+    if (previous_length > 0 && previous_length < 64) {
+        SetEnvironmentVariableW(L"HDL_NO_IPC", previous);
+    } else {
+        SetEnvironmentVariableW(L"HDL_NO_IPC", nullptr);
+    }
+    if (!spawned) {
+        Report(c, false, false, "client inject --then no-IPC spawn", "");
+        return;
+    }
+
+    ProcResult result;
+    RunProcess(client_path,
+               {L"inject", std::to_wstring(target.pid), dll_path, L"--then", L"--json", L"ping"},
+               nullptr, 30000, &result);
+    const std::string json = ToNarrow(result.out);
+    std::string command;
+    int32_t status = HDL_OK;
+    const bool loaded = hdltest::FindModuleBaseByPath(target.pid, dll_path) != 0;
+    Report(c,
+           result.exit_code != 0 && IsSingleJsonEnvelope(result.out) &&
+               hdl::json::ExtractString(json, "cmd", &command) && command == "inject" &&
+               hdl::json::ExtractI32(json, "status", &status) && status == HDL_E_TIMEOUT &&
+               Contains(result.err, L"DLL loaded but IPC not up after") && loaded,
+           false, "client inject --then distinguishes no IPC", "");
+}
+
+void RunInjectThenStealthTest(Counters& c, const wchar_t* client_path, const wchar_t* target_path,
+                              const wchar_t* dll_path) {
+    std::printf("\n== hdlclient inject --stealth --then ==\n");
+
+    TargetProfile profile{};
+    profile.name = "client_stealth_then";
+    profile.alertable = true;
+    profile.integrity = IlLevel::Medium;
+    TargetProc target;
+    if (!hdltest::SpawnTarget(target_path, profile, target)) {
+        Report(c, false, false, "client inject --stealth --then spawn", "");
+        return;
+    }
+
+    ProcResult result;
+    RunProcess(client_path,
+               {L"inject", std::to_wstring(target.pid), dll_path, L"--stealth", L"--method",
+                L"create_remote_thread", L"--then", L"ping"},
+               nullptr, 60000, &result);
+
+    uint64_t remote_pid = 0;
+    const bool ok =
+        result.exit_code == 0 && Contains(result.out, L"Staged: ") &&
+        Contains(result.out, L"Injected into pid") && Contains(result.out, L"IPC ready for pid") &&
+        Contains(result.out, L"status=OK") &&
+        ParseU64After(result.out, L"remote_pid", &remote_pid) && remote_pid == target.pid;
+    Report(c, ok, false, "client inject --stealth coexists with --then", "");
+
+    std::wstring staged_path;
+    const size_t staged_start = result.out.find(L"Staged: ");
+    if (staged_start != std::wstring::npos) {
+        const size_t value_start = staged_start + wcslen(L"Staged: ");
+        const size_t value_end = result.out.find_first_of(L"\r\n", value_start);
+        staged_path = result.out.substr(value_start, value_end - value_start);
+    }
+    target.Close();
+    if (!staged_path.empty()) {
+        DeleteFileW(staged_path.c_str());
+    }
+}
+
+void RunInjectThenEarlyBirdTest(Counters& c, const wchar_t* client_path, const wchar_t* target_path,
+                                const wchar_t* dll_path) {
+    std::printf("\n== hdlclient early-bird --then ==\n");
+    ProcResult result;
+    RunProcess(client_path, {L"inject", L"--early-bird", target_path, dll_path, L"--then", L"ping"},
+               nullptr, 60000, &result);
+
+    uint64_t injected_pid = 0;
+    uint64_t remote_pid = 0;
+    const bool parsed_injected = ParseU64After(result.out, L"Injected into pid", &injected_pid);
+    const bool parsed_remote = ParseU64After(result.out, L"remote_pid", &remote_pid);
+    Report(c,
+           result.exit_code == 0 && parsed_injected && parsed_remote && injected_pid != 0 &&
+               injected_pid == remote_pid && Contains(result.out, L"IPC ready for pid"),
+           false, "client early-bird --then uses out_pid", "");
+
+    if (injected_pid && injected_pid <= UINT32_MAX) {
+        HANDLE process =
+            OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, static_cast<DWORD>(injected_pid));
+        if (process) {
+            TerminateProcess(process, 0);
+            WaitForSingleObject(process, 3000);
+            CloseHandle(process);
+        }
+    }
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -2192,6 +2372,9 @@ int wmain(int argc, wchar_t** argv) {
     RunOneInFlightValidation(c);
     RunStoreUnit(c);
     RunClientLiveTests(c, client_full, target_full, dll_full);
+    RunInjectThenStealthTest(c, client_full, target_full, dll_full);
+    RunInjectThenNoIpcTest(c, client_full, target_full, dll_full);
+    RunInjectThenEarlyBirdTest(c, client_full, target_full, dll_full);
 
     std::printf("\n== Summary ==\n");
     std::printf("passed=%d failed=%d soft=%d skipped=%d\n", c.passed, c.failed, c.soft_failed,

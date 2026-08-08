@@ -21,7 +21,7 @@ CLI, recipes, and a persistent interest store.
 | System boundaries, lifecycle, and data flow | [architecture](architecture.md) | [`src/core.cpp`](../src/core.cpp), [`src/ipc/`](../src/ipc/) |
 | Find the implementation of a feature | [functionality index](#functionality-index) | domain `src/*.cpp`, [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1), [`src/ipc/`](../src/ipc/) |
 | Understand an RPC method or payload | [RPC contract](rpc.md) | [`services.proto`](../proto/hdl/rpc/v1/services.proto), [`src/ipc/dispatch.cpp`](../src/ipc/dispatch.cpp) |
-| Understand a CLI or recipe workflow | [client workflows](client.md) | [`tools/client/main.cpp`](../tools/client/main.cpp), [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) |
+| Understand a CLI or recipe workflow | [client workflows](client.md) | [`tools/client/command_dispatch.cpp`](../tools/client/command_dispatch.cpp), [`tools/client/recipes.cpp`](../tools/client/recipes.cpp) |
 | Change or extend the project | [development guide](development.md) | [`CMakeLists.txt`](../CMakeLists.txt), [test guide](../tests/README.md) |
 | Configure Windows CI or the GUI runner | [CI guide](ci.md) | [workflow definitions](../.github/workflows/) |
 | Work on injection | [injection index](inject/README.md) | [selection model](inject/selection.md), [`src/inject/`](../src/inject/) |
@@ -69,7 +69,7 @@ When documentation and code disagree, use this order:
    validation, and domain conversion.
 3. Domain implementation files under [`src/`](../src/) for semantics and
    lifetime behavior.
-4. [`tools/client/main.cpp`](../tools/client/main.cpp) and
+4. [`tools/client/command_dispatch.cpp`](../tools/client/command_dispatch.cpp) and
    [`tools/client/usage.cpp`](../tools/client/usage.cpp) for the live command
    registry and syntax.
 5. Tests for executable examples and edge-case expectations.
@@ -101,7 +101,7 @@ manifest.
 | PE metadata and bounded function/xref graph | `HdlEnumSections/Exports/Imports`, `HdlEnumFunctions`, `HdlResolveFunction`, `HdlXrefs*` | [`pe_meta.cpp`](../src/pe_meta.cpp), [`graph.cpp`](../src/graph.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: PE](capabilities.md#16-pe-metadata), [capabilities: graph](capabilities.md#17-bounded-function--xref-graph) |
 | Vtables and MSVC RTTI | `HdlWalkVtable`, `HdlQueryRttiName` | [`vtable.cpp`](../src/vtable.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), `vtable`/`rtti` in [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: observe](capabilities.md#18-observe-vtable--rtti), local/client/toy tests |
 | Hardware/page watchpoints and hit queue | `HdlWatch*`, `HdlPollWatchHits` | [`watch.cpp`](../src/watch.cpp) | [`handlers_code.cpp`](../src/ipc/handlers_code.cpp), `watch` in [`cmds_place.cpp`](../tools/client/cmds_place.cpp) | [capabilities: watchpoints](capabilities.md#19-watchpoints-hardware--page), local/client/toy tests |
-| CLI and controller | Command registry in [`main.cpp`](../tools/client/main.cpp), syntax in [`usage.cpp`](../tools/client/usage.cpp) | Controller in [`cmds_controller.cpp`](../tools/client/cmds_controller.cpp), session persist in [`session_persist.cpp`](../tools/client/session_persist.cpp) | Uses the shared [`PipeClient`](../src/rpc/pipe_client.cpp) and generated typed service clients | [client workflows](client.md), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
+| CLI and controller | Command registry and shared dispatch in [`command_dispatch.cpp`](../tools/client/command_dispatch.cpp), syntax in [`usage.cpp`](../tools/client/usage.cpp) | Controller in [`cmds_controller.cpp`](../tools/client/cmds_controller.cpp), session persist in [`session_persist.cpp`](../tools/client/session_persist.cpp) | Uses the shared [`PipeClient`](../src/rpc/pipe_client.cpp) and generated typed service clients | [client workflows](client.md), [`client_test_main.cpp`](../tests/client_test_main.cpp) |
 | Durable interests and orchestration recipes | JSON v3 types in [`store.hpp`](../tools/client/store.hpp), recipe state in [`recipes.hpp`](../tools/client/recipes.hpp) | [`store.cpp`](../tools/client/store.cpp), [`recipes.cpp`](../tools/client/recipes.cpp) | One-shot controller verbs; not an IPC or DLL feature | [client: interest store](client.md#4-interest-store-and-recipes), [`store_test.cpp`](../tests/store_test.cpp), client/toy tests |
 
 ## Repository map

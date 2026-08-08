@@ -30,6 +30,20 @@ ParsedInvocation Parse(std::initializer_list<const wchar_t*> args) {
     return ParseInvocation(static_cast<int>(argv.size()), argv.data());
 }
 
+ParsedInvocation ParseTail(uint32_t pid, std::initializer_list<const wchar_t*> args) {
+    std::vector<std::wstring> owned;
+    std::vector<wchar_t*> argv;
+    owned.reserve(args.size());
+    argv.reserve(args.size());
+    for (const wchar_t* arg : args) {
+        owned.emplace_back(arg);
+    }
+    for (std::wstring& arg : owned) {
+        argv.push_back(arg.data());
+    }
+    return ParsePipeCommandTail(pid, static_cast<int>(argv.size()), argv.data());
+}
+
 } // namespace
 
 int main() {
@@ -59,6 +73,24 @@ int main() {
           "tui removal preserved");
     Check(Parse({L"hdlclient", L"--store"}).error == InvocationError::Usage,
           "missing store path rejected");
+
+    {
+        const ParsedInvocation parsed = ParseTail(77, {L"ping"});
+        Check(parsed.error == InvocationError::None && parsed.pid == 77 &&
+                  parsed.command == L"ping" && parsed.normalized_args.size() == 3,
+              "pipe command tail");
+    }
+    {
+        const ParsedInvocation parsed =
+            ParseTail(77, {L"--json", L"--store", L"state.json", L"rpat", L"AA", L"BB"});
+        Check(parsed.error == InvocationError::None && parsed.json &&
+                  parsed.store_path == L"state.json" && parsed.command == L"resolve-pattern" &&
+                  parsed.normalized_args.size() == 5 && parsed.normalized_args[3] == L"AA" &&
+                  parsed.normalized_args[4] == L"BB",
+              "pipe command tail flags args and alias");
+    }
+    Check(ParsePipeCommandTail(77, 0, nullptr).error == InvocationError::Usage,
+          "empty pipe command tail rejected");
 
     return failures == 0 ? 0 : 1;
 }

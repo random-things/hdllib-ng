@@ -32,14 +32,13 @@ unlocked interactive desktop.
 ## Inject and talk
 
 ```bat
-hdlclient inject <pid> C:\full\path\to\hdllib.dll
+hdlclient inject <pid> C:\full\path\to\hdllib.dll --then ping
 hdlclient inject <pid> C:\full\path\to\hdllib.dll --method nt_create_thread_ex
 hdlclient inject <pid> C:\full\path\to\hdllib.dll --method auto
 hdlclient inject <pid> C:\full\path\to\hdllib.dll --stealth
 hdlclient inject --recommend <pid> C:\full\path\to\hdllib.dll
 hdlclient inject --title Notepad --class Notepad C:\full\path\to\hdllib.dll
 hdlclient inject --early-bird C:\Windows\System32\notepad.exe C:\full\path\to\hdllib.dll
-hdlclient <pid> ping
 hdlclient <pid> modules
 hdlclient <pid> fingerprint
 hdlclient <pid> scan --pattern "48 8B ?? 90" --max 32
@@ -62,6 +61,12 @@ hdlclient --store interests.json <pid> session new
 hdlclient --store interests.json <pid> recipe place my_fn 0x7FF6ABCD1000
 hdlclient --store interests.json <pid> store list
 ```
+
+`--then` must be the final inject option. It waits up to 10 seconds for the named
+pipe and runs the remaining one-shot verb in the same client process. The
+follow-on may start with `--json` and/or `--store PATH`; JSON keeps its single
+stdout envelope while inject/readiness progress goes to stderr. Without
+`--then`, inject still returns immediately after the DLL load.
 
 Typed scan `--type` values: `bytes`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `f32`/`float`, `f64`/`double`, `string`, `wstring`. Comparison modes (`--cmp`): `exact`, `unknown`, `changed`, `unchanged`, `increased`, `decreased`, `increased_by`, `decreased_by`, `greater`, `less`. First scan creates a session id (printed); `--next` / `--hits` / `--close` reuse it.
 

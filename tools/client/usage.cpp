@@ -7,10 +7,13 @@ void PrintUsage() {
 
 Local inject (no pipe; former hdlinjector):
   hdlclient inject <pid> <dll-path> [--method NAME] [--hook-export NAME] [--stealth]
+                   [--then [--json] [--store PATH] <verb> [args...]]
   hdlclient inject --title <substr> [--class <name>] <dll-path> [--method auto|...] [--stealth]
+                   [--then [--json] [--store PATH] <verb> [args...]]
   hdlclient inject --recommend <pid> [dll-path] [--hook-export NAME] [--stealth]
   hdlclient inject --recommend --title <substr> [--class <name>] [dll-path] [--stealth]
   hdlclient inject --early-bird <exe-path> <dll-path> [--stealth]
+                   [--then [--json] [--store PATH] <verb> [args...]]
   hdlclient inject --help
   hdlclient unload <pid> <dll-path> [--reload] [--modules]
   hdlclient reload <pid> <dll-path>
