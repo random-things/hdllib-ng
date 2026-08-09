@@ -1296,6 +1296,59 @@ void RunClientLiveTests(Counters& c, const wchar_t* client_path, const wchar_t* 
     Report(c, fn && leaf && root && obj && str && str_ptr && action && dleaf && obj_a && dyn_root,
            false, "client resolve all fixtures", "");
 
+    /* This target intentionally has no HWND. MAIN must fail before admission and
+       must not create lifecycle state. */
+    if (fn) {
+        PipeClient lifecycle_pipe(ctx.pid, "hdl-client-no-hwnd");
+        const bool connected = lifecycle_pipe.Connect(3000);
+        size_t before_count = 0;
+        size_t after_count = 0;
+        hdl::rpc::Result<hdl::rpc::v1::CallResponse> no_hwnd;
+        if (connected) {
+            hdl::rpc::CallClient lifecycle_client(&lifecycle_pipe);
+            const auto count_orphans = [&](size_t* count) {
+                *count = 0;
+                return lifecycle_client.EnumOrphans(
+                    hdl::rpc::v1::Empty{},
+                    [count](const hdl::rpc::v1::EnumOrphansResponse& response) {
+                        *count += static_cast<size_t>(response.calls_size());
+                        return true;
+                    });
+            };
+            const auto before_status = count_orphans(&before_count);
+            hdl::rpc::v1::CallRequest request;
+            request.set_address(fn);
+            request.set_thread_mode(hdl::rpc::v1::CALL_THREAD_MODE_MAIN);
+            request.set_wait_timeout_ms(50);
+            no_hwnd = lifecycle_client.Call(request, {1050});
+            const auto after_status = count_orphans(&after_count);
+            Report(c,
+                   before_status.ok() && after_status.ok() && no_hwnd.has_response &&
+                       no_hwnd.status.hdl_status() == HDL_E_NOT_FOUND &&
+                       !no_hwnd.status.outcome_unknown() &&
+                       no_hwnd.response.result().call_id() == 0 &&
+                       !no_hwnd.response.result().orphaned() && before_count == after_count,
+                   false, "client MAIN without HWND creates no call record", "");
+        } else {
+            Report(c, false, false, "client MAIN without HWND creates no call record",
+                   "connect failed");
+        }
+
+        wchar_t address[32];
+        swprintf_s(address, L"0x%llx", static_cast<unsigned long long>(fn));
+        const auto cli_no_hwnd =
+            Cli(ctx, {L"call", L"--addr", address, L"--main", L"--timeout", L"50"});
+        Report(c,
+               cli_no_hwnd.exit_code != 0 && Contains(cli_no_hwnd.out, L"status=NOT_FOUND") &&
+                   Contains(cli_no_hwnd.out, L"call_id=0") &&
+                   Contains(cli_no_hwnd.out, L"orphaned=0"),
+               false, "client no-HWND MAIN reports known outcome", "");
+        const auto empty_status = Cli(ctx, {L"call", L"status"});
+        ExpectOk(c, "client call status after no-HWND", empty_status);
+        Report(c, Contains(empty_status.out, L"count=0"), false,
+               "client call status confirms no-HWND left no orphan", "");
+    }
+
     /* Call / read / write / alloc */
     if (fn) {
         wchar_t a[32];

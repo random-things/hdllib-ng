@@ -10,7 +10,7 @@ The source of truth is [`proto/hdl/rpc/v1`](../proto/hdl/rpc/v1):
 - `envelope.proto` defines negotiation, requests, responses, and connection shutdown.
 - `types.proto` defines domain messages shared by services.
 - The per-service files define method request, response, and batch messages.
-- `services.proto` is the authoritative inventory of the 12 services, 97 methods, and their streaming declarations.
+- `services.proto` is the authoritative inventory of the 12 services, 100 methods, and their streaming declarations.
 - `contract.json` is the descriptor-derived compatibility golden. It records services, methods, streaming flags, message fields and numbers, and enum values.
 
 CMake pins the host-side Protobuf compiler and Lite runtime. `hdl_rpc_codegen`, a host-side protoc plugin, generates service-qualified method identifiers, `MethodTraits`, method metadata, typed client stubs, `Handle<Service>_<Method>` declarations, server dispatch, and the contract manifest. Generation rejects client-streaming, bidirectional-streaming, or any service method that uses the removed legacy `Payload` type.
@@ -50,7 +50,7 @@ Streaming writes are synchronous and bounded, providing named-pipe backpressure.
 
 ## Status and failures
 
-`RpcStatus` is authoritative. It contains an RPC-layer `RpcCode`, a stable machine-readable `reason`, a diagnostic `message`, the corresponding `HdlStatusCode`, and `outcome_unknown` for a timeout or cancellation where an in-process call may still be running.
+`RpcStatus` is authoritative. It contains an RPC-layer `RpcCode`, a stable machine-readable `reason`, a diagnostic `message`, the corresponding `HdlStatusCode`, and `outcome_unknown`. For call methods, `outcome_unknown` is true only when the server accepted execution and returned a queryable orphan ID.
 
 - Framing, handshake, or envelope violations send `GoAway` when possible and then close the connection.
 - An unknown method returns terminal `UNIMPLEMENTED`.
@@ -62,7 +62,15 @@ Streaming writes are synchronous and bounded, providing named-pipe backpressure.
 
 Search methods intentionally have no default deadline: a broad or low-selectivity query can legitimately run for a long time. A result limit of zero means unlimited. `hdlclient scan` writes unlimited result streams to a controller-owned candidate file (or a caller-selected `--candidates FILE`) and keeps only a 64-address preview in memory. The file starts with `HDLCAND1`, a little-endian version (`1`), record size (`8`), 64-bit record count, and then contiguous 64-bit addresses.
 
-With one active request per connection, abandoning a response closes that connection. Cooperative envelope deadlines bound work that does not emit intermediate responses. The Windows client enforces the same absolute deadline across all request writes and response reads with completion-port-driven overlapped named-pipe I/O; expiration cancels the pending operation and closes the connection. Remote call methods derive their execution timeout from the envelope deadline; no inner timeout or job identifier exists on the wire.
+With one active request per connection, abandoning a response closes that connection. Cooperative envelope deadlines bound work that does not emit intermediate responses. The Windows client enforces the same absolute deadline across all request writes and response reads with completion-port-driven overlapped named-pipe I/O; expiration cancels the pending operation and closes the connection.
+
+Call requests have an explicitly present `wait_timeout_ms` execution deadline.
+New clients set the envelope deadline to that value plus a one-second reply
+allowance; zero means infinite execution and transport wait. For older requests
+without the field, the server derives the execution wait from the envelope and
+reserves about 250 ms for serialization. A timed-out accepted call returns
+`CallResult.call_id` and remains queryable through `Call/GetCallStatus` and
+`Call/EnumOrphans`; `Call/AcknowledgeOrphan` is an explicit overlap override.
 
 ## Evolution rules
 

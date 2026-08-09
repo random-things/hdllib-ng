@@ -7,8 +7,8 @@ namespace hdl {
 HdlStatus CoreInit();
 void CoreShutdown();
 void CoreShutdownEx(uint32_t flags);
-/* Instrumentation teardown only (caller replies on the pipe, then Finish). */
-void CoreShutdownPrepare(uint32_t flags);
+/* Quiesce calls and tear down instrumentation (caller replies, then Finish). */
+HdlStatus CoreShutdownPrepare(uint32_t flags);
 /* Signal IPC stop without join. Alloc/registry finish runs after the accept thread
  * joins workers (CoreOnIpcServerExited). keep_alive_pipe: leave connected for reply. */
 void CoreShutdownFinish(void* keep_alive_pipe = nullptr);

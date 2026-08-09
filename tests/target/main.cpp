@@ -12,6 +12,9 @@
 //   HdlTestDiscoverLeaf / HdlTestDiscoverAction / HdlTestDiscoverObjA|B /
 //   HdlTestDiscoverDynLeaf / HdlTestDiscoverAllocDyn / HdlTestDiscoverFreeDyn /
 //   HdlTestDiscoverDynRoot / HdlTestDiscoverDamage
+//
+// Lifecycle export:
+//   HdlTestLifecycleQuickCall
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -88,6 +91,10 @@ static HdlTestMethod g_locate_vt[1] = {&HdlTestObjAdd};
 __declspec(dllexport) HdlTestObj HdlTestLocateObj = {
     g_locate_vt, 42, 1.5f, 2.5f, &HdlTestLocateLeaf,
 };
+
+__declspec(dllexport) uint64_t HdlTestLifecycleQuickCall(void) {
+    return 0x51AFC0DEull;
+}
 
 /* ---- Discover fixtures ---- */
 
@@ -207,6 +214,7 @@ int wmain(int argc, wchar_t** argv) {
     (void)HdlTestLocateFn(1, 2);
     (void)HdlTestLocateRoot;
     (void)HdlTestLocateObj.health;
+    (void)HdlTestLifecycleQuickCall();
     HdlTestDiscoverAction();
     (void)HdlTestDiscoverObjA.health;
     (void)HdlTestDiscoverObjB.health;

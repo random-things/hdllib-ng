@@ -128,6 +128,23 @@ inline void ToProto(const HdlEvent& in, rpc::v1::Event* out) {
     out->set_detail(in.detail);
 }
 
+inline void ToProto(const HdlCallInfo& in, rpc::v1::CallInfo* out) {
+    out->set_call_id(in.call_id);
+    out->set_target_address(in.target_address);
+    out->set_created_tick_ms(in.created_tick_ms);
+    out->set_started_tick_ms(in.started_tick_ms);
+    out->set_finished_tick_ms(in.finished_tick_ms);
+    out->set_return_value(in.return_value);
+    out->set_thread_id(in.thread_id);
+    out->set_thread_mode(static_cast<rpc::v1::CallThreadMode>(in.thread_mode));
+    out->set_phase(static_cast<rpc::v1::CallPhase>(in.phase));
+    out->set_orphaned((in.flags & HDL_CALL_INFO_ORPHANED) != 0);
+    out->set_acknowledged((in.flags & HDL_CALL_INFO_ACKNOWLEDGED) != 0);
+    out->set_wait_status(in.wait_status);
+    out->set_completion_status(in.completion_status);
+    out->set_last_error(in.last_error);
+}
+
 inline void ToProto(const HdlPatternResult& in, rpc::v1::PatternResult* out) {
     out->set_match_address(in.match_addr);
     out->set_resolved_address(in.resolved_addr);

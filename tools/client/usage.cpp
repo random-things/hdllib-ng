@@ -37,6 +37,8 @@ Pipe commands (DLL already loaded in <pid>):
   hdlclient <pid> resolve [--module NAME] <export>
   hdlclient <pid> call [--module NAME] [--timeout MS] <export> [ARGS...]
   hdlclient <pid> call --addr HEX [--main] [--timeout MS] [ARGS...]
+  hdlclient <pid> call status [CALL_ID]
+  hdlclient <pid> call ack CALL_ID
   hdlclient <pid> vcall HEX_OBJ INDEX [--main] [--timeout MS] [--no-this] [ARGS...]
   hdlclient <pid> alloc SIZE [--protect RW|RWX]
   hdlclient <pid> alloc-near HEX_NEAR SIZE [--dist HEX]

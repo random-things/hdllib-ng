@@ -57,7 +57,10 @@ rpc::Status HandleControl_GetHealthVeh(rpc::CallContext&, const rpc::v1::Empty&,
 
 rpc::Status HandleControl_Shutdown(rpc::CallContext& context,
                                    const rpc::v1::ShutdownRequest& request, rpc::v1::Empty*) {
-    CoreShutdownPrepare(request.flags());
+    const HdlStatus status = CoreShutdownPrepare(request.flags());
+    if (status != HDL_OK) {
+        return rpc::Status::FromHdl(status);
+    }
     context.DeferAfterReply([] { CoreShutdownFinish(); });
     return rpc::Status::Ok();
 }

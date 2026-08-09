@@ -394,10 +394,13 @@ IpcStatus CallExport(PipeClient& client, const wchar_t* module, const char* name
     hdl::rpc::v1::CallExportRequest request;
     request.set_module(WideToUtf8(module ? module : L""));
     request.set_name(name ? name : "");
+    request.set_wait_timeout_ms(timeout_ms);
     for (const auto& value : args)
         if (!ToProto(value, request.add_arguments()))
             return {HDL_E_INVALID_ARG};
-    const auto result = hdl::rpc::CallClient(&client).CallExport(request, {timeout_ms});
+    const uint32_t transport_timeout =
+        !timeout_ms ? 0 : (timeout_ms <= UINT32_MAX - 1000 ? timeout_ms + 1000 : UINT32_MAX);
+    const auto result = hdl::rpc::CallClient(&client).CallExport(request, {transport_timeout});
     if (output) {
         *output = {};
         if (result.has_response)

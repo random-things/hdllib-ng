@@ -87,9 +87,8 @@ creates a new suspended process and is never auto-selected for a PID attach.
 
 [`src/dllmain.cpp`](../src/dllmain.cpp) defers initialization to a new thread to
 avoid doing MinHook, thread, and pipe work under the loader lock. Explicit unload
-should call the `Control/Shutdown` RPC / `HdlShutdownEx` **before** `FreeLibrary` so teardown
-also runs off the loader lock; `DLL_PROCESS_DETACH` only runs a join-free residual
-path if prepare was skipped.
+must complete the `Control/Shutdown` RPC **before** `FreeLibrary` so teardown
+runs off the loader lock; `DLL_PROCESS_DETACH` is intentionally a no-op.
 
 ```mermaid
 flowchart TD
@@ -98,22 +97,25 @@ flowchart TD
     Quiet --> Disasm["Initialize disassembly registry"]
     Disasm --> Hooks["Initialize MinHook registry"]
     Hooks --> Health["Initialize health subsystem"]
-    Health --> Watch["Initialize watch subsystem"]
+    Health --> Calls["Initialize call registry"]
+    Calls --> Watch["Initialize watch subsystem"]
     Watch --> NoIPC{"HDL_NO_IPC?"}
     NoIPC -- "no" --> Server["Start named-pipe server"]
     NoIPC -- "yes" --> Ready["Core ready without IPC"]
     Server --> Ready
 
-    Prepare["Control/Shutdown or HdlShutdownEx"] --> WaitBoot["Wait for bootstrap done"]
-    WaitBoot --> Jobs["Cancel jobs and close sessions"]
-    Jobs --> Restore["Restore watches, patches, health VEH, hooks"]
+    Prepare["Control/Shutdown"] --> WaitBoot["Wait for bootstrap done"]
+    WaitBoot --> StopCalls["Stop call admission and cancel queued UI tickets"]
+    StopCalls --> Quiescent{"All call execution exited?"}
+    Quiescent -- "no" --> Busy["Return BUSY; helper stays ready"]
+    Quiescent -- "yes" --> Restore["Restore watches, patches, health VEH, hooks"]
     Restore --> Modules{"UNLOAD_MODULES?"}
     Modules -- "yes" --> FreeTracked["FreeLibrary tracked module-list DLLs"]
     Modules -- "no" --> StopPipe
     FreeTracked --> StopPipe["Stop IPC then free allocs"]
     StopPipe --> Idle["Core down; DLL may still be mapped"]
 
-    Detach["DLL_PROCESS_DETACH without prior prepare"] --> DetachSafe["Detach-safe teardown: no IPC join"]
+    Detach["DLL_PROCESS_DETACH without prior prepare"] --> DetachSafe["No-op; unsafe unload was not authorized"]
     Idle --> FreeLib["Controller FreeLibrary"]
     FreeLib --> DetachNoop["DETACH no-op when already shut down"]
 ```
@@ -262,7 +264,7 @@ the target. Handles and IDs are not durable across unload/reload.
 
 | State | Owner | Synchronization | Cleanup |
 |---|---|---|---|
-| Core state (uninit / bootstrapping / ready) | [`core.cpp`](../src/core.cpp) | Atomic + bootstrap CV | `CoreShutdown*` |
+| Core state (uninit / bootstrapping / ready) | [`core.cpp`](../src/core.cpp) | Atomic + bootstrap CV + serialized shutdown attempts | `CoreShutdown*` |
 | Tracked loaded modules | [`loaded_modules.cpp`](../src/loaded_modules.cpp) | Mutex | `UnloadTrackedExcept` / `Control/Shutdown` |
 | Pipe accept/client list | [`ipc/server.cpp`](../src/ipc/server.cpp) | Atomics + client mutex | `ipc::Stop`; active pipe I/O is cancelled |
 | IPC search ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
@@ -270,6 +272,7 @@ the target. Handles and IDs are not durable across unload/reload.
 | IPC discover ID → opaque session | [`ipc/common.cpp`](../src/ipc/common.cpp) | Map mutex | Explicit close or server shutdown |
 | Discover candidates, actions, evidence, regions | [`discover_*.cpp`](../src/discover_session.cpp) / [`discover_internal.hpp`](../src/discover_internal.hpp) | Per-session mutex plus global live-session set mutex | `DiscoverClose` / `DiscoverCloseAll` |
 | Cooperative jobs/deadlines | [`jobs.cpp`](../src/jobs.cpp) | Registry mutex + atomics | Explicit close, server stop, or core shutdown |
+| In-process calls and recent tombstones | [`call_registry.cpp`](../src/call_registry.cpp) | Registry mutex; no lock held during target execution or waits | Completion/retention pruning; quiesced before shutdown |
 | Scratch allocations | [`alloc.cpp`](../src/alloc.cpp) | Registry mutex | `HdlFree` or `AllocShutdown` |
 | Reversible patches | [`code.cpp`](../src/code.cpp) | Patch mutex | Remove explicitly or `PatchShutdown` |
 | Hooks and hook-hit queue | [`hooks.cpp`](../src/hooks.cpp) | Hook mutex; hit mutex/CV | `Unhook` or `HooksShutdown` |
@@ -370,15 +373,21 @@ reapply a patch.
   instrumentation only; domain session/job sweep runs after workers join.
 - Domain registries use their own locks. Do not hold a registry lock while
   calling arbitrary target code.
-- Cancellation and deadlines are checked by long loops; they do not terminate a
-  running call or Windows primitive.
+- Cancellation and deadlines do not terminate a running call or Windows
+  primitive. Accepted calls remain registered and queryable after the waiter
+  detaches; the same resolved target is contained by default.
 - Hook, watch, health, and discover all exchange events. Changing queue or
   shutdown order can affect several subsystems.
-- Core teardown order is intentional: restore instrumentation, stop/join IPC,
-  close discover/jobs/sessions, then free allocs/disasm registry.
-- `HdlCall` worker timeout abandons the wait; the callee may still be executing.
-- `RunOnWindowThread` temporarily subclasses a window and uses
-  `SendMessageTimeout`; it needs a viable top-level non-console HWND.
+- Core teardown order is intentional: stop call admission, cancel queued UI
+  tickets, prove call quiescence, restore instrumentation, stop/join IPC, close
+  discover/jobs/sessions, then free allocs/disasm/call registries.
+- Shutdown returns `HDL_E_BUSY` while any call record can still execute or has a
+  live waiter/epilogue. A live helper that reports `BUSY`, or whose pipe fails
+  to disappear after a successful shutdown request, is not passed to
+  `FreeLibrary`.
+- Main-thread calls use heap-owned tickets and put only a call ID in the window
+  message. A posted ticket that expires before claim is completed as
+  `CANCELLED_BEFORE_START`; dispatch needs a viable top-level non-console HWND.
 
 ## External dependencies and platform assumptions
 

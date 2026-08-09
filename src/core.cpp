@@ -1,5 +1,7 @@
 #include "core.hpp"
 #include "alloc.hpp"
+#include "call_dispatch.hpp"
+#include "call_registry.hpp"
 #include "code.hpp"
 #include "disasm/backend.hpp"
 #include "discover.hpp"
@@ -30,6 +32,7 @@ enum : int {
 std::atomic<int> g_state{kUninit};
 std::mutex g_boot_mu;
 std::condition_variable g_boot_cv;
+std::mutex g_shutdown_mu;
 /* Set by CoreShutdownFinish; cleared/handled in CoreOnIpcServerExited after workers join. */
 std::atomic<bool> g_finish_after_ipc{false};
 
@@ -58,11 +61,27 @@ void CloseDomainSessionsAndJobs() {
 
 /* Tear down instrumentation only. Does not touch IPC maps, jobs, or allocs —
  * workers may still be on ServeClient stacks until the accept thread joins them. */
-bool BeginShutdown(uint32_t flags) {
+HdlStatus BeginShutdown(uint32_t flags) {
     WaitNotBootstrapping();
+    std::lock_guard<std::mutex> shutdown_lock(g_shutdown_mu);
+    if (g_state.load() != kReady) {
+        return HDL_E_NOT_INIT;
+    }
+
+    /* Close admission before detaching queued UI work so another request cannot
+     * enter the gap. A failed attempt reopens admission and leaves the helper ready. */
+    (void)CallRegistryTryBeginShutdown();
+    const HdlStatus dispatch = CancelQueuedWindowCalls();
+    const HdlStatus quiesce = CallRegistryTryBeginShutdown();
+    if (dispatch == HDL_E_BUSY || quiesce != HDL_OK) {
+        CallRegistryAbortShutdown();
+        return HDL_E_BUSY;
+    }
+
     int expected = kReady;
     if (!g_state.compare_exchange_strong(expected, kUninit)) {
-        return false;
+        /* Another shutdown won admission and owns teardown. Do not reopen calls. */
+        return HDL_E_NOT_INIT;
     }
     HDL_LOG_INFO("helper shutting down (flags=0x%X)", flags);
 
@@ -77,10 +96,12 @@ bool BeginShutdown(uint32_t flags) {
             HDL_LOG_ERROR("UnloadTrackedExcept status %d", static_cast<int>(st));
         }
     }
-    return true;
+    return HDL_OK;
 }
 
 void FinishShutdownResources() {
+    ResetWindowCallDispatcher();
+    CallRegistryShutdown();
     AllocShutdown();
     disasm::RegistryShutdown();
 }
@@ -106,11 +127,14 @@ HdlStatus CoreInit() {
         disasm::RegistryShutdown();
         result = HDL_E_FAILED;
     } else {
+        CallRegistryInit();
+        ResetWindowCallDispatcher();
         WatchInit();
         if (!EnvFlag(L"HDL_NO_IPC")) {
             const HdlStatus st = StartIpcServer();
             if (st != HDL_OK) {
                 WatchShutdown();
+                CallRegistryShutdown();
                 HealthShutdown();
                 HooksShutdown();
                 disasm::RegistryShutdown();
@@ -131,7 +155,7 @@ HdlStatus CoreInit() {
 }
 
 void CoreShutdown() {
-    if (BeginShutdown(0)) {
+    if (BeginShutdown(0) == HDL_OK) {
         StopIpcServer(); /* ThreadMain joins workers then closes IPC session/job maps. */
         CloseDomainSessionsAndJobs();
         FinishShutdownResources();
@@ -139,16 +163,16 @@ void CoreShutdown() {
 }
 
 void CoreShutdownEx(uint32_t flags) {
-    if (BeginShutdown(flags)) {
+    if (BeginShutdown(flags) == HDL_OK) {
         StopIpcServer();
         CloseDomainSessionsAndJobs();
         FinishShutdownResources();
     }
 }
 
-void CoreShutdownPrepare(uint32_t flags) {
-    /* Instrumentation only — session/job maps close after workers join in ThreadMain. */
-    BeginShutdown(flags);
+HdlStatus CoreShutdownPrepare(uint32_t flags) {
+    /* Call quiescence + instrumentation; session/job maps close after IPC workers join. */
+    return BeginShutdown(flags);
 }
 
 void CoreShutdownFinish(void* keep_alive_pipe) {

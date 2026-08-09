@@ -1,8 +1,11 @@
+#include "call_registry.hpp"
 #include "domain_api.hpp"
 #include "ipc/common.hpp"
+#include "rpc/pipe_client.hpp"
 #include "support.hpp"
 #include "test_runners.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstring>
@@ -237,9 +240,56 @@ void RunLocalDiscoverTests(Counters& c) {
 }
 
 DWORD g_main_call_tid = 0;
+HANDLE g_ui_block_entered = nullptr;
+HANDLE g_ui_block_release = nullptr;
+HANDLE g_ui_callee_entered = nullptr;
+HANDLE g_ui_callee_release = nullptr;
+HANDLE g_lifecycle_entered = nullptr;
+HANDLE g_lifecycle_release = nullptr;
+std::atomic<uint32_t> g_lifecycle_invocations{0};
+
+static uint64_t LifecycleBufferCall(uint8_t* buffer, uint64_t size) {
+    const uint32_t invocation = g_lifecycle_invocations.fetch_add(1) + 1;
+    if (invocation == 1) {
+        SetEvent(g_lifecycle_entered);
+        WaitForSingleObject(g_lifecycle_release, INFINITE);
+    }
+    for (uint64_t index = 0; index < size; ++index) {
+        ++buffer[index];
+    }
+    return invocation;
+}
+
+static uint64_t LifecycleQuickCall() {
+    return 0x51AFC0DEull;
+}
+
+static uint64_t DeadlineRaceCall(uint64_t delay_ms) {
+    if (delay_ms) {
+        Sleep(static_cast<DWORD>(delay_ms));
+    }
+    return 0xD34D11Eull;
+}
+
 static uint64_t MainThreadProbe() {
     g_main_call_tid = GetCurrentThreadId();
     return 0xC0FFEEull;
+}
+
+static uint64_t MainThreadBlockingProbe() {
+    g_main_call_tid = GetCurrentThreadId();
+    SetEvent(g_ui_callee_entered);
+    WaitForSingleObject(g_ui_callee_release, INFINITE);
+    return 0xB10C0FFull;
+}
+
+LRESULT CALLBACK UiTestWndProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
+    if (message == WM_APP + 42 && g_ui_block_entered && g_ui_block_release) {
+        SetEvent(g_ui_block_entered);
+        WaitForSingleObject(g_ui_block_release, INFINITE);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, w_param, l_param);
 }
 
 struct UiThreadCtx {
@@ -251,7 +301,7 @@ struct UiThreadCtx {
 DWORD WINAPI UiThreadProc(LPVOID param) {
     auto* ctx = static_cast<UiThreadCtx*>(param);
     WNDCLASSW wc{};
-    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpfnWndProc = UiTestWndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"HdlTestUiClass";
     RegisterClassW(&wc);
@@ -266,6 +316,122 @@ DWORD WINAPI UiThreadProc(LPVOID param) {
     }
     SetEvent(ctx->done);
     return 0;
+}
+
+void RunCallRegistryLimitTests(Counters& c) {
+    constexpr uint64_t kSyntheticBase = 0x00006A0000000000ull;
+    constexpr size_t kActiveLimit = 64;
+    std::vector<std::shared_ptr<hdl::CallRecord>> reservations;
+    reservations.reserve(kActiveLimit);
+    bool filled = true;
+    for (size_t index = 0; index < kActiveLimit; ++index) {
+        const hdl::CallReservation reservation =
+            hdl::ReserveCall(kSyntheticBase + index * 0x10, HDL_CALL_THREAD_WORKER);
+        if (reservation.status != HDL_OK || !reservation.record) {
+            filled = false;
+            break;
+        }
+        reservations.push_back(reservation.record);
+    }
+    const hdl::CallReservation overflow =
+        hdl::ReserveCall(kSyntheticBase + kActiveLimit * 0x10, HDL_CALL_THREAD_WORKER);
+    Report(c,
+           filled && reservations.size() == kActiveLimit && overflow.status == HDL_E_BUSY &&
+               !overflow.record,
+           false, "HdlCall registry enforces 64 active executions", "");
+    for (const auto& record : reservations) {
+        hdl::RollbackCall(record);
+    }
+
+    constexpr size_t kHistoryLimit = 256;
+    uint64_t first_id = 0;
+    uint64_t last_id = 0;
+    bool generated = true;
+    for (size_t index = 0; index <= kHistoryLimit; ++index) {
+        const hdl::CallReservation reservation =
+            hdl::ReserveCall(kSyntheticBase + 0x10000 + index * 0x10, HDL_CALL_THREAD_WORKER);
+        if (reservation.status != HDL_OK || !reservation.record ||
+            !hdl::BeginCallExecution(reservation.record, GetCurrentThreadId())) {
+            if (reservation.record) {
+                hdl::RollbackCall(reservation.record);
+            }
+            generated = false;
+            break;
+        }
+        if (index == 0) {
+            first_id = hdl::CallRecordId(reservation.record);
+        }
+        last_id = hdl::CallRecordId(reservation.record);
+        generated &= hdl::MarkCallWaitAbandoned(reservation.record, HDL_E_TIMEOUT);
+        hdl::CompleteCallExecution(reservation.record, HDL_OK, index, 0);
+        hdl::MarkCallExecutionExited(reservation.record);
+    }
+
+    std::vector<HdlCallInfo> retained;
+    HdlCallInfo first{};
+    HdlCallInfo last{};
+    const HdlStatus enum_status = hdl::EnumCallOrphans(&retained);
+    const HdlStatus first_status = hdl::GetCallStatus(first_id, &first);
+    const HdlStatus last_status = hdl::GetCallStatus(last_id, &last);
+    Report(c,
+           generated && enum_status == HDL_OK && retained.size() == kHistoryLimit &&
+               first_status == HDL_E_NOT_FOUND && last_status == HDL_OK &&
+               last.call_id == last_id && last.phase == HDL_CALL_PHASE_COMPLETED,
+           false, "HdlCall registry bounds history at 256 records", "");
+}
+
+void RunCallDeadlineRaceTest(Counters& c) {
+    constexpr int kRounds = 128;
+    int successes = 0;
+    int valid_orphans = 0;
+    bool valid = true;
+    for (int round = 0; round < kRounds; ++round) {
+        HdlCallArg argument{};
+        argument.kind = HDL_CALL_ARG_U64;
+        argument.u64 = static_cast<uint64_t>(round & 1);
+        HdlCallDesc desc{};
+        desc.address = reinterpret_cast<uint64_t>(&DeadlineRaceCall);
+        desc.args = &argument;
+        desc.arg_count = 1;
+        desc.thread_mode = HDL_CALL_THREAD_WORKER;
+        desc.timeout_ms = 1;
+        const hdl::ManagedCallResult result = hdl::CallTracked(&desc, nullptr);
+        if (result.status == HDL_OK) {
+            valid &= result.call_id != 0 && !result.orphaned &&
+                     result.phase == HDL_CALL_PHASE_COMPLETED &&
+                     result.result.return_value == 0xD34D11Eull;
+            ++successes;
+            continue;
+        }
+        if (result.status != HDL_E_TIMEOUT || result.call_id == 0 || !result.orphaned ||
+            result.phase > HDL_CALL_PHASE_CANCELLED_BEFORE_START) {
+            valid = false;
+            break;
+        }
+
+        HdlCallInfo observed{};
+        HdlStatus query = hdl::GetCallStatus(result.call_id, &observed);
+        valid &= query == HDL_OK && observed.call_id == result.call_id;
+        for (int attempt = 0; query == HDL_OK && attempt < 200; ++attempt) {
+            if (observed.phase == HDL_CALL_PHASE_COMPLETED ||
+                observed.phase == HDL_CALL_PHASE_CANCELLED_BEFORE_START) {
+                break;
+            }
+            Sleep(1);
+            query = hdl::GetCallStatus(result.call_id, &observed);
+        }
+        valid &= query == HDL_OK && (observed.phase == HDL_CALL_PHASE_COMPLETED ||
+                                     observed.phase == HDL_CALL_PHASE_CANCELLED_BEFORE_START);
+        /* The phase can become terminal just before the worker epilogue releases
+           its retained handle. Give that epilogue a scheduling point so this
+           race loop measures deadline ownership rather than registry capacity. */
+        Sleep(1);
+        ++valid_orphans;
+    }
+    char detail[96];
+    snprintf(detail, sizeof(detail), "success=%d orphan=%d", successes, valid_orphans);
+    Report(c, valid && successes + valid_orphans == kRounds, false,
+           "HdlCall deadline/completion race x128", detail);
 }
 
 } // namespace
@@ -701,6 +867,138 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path, bool include_ui_thre
         }
 
         {
+            g_lifecycle_invocations.store(0);
+            g_lifecycle_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            g_lifecycle_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            auto* guarded = static_cast<uint8_t*>(
+                VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+            const bool setup = g_lifecycle_entered && g_lifecycle_release && guarded;
+            Report(c, setup, false, "HdlCall lifecycle fixture setup", "");
+            if (setup) {
+                guarded[0] = 0x41;
+                HdlCallArg args[2]{};
+                args[0].kind = HDL_CALL_ARG_BUF;
+                args[0].ptr = guarded;
+                args[0].size = 1;
+                args[1].kind = HDL_CALL_ARG_U64;
+                args[1].u64 = 1;
+                HdlCallDesc desc{};
+                desc.address = reinterpret_cast<uint64_t>(&LifecycleBufferCall);
+                desc.args = args;
+                desc.arg_count = 2;
+                desc.thread_mode = HDL_CALL_THREAD_WORKER;
+                desc.timeout_ms = 100;
+
+                const hdl::ManagedCallResult first = hdl::CallTracked(&desc, nullptr);
+                const bool entered =
+                    WaitForSingleObject(g_lifecycle_entered, 1000) == WAIT_OBJECT_0;
+                Report(c,
+                       entered && first.status == HDL_E_TIMEOUT && first.call_id != 0 &&
+                           first.orphaned && first.phase == HDL_CALL_PHASE_RUNNING,
+                       false, "HdlCall timeout creates running orphan", "");
+
+                const hdl::ManagedCallResult overlap = hdl::CallTracked(&desc, nullptr);
+                Report(c,
+                       overlap.status == HDL_E_BUSY && overlap.call_id == 0 &&
+                           overlap.blocking_call_id == first.call_id && !overlap.orphaned,
+                       false, "HdlCall same-target overlap reports blocker", "");
+
+                HdlCallDesc quick_desc{};
+                quick_desc.address = reinterpret_cast<uint64_t>(&LifecycleQuickCall);
+                quick_desc.thread_mode = HDL_CALL_THREAD_WORKER;
+                quick_desc.timeout_ms = 1000;
+                const hdl::ManagedCallResult different = hdl::CallTracked(&quick_desc, nullptr);
+                Report(c,
+                       different.status == HDL_OK &&
+                           different.result.return_value == 0x51AFC0DEull &&
+                           different.unacknowledged_orphan_count >= 1,
+                       false, "HdlCall different target reports orphan count", "");
+
+                const HdlStatus shutdown_while_running = hdl::CoreShutdownPrepare(0);
+                Report(c, shutdown_while_running == HDL_E_BUSY && hdl::CoreIsInitialized(), false,
+                       "HdlCall running orphan blocks shutdown", "");
+
+                HdlCallInfo acknowledged{};
+                const HdlStatus ack_status =
+                    hdl::AcknowledgeCallOrphan(first.call_id, &acknowledged);
+                Report(c,
+                       ack_status == HDL_OK &&
+                           (acknowledged.flags & HDL_CALL_INFO_ACKNOWLEDGED) != 0,
+                       false, "HdlCall orphan acknowledgment", "");
+                const HdlStatus shutdown_after_ack = hdl::CoreShutdownPrepare(0);
+                Report(c, shutdown_after_ack == HDL_E_BUSY && hdl::CoreIsInitialized(), false,
+                       "HdlCall acknowledgment does not waive shutdown safety", "");
+
+                uint8_t second_buffer = 7;
+                args[0].ptr = &second_buffer;
+                desc.timeout_ms = 1000;
+                const hdl::ManagedCallResult after_ack = hdl::CallTracked(&desc, nullptr);
+                Report(c,
+                       after_ack.status == HDL_OK && after_ack.result.return_value == 2 &&
+                           second_buffer == 8,
+                       false, "HdlCall acknowledgment permits explicit overlap", "");
+
+                DWORD old_protection = 0;
+                const BOOL protected_page =
+                    VirtualProtect(guarded, 0x1000, PAGE_NOACCESS, &old_protection);
+                Report(c, protected_page != FALSE, false, "HdlCall caller buffer protected", "");
+                SetEvent(g_lifecycle_release);
+
+                HdlCallInfo completed{};
+                HdlStatus status_status = HDL_E_NOT_FOUND;
+                for (int attempt = 0; attempt < 200; ++attempt) {
+                    status_status = hdl::GetCallStatus(first.call_id, &completed);
+                    if (status_status == HDL_OK && completed.phase == HDL_CALL_PHASE_COMPLETED)
+                        break;
+                    Sleep(10);
+                }
+                DWORD ignored = 0;
+                if (protected_page)
+                    VirtualProtect(guarded, 0x1000, PAGE_READWRITE, &ignored);
+                Report(c,
+                       status_status == HDL_OK && completed.phase == HDL_CALL_PHASE_COMPLETED &&
+                           guarded[0] == 0x41,
+                       false, "HdlCall completion has no late caller-buffer copyout", "");
+
+                std::vector<HdlCallInfo> orphans;
+                const HdlStatus enum_status = hdl::EnumCallOrphans(&orphans);
+                const auto retained = std::find_if(
+                    orphans.begin(), orphans.end(), [id = first.call_id](const HdlCallInfo& info) {
+                        return info.call_id == id && (info.flags & HDL_CALL_INFO_ACKNOWLEDGED) != 0;
+                    });
+                Report(c, enum_status == HDL_OK && retained != orphans.end(), false,
+                       "HdlCall completed orphan remains queryable", "");
+
+                HdlEvent lifecycle_events[64]{};
+                uint32_t lifecycle_event_count = 64;
+                hdl::testapi::PollEvents(lifecycle_events, &lifecycle_event_count, 0);
+                bool saw_orphaned = false;
+                bool saw_completed = false;
+                for (uint32_t index = 0; index < lifecycle_event_count; ++index) {
+                    if (lifecycle_events[index].detail != first.call_id)
+                        continue;
+                    saw_orphaned |= lifecycle_events[index].type == HDL_EVENT_CALL_ORPHANED;
+                    saw_completed |= lifecycle_events[index].type == HDL_EVENT_CALL_COMPLETED;
+                }
+                Report(c, saw_orphaned && saw_completed, false, "HdlCall orphan lifecycle events",
+                       "");
+            }
+            if (g_lifecycle_release)
+                SetEvent(g_lifecycle_release);
+            if (guarded)
+                VirtualFree(guarded, 0, MEM_RELEASE);
+            if (g_lifecycle_entered)
+                CloseHandle(g_lifecycle_entered);
+            if (g_lifecycle_release)
+                CloseHandle(g_lifecycle_release);
+            g_lifecycle_entered = nullptr;
+            g_lifecycle_release = nullptr;
+        }
+
+        RunCallRegistryLimitTests(c);
+        RunCallDeadlineRaceTest(c);
+
+        {
             uint64_t alloc_addr = 0;
             st = hdl::Alloc(0x1000, PAGE_READWRITE, &alloc_addr);
             Report(c, st == HDL_OK && alloc_addr != 0, false, "HdlAlloc", "");
@@ -1110,6 +1408,88 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path, bool include_ui_thre
                 Report(c,
                        st == HDL_OK && r.return_value == 0xC0FFEEull && g_main_call_tid == ui_tid,
                        false, "HdlCall THREAD_MAIN", "");
+
+                g_ui_block_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                g_ui_block_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                const bool ui_block_ready =
+                    g_ui_block_entered && g_ui_block_release &&
+                    PostMessageW(ui.hwnd, WM_APP + 42, 0, 0) &&
+                    WaitForSingleObject(g_ui_block_entered, 1000) == WAIT_OBJECT_0;
+                Report(c, ui_block_ready, false, "HdlCall queued UI fixture", "");
+                if (ui_block_ready) {
+                    g_main_call_tid = 0;
+                    desc.timeout_ms = 50;
+                    const hdl::ManagedCallResult queued = hdl::CallTracked(&desc, nullptr);
+                    Report(c,
+                           queued.status == HDL_E_TIMEOUT && queued.call_id != 0 &&
+                               queued.orphaned && queued.phase == HDL_CALL_PHASE_QUEUED,
+                           false, "HdlCall queued UI timeout is tracked", "");
+                    SetEvent(g_ui_block_release);
+
+                    HdlCallInfo cancelled{};
+                    HdlStatus query_status = HDL_E_NOT_FOUND;
+                    for (int attempt = 0; attempt < 200; ++attempt) {
+                        query_status = hdl::GetCallStatus(queued.call_id, &cancelled);
+                        if (query_status == HDL_OK &&
+                            cancelled.phase == HDL_CALL_PHASE_CANCELLED_BEFORE_START)
+                            break;
+                        Sleep(10);
+                    }
+                    Report(c,
+                           query_status == HDL_OK &&
+                               cancelled.phase == HDL_CALL_PHASE_CANCELLED_BEFORE_START &&
+                               g_main_call_tid == 0,
+                           false, "HdlCall expired queued UI work is skipped", "");
+                }
+                if (g_ui_block_release)
+                    SetEvent(g_ui_block_release);
+                if (g_ui_block_entered)
+                    CloseHandle(g_ui_block_entered);
+                if (g_ui_block_release)
+                    CloseHandle(g_ui_block_release);
+                g_ui_block_entered = nullptr;
+                g_ui_block_release = nullptr;
+
+                g_ui_callee_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                g_ui_callee_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                const bool callee_setup = g_ui_callee_entered && g_ui_callee_release;
+                Report(c, callee_setup, false, "HdlCall running UI fixture", "");
+                if (callee_setup) {
+                    g_main_call_tid = 0;
+                    desc.address = reinterpret_cast<uint64_t>(&MainThreadBlockingProbe);
+                    desc.timeout_ms = 50;
+                    const hdl::ManagedCallResult running = hdl::CallTracked(&desc, nullptr);
+                    const bool callee_entered =
+                        WaitForSingleObject(g_ui_callee_entered, 0) == WAIT_OBJECT_0;
+                    Report(c,
+                           callee_entered && running.status == HDL_E_TIMEOUT &&
+                               running.call_id != 0 && running.orphaned &&
+                               running.phase == HDL_CALL_PHASE_RUNNING && g_main_call_tid == ui_tid,
+                           false, "HdlCall started UI callee becomes running orphan", "");
+                    SetEvent(g_ui_callee_release);
+
+                    HdlCallInfo completed{};
+                    HdlStatus query_status = HDL_E_NOT_FOUND;
+                    for (int attempt = 0; attempt < 200; ++attempt) {
+                        query_status = hdl::GetCallStatus(running.call_id, &completed);
+                        if (query_status == HDL_OK && completed.phase == HDL_CALL_PHASE_COMPLETED)
+                            break;
+                        Sleep(10);
+                    }
+                    Report(c,
+                           query_status == HDL_OK && completed.phase == HDL_CALL_PHASE_COMPLETED &&
+                               completed.return_value == 0xB10C0FFull,
+                           false, "HdlCall running UI orphan completes after release", "");
+                }
+                if (g_ui_callee_release)
+                    SetEvent(g_ui_callee_release);
+                if (g_ui_callee_entered)
+                    CloseHandle(g_ui_callee_entered);
+                if (g_ui_callee_release)
+                    CloseHandle(g_ui_callee_release);
+                g_ui_callee_entered = nullptr;
+                g_ui_callee_release = nullptr;
+
                 PostMessageW(ui.hwnd, WM_QUIT, 0, 0);
                 WaitForSingleObject(ui.done, 5000);
             }
@@ -1167,6 +1547,100 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path, bool include_ui_thre
     // Multi-client: two concurrent pings
     Report(c, hdltest::PingPipe(GetCurrentProcessId()) && hdltest::PingPipe(GetCurrentProcessId()),
            false, "IPC multi-client ping", "");
+
+    {
+        g_lifecycle_invocations.store(0);
+        g_lifecycle_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_lifecycle_release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        PipeClient pipe(GetCurrentProcessId(), "hdl-tests-call-lifecycle");
+        const bool connected = g_lifecycle_entered && g_lifecycle_release && pipe.Connect(2000);
+        Report(c, connected, false, "RPC call lifecycle connection", "");
+        if (connected) {
+            hdl::rpc::CallClient call_client(&pipe);
+            hdl::rpc::v1::CallRequest request;
+            request.set_address(reinterpret_cast<uint64_t>(&LifecycleBufferCall));
+            request.set_thread_mode(hdl::rpc::v1::CALL_THREAD_MODE_WORKER);
+            request.set_wait_timeout_ms(100);
+            request.add_arguments()->set_buffer("A", 1);
+            request.add_arguments()->set_unsigned_value(1);
+
+            const auto timed_out = call_client.Call(request, {1100});
+            const uint64_t call_id =
+                timed_out.has_response ? timed_out.response.result().call_id() : 0;
+            Report(c,
+                   timed_out.has_response && timed_out.status.hdl_status() == HDL_E_TIMEOUT &&
+                       timed_out.status.outcome_unknown() && call_id != 0 &&
+                       timed_out.response.result().orphaned() &&
+                       timed_out.response.result().phase() == hdl::rpc::v1::CALL_PHASE_RUNNING,
+                   false, "RPC timeout returns tracked orphan", "");
+
+            const auto overlap = call_client.Call(request, {1100});
+            Report(c,
+                   overlap.has_response && overlap.status.hdl_status() == HDL_E_BUSY &&
+                       !overlap.status.outcome_unknown() &&
+                       overlap.response.result().blocking_call_id() == call_id,
+                   false, "RPC overlap returns blocking call id", "");
+
+            hdl::rpc::v1::GetCallStatusRequest status_request;
+            status_request.set_call_id(call_id);
+            const auto running = call_client.GetCallStatus(status_request);
+            Report(c,
+                   running.has_response && running.status.ok() &&
+                       running.response.call().orphaned() &&
+                       running.response.call().phase() == hdl::rpc::v1::CALL_PHASE_RUNNING,
+                   false, "RPC call status observes running orphan", "");
+
+            hdl::rpc::ControlClient control(&pipe);
+            const auto refused_shutdown = control.Shutdown(hdl::rpc::v1::ShutdownRequest{});
+            const auto still_ready = control.Ping(hdl::rpc::v1::Empty{});
+            Report(c,
+                   refused_shutdown.has_response &&
+                       refused_shutdown.status.hdl_status() == HDL_E_BUSY &&
+                       still_ready.status.ok(),
+                   false, "RPC shutdown refuses active call and remains ready", "");
+
+            bool listed = false;
+            const auto enum_status = call_client.EnumOrphans(
+                hdl::rpc::v1::Empty{},
+                [&listed, call_id](const hdl::rpc::v1::EnumOrphansResponse& response) {
+                    for (const auto& call : response.calls())
+                        listed |= call.call_id() == call_id;
+                    return true;
+                });
+            Report(c, enum_status.ok() && listed, false, "RPC orphan enumeration", "");
+
+            SetEvent(g_lifecycle_release);
+            hdl::rpc::Result<hdl::rpc::v1::GetCallStatusResponse> completed;
+            for (int attempt = 0; attempt < 200; ++attempt) {
+                completed = call_client.GetCallStatus(status_request);
+                if (completed.has_response && completed.status.ok() &&
+                    completed.response.call().phase() == hdl::rpc::v1::CALL_PHASE_COMPLETED)
+                    break;
+                Sleep(10);
+            }
+            Report(c,
+                   completed.has_response && completed.status.ok() &&
+                       completed.response.call().phase() == hdl::rpc::v1::CALL_PHASE_COMPLETED,
+                   false, "RPC orphan completion is queryable", "");
+
+            hdl::rpc::v1::AcknowledgeOrphanRequest acknowledge;
+            acknowledge.set_call_id(call_id);
+            const auto acknowledged = call_client.AcknowledgeOrphan(acknowledge);
+            Report(c,
+                   acknowledged.has_response && acknowledged.status.ok() &&
+                       acknowledged.response.call().acknowledged(),
+                   false, "RPC orphan acknowledgment", "");
+        }
+        if (g_lifecycle_release)
+            SetEvent(g_lifecycle_release);
+        pipe.Close();
+        if (g_lifecycle_entered)
+            CloseHandle(g_lifecycle_entered);
+        if (g_lifecycle_release)
+            CloseHandle(g_lifecycle_release);
+        g_lifecycle_entered = nullptr;
+        g_lifecycle_release = nullptr;
+    }
 
     // Local inject (pid 0) â€” already loaded; should still succeed / return base
     uint64_t base = 0;

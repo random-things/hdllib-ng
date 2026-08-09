@@ -5,31 +5,44 @@
 
 #include "alloc.hpp"
 #include "call.hpp"
+#include "call_registry.hpp"
 #include "resolve.hpp"
-
-#include <thread>
 
 namespace hdl::ipc {
 namespace {
 
-std::thread StartDeadlineWatcher(const std::shared_ptr<Job>& job, volatile int* cancel) {
-    return std::thread([job, cancel] {
-        while (!*cancel) {
-            if (JobCheck(job) != HDL_OK) {
-                *cancel = 1;
-                break;
-            }
-            Sleep(20);
-        }
-    });
+constexpr uint32_t kReplyReserveMs = 250;
+
+uint32_t ExecutionTimeout(const rpc::CallContext& context, bool has_wait_timeout,
+                          uint32_t wait_timeout_ms) {
+    if (has_wait_timeout) {
+        return wait_timeout_ms;
+    }
+    if (!context.timeout_ms()) {
+        return 0;
+    }
+    const uint32_t remaining = context.remaining_timeout_ms();
+    return remaining > kReplyReserveMs ? remaining - kReplyReserveMs : 1;
 }
 
-rpc::Status CallStatus(HdlStatus status) {
-    rpc::Status result = rpc::Status::FromHdl(status);
-    if (status == HDL_E_TIMEOUT || status == HDL_E_CANCELLED) {
-        result.set_outcome_unknown(true);
+void SetManagedResult(const ManagedCallResult& managed, const CallArguments& arguments,
+                      rpc::v1::CallResult* response) {
+    response->set_return_value(managed.result.return_value);
+    response->set_last_error(managed.result.last_error);
+    response->set_call_id(managed.call_id);
+    response->set_orphaned(managed.orphaned);
+    response->set_blocking_call_id(managed.blocking_call_id);
+    response->set_phase(static_cast<rpc::v1::CallPhase>(managed.phase));
+    response->set_unacknowledged_orphan_count(managed.unacknowledged_orphan_count);
+    if (managed.status == HDL_OK) {
+        arguments.SetResult(managed.result, response);
     }
-    return result;
+}
+
+rpc::Status ManagedStatus(const ManagedCallResult& result) {
+    rpc::Status status = rpc::Status::FromHdl(result.status);
+    status.set_outcome_unknown(result.orphaned);
+    return status;
 }
 
 } // namespace
@@ -61,24 +74,14 @@ rpc::Status HandleCall_CallExport(rpc::CallContext& context,
     if (context.deadline_exceeded()) {
         return rpc::Status::FromHdl(HDL_E_TIMEOUT);
     }
-    const auto job = CurrentRequestJob();
-    volatile int cancel = 0;
-    std::thread watcher;
-    if (job && job->deadline_tick) {
-        watcher = StartDeadlineWatcher(job, &cancel);
-    }
-    HdlCallResult result{};
-    const HdlStatus status =
-        CallExport(module.empty() ? nullptr : module.c_str(), request.name().c_str(),
-                   arguments.args.empty() ? nullptr : arguments.args.data(),
-                   static_cast<uint32_t>(arguments.args.size()), &result,
-                   context.remaining_timeout_ms(), watcher.joinable() ? &cancel : nullptr);
-    if (watcher.joinable()) {
-        cancel = 1;
-        watcher.join();
-    }
-    arguments.SetResult(result, response->mutable_result());
-    return CallStatus(status);
+    const ManagedCallResult result = CallExportTracked(
+        module.empty() ? nullptr : module.c_str(), request.name().c_str(),
+        arguments.args.empty() ? nullptr : arguments.args.data(),
+        static_cast<uint32_t>(arguments.args.size()),
+        ExecutionTimeout(context, request.has_wait_timeout_ms(), request.wait_timeout_ms()),
+        nullptr);
+    SetManagedResult(result, arguments, response->mutable_result());
+    return ManagedStatus(result);
 }
 
 rpc::Status HandleCall_Call(rpc::CallContext& context, const rpc::v1::CallRequest& request,
@@ -92,26 +95,16 @@ rpc::Status HandleCall_Call(rpc::CallContext& context, const rpc::v1::CallReques
     if (context.deadline_exceeded()) {
         return rpc::Status::FromHdl(HDL_E_TIMEOUT);
     }
-    const auto job = CurrentRequestJob();
-    volatile int cancel = 0;
-    std::thread watcher;
-    if (job && job->deadline_tick) {
-        watcher = StartDeadlineWatcher(job, &cancel);
-    }
     HdlCallDesc desc{};
     desc.address = request.address();
     desc.args = arguments.args.empty() ? nullptr : arguments.args.data();
     desc.arg_count = static_cast<uint32_t>(arguments.args.size());
     desc.thread_mode = static_cast<uint32_t>(thread_mode);
-    desc.timeout_ms = context.remaining_timeout_ms();
-    HdlCallResult result{};
-    const HdlStatus status = Call(&desc, &result, watcher.joinable() ? &cancel : nullptr);
-    if (watcher.joinable()) {
-        cancel = 1;
-        watcher.join();
-    }
-    arguments.SetResult(result, response->mutable_result());
-    return CallStatus(status);
+    desc.timeout_ms =
+        ExecutionTimeout(context, request.has_wait_timeout_ms(), request.wait_timeout_ms());
+    const ManagedCallResult result = CallTracked(&desc, nullptr);
+    SetManagedResult(result, arguments, response->mutable_result());
+    return ManagedStatus(result);
 }
 
 rpc::Status HandleCall_CallVtable(rpc::CallContext& context,
@@ -126,24 +119,47 @@ rpc::Status HandleCall_CallVtable(rpc::CallContext& context,
     if (context.deadline_exceeded()) {
         return rpc::Status::FromHdl(HDL_E_TIMEOUT);
     }
-    const auto job = CurrentRequestJob();
-    volatile int cancel = 0;
-    std::thread watcher;
-    if (job && job->deadline_tick) {
-        watcher = StartDeadlineWatcher(job, &cancel);
-    }
-    HdlCallResult result{};
-    const HdlStatus status = CallVtable(
+    const ManagedCallResult result = CallVtableTracked(
         request.object(), request.index(), arguments.args.empty() ? nullptr : arguments.args.data(),
         static_cast<uint32_t>(arguments.args.size()), request.prepend_this(),
-        static_cast<uint32_t>(thread_mode), &result, context.remaining_timeout_ms(),
-        watcher.joinable() ? &cancel : nullptr);
-    if (watcher.joinable()) {
-        cancel = 1;
-        watcher.join();
+        static_cast<uint32_t>(thread_mode),
+        ExecutionTimeout(context, request.has_wait_timeout_ms(), request.wait_timeout_ms()),
+        nullptr);
+    SetManagedResult(result, arguments, response->mutable_result());
+    return ManagedStatus(result);
+}
+
+rpc::Status HandleCall_EnumOrphans(rpc::CallContext&, const rpc::v1::Empty&,
+                                   rpc::ServerWriter<rpc::v1::EnumOrphansResponse>& writer) {
+    std::vector<HdlCallInfo> calls;
+    const HdlStatus status = EnumCallOrphans(&calls);
+    return WriteBatches(status, calls, 32, writer,
+                        [](const HdlCallInfo& call, rpc::v1::EnumOrphansResponse* response) {
+                            ToProto(call, response->add_calls());
+                            return true;
+                        });
+}
+
+rpc::Status HandleCall_GetCallStatus(rpc::CallContext&,
+                                     const rpc::v1::GetCallStatusRequest& request,
+                                     rpc::v1::GetCallStatusResponse* response) {
+    HdlCallInfo call{};
+    const HdlStatus status = GetCallStatus(request.call_id(), &call);
+    if (status == HDL_OK) {
+        ToProto(call, response->mutable_call());
     }
-    arguments.SetResult(result, response->mutable_result());
-    return CallStatus(status);
+    return rpc::Status::FromHdl(status);
+}
+
+rpc::Status HandleCall_AcknowledgeOrphan(rpc::CallContext&,
+                                         const rpc::v1::AcknowledgeOrphanRequest& request,
+                                         rpc::v1::AcknowledgeOrphanResponse* response) {
+    HdlCallInfo call{};
+    const HdlStatus status = AcknowledgeCallOrphan(request.call_id(), &call);
+    if (status == HDL_OK) {
+        ToProto(call, response->mutable_call());
+    }
+    return rpc::Status::FromHdl(status);
 }
 
 rpc::Status HandleMemory_Alloc(rpc::CallContext&, const rpc::v1::AllocRequest& request,

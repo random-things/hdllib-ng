@@ -25,6 +25,7 @@ static_assert(sizeof(HdlCallDesc) == 32, "ABI break: HdlCallDesc size");
 static_assert(sizeof(HdlHookHit) == 168, "ABI break: HdlHookHit size");
 static_assert(sizeof(HdlEvent) == 32, "ABI break: HdlEvent size");
 static_assert(sizeof(HdlCallArg) == 24, "ABI break: HdlCallArg size");
+static_assert(sizeof(HdlCallInfo) == 80, "ABI break: HdlCallInfo size");
 static_assert(sizeof(HdlWatchHit) == 48, "ABI break: HdlWatchHit size");
 
 /* Additional wire-facing / IPC structs */
@@ -72,6 +73,11 @@ static_assert(offsetof(HdlEvent, detail) == 24, "ABI break: HdlEvent.detail offs
 static_assert(offsetof(HdlCallArg, kind) == 0, "ABI break: HdlCallArg.kind offset");
 static_assert(offsetof(HdlCallArg, u64) == 8, "ABI break: HdlCallArg.u64 offset");
 static_assert(offsetof(HdlCallArg, ptr) == 16, "ABI break: HdlCallArg.ptr offset");
+
+/* HdlCallInfo */
+static_assert(offsetof(HdlCallInfo, call_id) == 0, "ABI break: HdlCallInfo.call_id offset");
+static_assert(offsetof(HdlCallInfo, phase) == 56, "ABI break: HdlCallInfo.phase offset");
+static_assert(offsetof(HdlCallInfo, last_error) == 72, "ABI break: HdlCallInfo.last_error offset");
 
 /* HdlWatchHit */
 static_assert(offsetof(HdlWatchHit, watch_handle) == 0,

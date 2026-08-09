@@ -83,7 +83,10 @@ const wchar_t* StatusHint(const std::wstring& cmd, int32_t status) {
                L"check --module / --addr";
     }
     if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_TIMEOUT) {
-        return L"callee may still be running (orphaned); avoid stacking another call";
+        return L"accepted call may still be running; use its call_id with 'call status'";
+    }
+    if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_BUSY) {
+        return L"target has an active call; inspect blocking_call_id before retrying";
     }
     if (CmdStartsWith(cmd, L"discover") && status == HDL_E_NOT_FOUND) {
         return L"unknown session id; run discover-create or pass --session";

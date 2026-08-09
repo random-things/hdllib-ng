@@ -320,15 +320,52 @@ CommandResult CmdEvents(CmdCtx& ctx) {
     writer.Key("events");
     writer.BeginArray();
     for (const auto& event : events) {
+        const char* event_name = "unspecified";
+        const char* lifecycle = nullptr;
+        switch (event.type()) {
+        case hdl::rpc::v1::EVENT_TYPE_EXCEPTION:
+            event_name = "exception";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_HEALTH:
+            event_name = "health";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_JOB_DONE:
+            event_name = "job_done";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_HOOK:
+            event_name = "hook";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_WATCH:
+            event_name = "watch";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_CALL_ORPHANED:
+            event_name = "call_orphaned";
+            lifecycle = "accepted call wait ended before execution completed";
+            break;
+        case hdl::rpc::v1::EVENT_TYPE_CALL_COMPLETED:
+            event_name = "call_completed";
+            lifecycle = "previously orphaned call reached a terminal state";
+            break;
+        default:
+            break;
+        }
         writer.BeginObject();
         writer.Key("type");
         writer.Num(event.type());
+        writer.Key("name");
+        writer.Str(event_name);
         writer.Key("code");
         writer.Num(event.code());
         writer.Key("timestamp_ms");
         writer.Num(event.timestamp_ms());
         writer.Key("address");
         writer.HexStr(event.address());
+        writer.Key("detail");
+        writer.Num(event.detail());
+        if (lifecycle) {
+            writer.Key("lifecycle");
+            writer.Str(lifecycle);
+        }
         writer.EndObject();
     }
     writer.EndArray();

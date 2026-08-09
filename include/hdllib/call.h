@@ -24,6 +24,18 @@ enum {
     HDL_CALL_THREAD_MAIN = 1,   /* sync run on primary UI thread; fails if no HWND */
 };
 
+enum {
+    HDL_CALL_PHASE_QUEUED = 0,
+    HDL_CALL_PHASE_RUNNING = 1,
+    HDL_CALL_PHASE_COMPLETED = 2,
+    HDL_CALL_PHASE_CANCELLED_BEFORE_START = 3,
+};
+
+enum {
+    HDL_CALL_INFO_ORPHANED = 1u,
+    HDL_CALL_INFO_ACKNOWLEDGED = 2u,
+};
+
 typedef struct HdlCallArg {
     int32_t kind;    /* HDL_CALL_ARG_* */
     uint32_t size;   /* BUF byte length; ignored for U64/I64/CSTR/WSTR/F32/F64 */
@@ -45,6 +57,24 @@ typedef struct HdlCallDesc {
     uint32_t timeout_ms;  /* 0 = wait forever */
     uint32_t reserved;
 } HdlCallDesc;
+
+/* Snapshot of a tracked in-process call. Timestamps use GetTickCount64(). */
+typedef struct HdlCallInfo {
+    uint64_t call_id;
+    uint64_t target_address;
+    uint64_t created_tick_ms;
+    uint64_t started_tick_ms;
+    uint64_t finished_tick_ms;
+    uint64_t return_value;
+    uint32_t thread_id;
+    uint32_t thread_mode; /* HDL_CALL_THREAD_* */
+    uint32_t phase;       /* HDL_CALL_PHASE_* */
+    uint32_t flags;       /* HDL_CALL_INFO_* */
+    int32_t wait_status;  /* timeout/cancel reason when orphaned */
+    int32_t completion_status;
+    uint32_t last_error;
+    uint32_t reserved;
+} HdlCallInfo;
 
 /*
  * Invoke an absolute address with up to 16 args (Microsoft x64 ABI, including floats).

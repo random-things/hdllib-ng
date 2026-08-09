@@ -293,20 +293,35 @@ void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar
         const bool injected =
             ist == HDL_OK &&
             hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
+
+        hdl::rpc::v1::CallExportRequest call_request;
+        call_request.set_name("HdlTestLifecycleQuickCall");
+        call_request.set_wait_timeout_ms(2000);
+        hdl::rpc::v1::CallExportResponse call_response;
+        int32_t call_st = HDL_E_FAILED;
+        const bool completed_call =
+            injected &&
+            hdltest::PipeUnary<hdl::rpc::Method::Call_CallExport>(target.pid, call_request,
+                                                                  &call_response, &call_st, 4000) &&
+            call_st == HDL_OK && call_response.result().call_id() != 0 &&
+            call_response.result().phase() == hdl::rpc::v1::CALL_PHASE_COMPLETED &&
+            !call_response.result().orphaned() &&
+            call_response.result().return_value() == 0x51AFC0DEull;
         int32_t shut_st = HDL_E_FAILED;
         const bool shut_ok =
-            injected && hdltest::PipeShutdown(target.pid, 0, &shut_st) && shut_st == HDL_OK;
+            completed_call && hdltest::PipeShutdown(target.pid, 0, &shut_st) && shut_st == HDL_OK;
         uint64_t ubase = 0;
         const HdlStatus ust =
             shut_ok ? hdl::UnloadDll(target.pid, dll_path, 0, 0, &ubase) : HDL_E_FAILED;
         const bool unloaded = ust == HDL_OK || ust == HDL_E_NOT_FOUND;
         const bool alive = WaitForSingleObject(target.process, 0) == WAIT_TIMEOUT;
-        if (injected && shut_ok && unloaded && alive) {
+        if (injected && completed_call && shut_ok && unloaded && alive) {
             ++inject_ok;
         }
         target.Close();
     }
-    Report(c, inject_ok == kInjectUnloadRounds, false, "lifecycle/inject_shutdown_unload_x5", "");
+    Report(c, inject_ok == kInjectUnloadRounds, false,
+           "lifecycle/completed_call_shutdown_unload_x5", "");
 }
 
 void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {
