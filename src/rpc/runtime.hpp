@@ -15,7 +15,7 @@
 namespace hdl::rpc {
 
 inline constexpr uint32_t kProtocolMajor = 1;
-inline constexpr uint32_t kProtocolMinor = 0;
+inline constexpr uint32_t kProtocolMinor = 1;
 inline constexpr uint32_t kMaxFrameBytes = 64u * 1024u * 1024u;
 inline constexpr uint32_t kMaxInFlight = 1;
 inline constexpr uint32_t kMaxStreamChunkBytes = 1u * 1024u * 1024u;

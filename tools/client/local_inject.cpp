@@ -653,6 +653,12 @@ int RunLocalUnload(int argc, wchar_t** argv, int reload_default) {
     const HdlStatus st = hdl::UnloadDll(pid, full, reload, shutdown_flags, &base);
     if (st != HDL_OK) {
         wprintf(L"Unload failed: %ls\n", StatusName(st));
+        if (st == HDL_E_BUSY) {
+            wprintf(L"Helper quiescence was not confirmed; the DLL was left loaded.\n");
+        } else if (st == HDL_E_FAILED) {
+            wprintf(L"Helper shutdown negotiation could not be verified; the DLL was left "
+                    L"loaded. Inspect the DLL log before retrying.\n");
+        }
         return 1;
     }
     hdlcli::ClearInjectedModules(pid);

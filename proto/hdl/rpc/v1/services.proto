@@ -62,6 +62,9 @@ service Call {
   rpc CallExport(CallExportRequest) returns (CallExportResponse);
   rpc Call(CallRequest) returns (CallResponse);
   rpc CallVtable(CallVtableRequest) returns (CallVtableResponse);
+  rpc EnumOrphans(Empty) returns (stream EnumOrphansResponse);
+  rpc GetCallStatus(GetCallStatusRequest) returns (GetCallStatusResponse);
+  rpc AcknowledgeOrphan(AcknowledgeOrphanRequest) returns (AcknowledgeOrphanResponse);
 }
 
 service Hook {

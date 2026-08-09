@@ -2,7 +2,7 @@
 
 Live DLL injection methods implemented under `src/inject/`. The public entry points are `HdlInjectDll` / `HdlInjectDllEx` / `HdlUnloadDll` / `HdlUnloadDllEx` (see `include/hdllib/hdllib.h`); `src/inject.cpp` dispatches to technique implementations and unload.
 
-When unloading `hdllib` itself, [`unload.cpp`](../../src/inject/unload.cpp) first sends the named `Control/Shutdown` RPC over the target pipe (if the module exports `HdlShutdown`) so hooks/patches/watches are restored **outside** the loader lock, waits for the pipe to disappear, then `CreateRemoteThread(FreeLibrary)`.
+When unloading `hdllib` itself, [`unload.cpp`](../../src/inject/unload.cpp) first sends the named `Control/Shutdown` RPC over the target pipe (if the module exports `HdlShutdown`) so hooks/patches/watches are restored **outside** the loader lock, waits for the pipe to disappear, then `CreateRemoteThread(FreeLibrary)`. A failed negotiated connection is not considered prepared unless consecutive fresh probes return `ERROR_FILE_NOT_FOUND`; timeout, access, busy-pipe, and negotiation failures leave the helper loaded and return `BUSY` or `FAILED`.
 
 ## Layout
 

@@ -255,6 +255,47 @@ void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar
         hdl::testapi::Shutdown();
     }
 
+    constexpr int kConcurrentInitCallers = 8;
+    const uint64_t attempt_before = hdl::testapi::InitDiagnostics().attempt_id;
+    std::atomic<int> init_callers_ready{0};
+    std::atomic<bool> release_init_callers{false};
+    std::vector<HdlStatus> init_statuses(kConcurrentInitCallers, HDL_E_FAILED);
+    std::vector<std::thread> init_callers;
+    init_callers.reserve(kConcurrentInitCallers);
+    for (int i = 0; i < kConcurrentInitCallers; ++i) {
+        init_callers.emplace_back([&, i] {
+            init_callers_ready.fetch_add(1);
+            while (!release_init_callers.load()) {
+                std::this_thread::yield();
+            }
+            init_statuses[static_cast<size_t>(i)] = hdl::testapi::Init();
+        });
+    }
+    while (init_callers_ready.load() != kConcurrentInitCallers) {
+        std::this_thread::yield();
+    }
+    release_init_callers.store(true);
+    for (auto& caller : init_callers) {
+        caller.join();
+    }
+    const hdl::CoreInitDiagnostics concurrent_diag = hdl::testapi::InitDiagnostics();
+    bool concurrent_init_ok = hdl::testapi::IsInitialized() &&
+                              concurrent_diag.attempt_id == attempt_before + 1 &&
+                              concurrent_diag.last_status == HDL_OK;
+    for (const HdlStatus status : init_statuses) {
+        concurrent_init_ok &= status == HDL_OK;
+    }
+    char concurrent_detail[160];
+    snprintf(concurrent_detail, sizeof(concurrent_detail),
+             "attempt_before=%llu attempt_after=%llu phase=%s status=%s elapsed_ms=%llu",
+             static_cast<unsigned long long>(attempt_before),
+             static_cast<unsigned long long>(concurrent_diag.attempt_id),
+             hdl::testapi::InitPhaseName(concurrent_diag.phase),
+             hdltest::StatusNameA(concurrent_diag.last_status),
+             static_cast<unsigned long long>(concurrent_diag.elapsed_ms));
+    Report(c, concurrent_init_ok, false, "lifecycle/concurrent_init_x8", concurrent_detail);
+    hdl::testapi::Shutdown();
+
     constexpr int kInitShutdownRounds = 20;
     int ok_rounds = 0;
     for (int i = 0; i < kInitShutdownRounds; ++i) {
@@ -293,20 +334,35 @@ void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar
         const bool injected =
             ist == HDL_OK &&
             hdltest::VerifyInjected(target.pid, dll_path, HDL_INJECT_CREATE_REMOTE_THREAD, base);
+
+        hdl::rpc::v1::CallExportRequest call_request;
+        call_request.set_name("HdlTestLifecycleQuickCall");
+        call_request.set_wait_timeout_ms(2000);
+        hdl::rpc::v1::CallExportResponse call_response;
+        int32_t call_st = HDL_E_FAILED;
+        const bool completed_call =
+            injected &&
+            hdltest::PipeUnary<hdl::rpc::Method::Call_CallExport>(target.pid, call_request,
+                                                                  &call_response, &call_st, 4000) &&
+            call_st == HDL_OK && call_response.result().call_id() != 0 &&
+            call_response.result().phase() == hdl::rpc::v1::CALL_PHASE_COMPLETED &&
+            !call_response.result().orphaned() &&
+            call_response.result().return_value() == 0x51AFC0DEull;
         int32_t shut_st = HDL_E_FAILED;
         const bool shut_ok =
-            injected && hdltest::PipeShutdown(target.pid, 0, &shut_st) && shut_st == HDL_OK;
+            completed_call && hdltest::PipeShutdown(target.pid, 0, &shut_st) && shut_st == HDL_OK;
         uint64_t ubase = 0;
         const HdlStatus ust =
             shut_ok ? hdl::UnloadDll(target.pid, dll_path, 0, 0, &ubase) : HDL_E_FAILED;
         const bool unloaded = ust == HDL_OK || ust == HDL_E_NOT_FOUND;
         const bool alive = WaitForSingleObject(target.process, 0) == WAIT_TIMEOUT;
-        if (injected && shut_ok && unloaded && alive) {
+        if (injected && completed_call && shut_ok && unloaded && alive) {
             ++inject_ok;
         }
         target.Close();
     }
-    Report(c, inject_ok == kInjectUnloadRounds, false, "lifecycle/inject_shutdown_unload_x5", "");
+    Report(c, inject_ok == kInjectUnloadRounds, false,
+           "lifecycle/completed_call_shutdown_unload_x5", "");
 }
 
 void RunCleanUnloadTests(Counters& c, const wchar_t* target_exe, const wchar_t* dll_path) {

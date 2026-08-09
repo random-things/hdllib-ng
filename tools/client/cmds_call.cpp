@@ -12,6 +12,7 @@
 #include <Windows.h>
 
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,131 @@ bool EncodeCallArgument(const wchar_t* text, hdl::rpc::v1::CallArgument* argumen
     return true;
 }
 
+const char* CallPhaseName(hdl::rpc::v1::CallPhase phase) {
+    switch (phase) {
+    case hdl::rpc::v1::CALL_PHASE_QUEUED:
+        return "queued";
+    case hdl::rpc::v1::CALL_PHASE_RUNNING:
+        return "running";
+    case hdl::rpc::v1::CALL_PHASE_COMPLETED:
+        return "completed";
+    case hdl::rpc::v1::CALL_PHASE_CANCELLED_BEFORE_START:
+        return "cancelled_before_start";
+    default:
+        return "unknown";
+    }
+}
+
+uint32_t TransportTimeout(uint32_t wait_timeout_ms) {
+    if (!wait_timeout_ms)
+        return 0;
+    constexpr uint32_t kReplyAllowanceMs = 1000;
+    return wait_timeout_ms > (std::numeric_limits<uint32_t>::max)() - kReplyAllowanceMs
+               ? (std::numeric_limits<uint32_t>::max)()
+               : wait_timeout_ms + kReplyAllowanceMs;
+}
+
+bool ParseCallId(const wchar_t* value, uint64_t* call_id) {
+    if (!value || !call_id)
+        return false;
+    wchar_t* end = nullptr;
+    *call_id = _wcstoui64(value, &end, 0);
+    return end != value && *end == L'\0' && *call_id != 0;
+}
+
+void WriteCallInfo(JsonWriter& writer, const hdl::rpc::v1::CallInfo& call) {
+    writer.BeginObject();
+    writer.Key("call_id");
+    writer.Num(call.call_id());
+    writer.Key("target_address");
+    writer.HexStr(call.target_address());
+    writer.Key("phase");
+    writer.Str(CallPhaseName(call.phase()));
+    writer.Key("orphaned");
+    writer.Bool(call.orphaned());
+    writer.Key("acknowledged");
+    writer.Bool(call.acknowledged());
+    writer.Key("thread_id");
+    writer.Num(call.thread_id());
+    writer.Key("thread_mode");
+    writer.Str(call.thread_mode() == hdl::rpc::v1::CALL_THREAD_MODE_MAIN ? "main" : "worker");
+    writer.Key("created_tick_ms");
+    writer.Num(call.created_tick_ms());
+    writer.Key("started_tick_ms");
+    writer.Num(call.started_tick_ms());
+    writer.Key("finished_tick_ms");
+    writer.Num(call.finished_tick_ms());
+    writer.Key("wait_status");
+    writer.Num(call.wait_status());
+    writer.Key("completion_status");
+    writer.Num(call.completion_status());
+    writer.Key("return");
+    writer.HexStr(call.return_value());
+    writer.Key("last_error");
+    writer.Num(call.last_error());
+    writer.EndObject();
+}
+
+CommandResult CmdCallLifecycle(CmdCtx& ctx) {
+    hdl::rpc::CallClient client(&ctx.client);
+    if (wcscmp(ctx.argv[3], L"status") == 0) {
+        if (ctx.argc == 4) {
+            std::vector<hdl::rpc::v1::CallInfo> calls;
+            const auto status = client.EnumOrphans(
+                hdl::rpc::v1::Empty{}, [&calls](const hdl::rpc::v1::EnumOrphansResponse& response) {
+                    calls.insert(calls.end(), response.calls().begin(), response.calls().end());
+                    return true;
+                });
+            JsonWriter writer;
+            writer.BeginObject();
+            writer.Key("count");
+            writer.Num(calls.size());
+            writer.Key("calls");
+            writer.BeginArray();
+            for (const auto& call : calls)
+                WriteCallInfo(writer, call);
+            writer.EndArray();
+            writer.EndObject();
+            return CmdStatus(L"call status", status.hdl_status(), writer.Take());
+        }
+        if (ctx.argc != 5)
+            return FailUsage(ctx);
+        uint64_t call_id = 0;
+        if (!ParseCallId(ctx.argv[4], &call_id))
+            return FailArg(ctx, L"invalid call id");
+        hdl::rpc::v1::GetCallStatusRequest request;
+        request.set_call_id(call_id);
+        const auto result = client.GetCallStatus(request);
+        if (!result.has_response)
+            return FailIpc(ctx);
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("call");
+        WriteCallInfo(writer, result.response.call());
+        writer.EndObject();
+        return CmdStatus(L"call status", result.status.hdl_status(), writer.Take());
+    }
+    if (wcscmp(ctx.argv[3], L"ack") == 0) {
+        if (ctx.argc != 5)
+            return FailUsage(ctx);
+        uint64_t call_id = 0;
+        if (!ParseCallId(ctx.argv[4], &call_id))
+            return FailArg(ctx, L"invalid call id");
+        hdl::rpc::v1::AcknowledgeOrphanRequest request;
+        request.set_call_id(call_id);
+        const auto result = client.AcknowledgeOrphan(request);
+        if (!result.has_response)
+            return FailIpc(ctx);
+        JsonWriter writer;
+        writer.BeginObject();
+        writer.Key("call");
+        WriteCallInfo(writer, result.response.call());
+        writer.EndObject();
+        return CmdStatus(L"call ack", result.status.hdl_status(), writer.Take());
+    }
+    return FailUsage(ctx);
+}
+
 CommandResult PrintCallReply(const wchar_t* verb, const hdl::rpc::Status& status,
                              const hdl::rpc::v1::CallResult& result) {
     JsonWriter writer;
@@ -58,6 +184,33 @@ CommandResult PrintCallReply(const wchar_t* verb, const hdl::rpc::Status& status
     writer.HexStr(result.return_value());
     writer.Key("last_error");
     writer.Num(result.last_error());
+    writer.Key("call_id");
+    writer.Num(result.call_id());
+    writer.Key("phase");
+    writer.Str(CallPhaseName(result.phase()));
+    writer.Key("orphaned");
+    writer.Bool(result.orphaned());
+    writer.Key("blocking_call_id");
+    writer.Num(result.blocking_call_id());
+    writer.Key("unacknowledged_orphan_count");
+    writer.Num(result.unacknowledged_orphan_count());
+    std::wstring warning;
+    if (result.orphaned() && result.call_id()) {
+        warning = L"call " + std::to_wstring(result.call_id()) +
+                  L" timed out and may still be running; inspect with 'call status " +
+                  std::to_wstring(result.call_id()) + L"'";
+    } else if (status.hdl_status() == HDL_E_BUSY && result.blocking_call_id()) {
+        warning = L"target is occupied by call " + std::to_wstring(result.blocking_call_id()) +
+                  L"; wait for completion or explicitly run 'call ack " +
+                  std::to_wstring(result.blocking_call_id()) + L"'";
+    } else if (status.ok() && result.unacknowledged_orphan_count()) {
+        warning = std::to_wstring(result.unacknowledged_orphan_count()) +
+                  L" unacknowledged call orphan(s) remain; inspect with 'call status'";
+    }
+    if (!warning.empty()) {
+        writer.Key("warning");
+        writer.Str(warning);
+    }
     if (!result.buffer_copy_outs().empty()) {
         writer.Key("bufs");
         writer.BeginArray();
@@ -79,7 +232,10 @@ CommandResult PrintCallReply(const wchar_t* verb, const hdl::rpc::Status& status
         writer.EndArray();
     }
     writer.EndObject();
-    return CmdStatus(verb, status.hdl_status(), writer.Take());
+    CommandResult output = CmdStatus(verb, status.hdl_status(), writer.Take());
+    if (!status.ok())
+        output.hint = warning;
+    return output;
 }
 
 } // namespace
@@ -113,6 +269,8 @@ CommandResult CmdResolve(CmdCtx& ctx) {
 }
 
 CommandResult CmdCall(CmdCtx& ctx) {
+    if (ctx.argc >= 4 && (wcscmp(ctx.argv[3], L"status") == 0 || wcscmp(ctx.argv[3], L"ack") == 0))
+        return CmdCallLifecycle(ctx);
     std::wstring module;
     const wchar_t* export_name = nullptr;
     uint64_t address = 0;
@@ -137,13 +295,14 @@ CommandResult CmdCall(CmdCtx& ctx) {
     }
     if (!have_address && !export_name)
         return FailUsage(ctx);
-    hdl::rpc::CallOptions options{timeout};
+    hdl::rpc::CallOptions options{TransportTimeout(timeout)};
     hdl::rpc::CallClient client(&ctx.client);
     if (have_address) {
         hdl::rpc::v1::CallRequest request;
         request.set_address(address);
         request.set_thread_mode(main_thread ? hdl::rpc::v1::CALL_THREAD_MODE_MAIN
                                             : hdl::rpc::v1::CALL_THREAD_MODE_WORKER);
+        request.set_wait_timeout_ms(timeout);
         for (const auto& text : arguments)
             if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
                 return FailArg(ctx, text.c_str());
@@ -158,6 +317,7 @@ CommandResult CmdCall(CmdCtx& ctx) {
     hdl::rpc::v1::CallExportRequest request;
     request.set_module(std::move(module_utf8));
     request.set_name(std::move(name));
+    request.set_wait_timeout_ms(timeout);
     for (const auto& text : arguments)
         if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
             return FailArg(ctx, text.c_str());
@@ -190,7 +350,9 @@ CommandResult CmdVcall(CmdCtx& ctx) {
     for (const auto& text : arguments)
         if (!EncodeCallArgument(text.c_str(), request.add_arguments()))
             return FailArg(ctx, text.c_str());
-    const auto result = hdl::rpc::CallClient(&ctx.client).CallVtable(request, {timeout});
+    request.set_wait_timeout_ms(timeout);
+    const auto result =
+        hdl::rpc::CallClient(&ctx.client).CallVtable(request, {TransportTimeout(timeout)});
     if (!result.has_response)
         return FailIpc(ctx);
     return PrintCallReply(L"vcall", result.status, result.response.result());

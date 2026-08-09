@@ -97,7 +97,7 @@ mechanism while `max_in_flight` remains one.
 | 7 | `HDL_E_BUFFER_SMALL` | Caller buffer too small in the local C API; typed RPC handlers size their internal buffers dynamically |
 | 8 | `HDL_E_CANCELLED` | Cancelled by a local job/token or abandoned streaming request |
 | 9 | `HDL_E_NOT_INIT` | Library not initialized |
-| 10 | `HDL_E_TIMEOUT` | Deadline exceeded (callee may still be running on calls) |
+| 10 | `HDL_E_TIMEOUT` | Deadline exceeded; an accepted call that may still run is returned as a tracked orphan |
 
 ---
 
@@ -113,7 +113,7 @@ method short name; the fully qualified form is `hdl.rpc.v1.Service/Method`.
 | `Ping` | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
 | `SetLogLevel` | Set log verbosity | `HdlSetLogLevel` |
 
-**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `Shutdown`. Log file and health VEH are named RPC methods (`SetLogFile`, `SetHealthVeh` / `GetHealthVeh`).
+**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_LOG_FILE`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `Shutdown`. Log file and health VEH are named RPC methods (`SetLogFile`, `SetHealthVeh` / `GetHealthVeh`). The bootstrap waits up to five seconds for the first protected pipe listener and retries transient listener/ACL setup failures during that window. A failure to create the bootstrap worker fails DLL attachment instead of leaving an inert loaded helper. Core initialization failures always emit an `OutputDebugString` record containing the attempt, failing phase, status, Win32 error, and elapsed time even when normal logging is off; set `HDL_LOG_LEVEL=1` or higher for the surrounding stage records, and set `HDL_LOG_FILE` before process start when those records must survive without a debugger attached.
 
 Default after inject: log level **off**; health VEH **off** until enabled or first `PollEvents`; IPC starts unless `HDL_NO_IPC`.
 
@@ -129,7 +129,7 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 |------------|------------|-------|
 | `InjectDll` | Inject another DLL into a process (or self / early-bird) | `HdlInjectDll`, `HdlInjectDllEx` |
 | `UnloadDll` | Unload a module-list DLL; optional reload at same path | `HdlUnloadDll` / `HdlUnloadDllEx` |
-| `Shutdown` | Restore hooks/patches/watches; optional unload tracked DLLs; stop IPC (DLL stays mapped) | `HdlShutdown` / `HdlShutdownEx` |
+| `Shutdown` | Quiesce calls, restore instrumentation, optionally unload tracked DLLs, and stop IPC (helper stays mapped) | — |
 | `TrackLoadedDll` | Register a module-list DLL for later `UNLOAD_MODULES` shutdown | `HdlTrackLoadedDll` |
 
 **`InjectDll` request:** typed fields `pid`, `method`, `dll_path`, `exe_path`, and `hook_export`. Paths are UTF-8 strings on the wire.
@@ -137,7 +137,15 @@ Default after inject: log level **off**; health VEH **off** until enabled or fir
 
 **`UnloadDll` request:** typed fields `pid`, `reload`, and UTF-8 `dll_path`.
 **Reply:** `UnloadDllResponse { base }` (new base when `reload` is true, else 0).
-Remote unload of a module that exports `HdlShutdown` first sends `Shutdown(shutdown_flags)` so instrumentation is restored outside the loader lock.
+Remote helper unload is recognized through hdllib's injection callback exports
+and, when its control pipe is live, first sends `Shutdown(shutdown_flags)`. A
+reported active call refuses unload rather than proceeding through
+`FreeLibrary`. The established two-step workflow also remains valid: a caller
+may complete `Shutdown` first and then unload after consecutive control-pipe
+probes report `ERROR_FILE_NOT_FOUND`. Timeout, access, pipe-busy,
+and negotiation failures do not prove quiescence; unload fails closed with
+`BUSY` or `FAILED` and leaves the helper loaded. Access and negotiation failures
+remain failures even if the endpoint disappears afterward.
 
 **`Shutdown` request:** `ShutdownRequest { flags }` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Its empty response is flushed before the deferred server stop begins. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
 
@@ -233,11 +241,15 @@ jobs are not remotely addressable and are not RPC methods.
 |------------|------------|-------|
 | `GetHealth` | Snapshot: CPU, WS, hang, last exception | `HdlGetHealth` |
 | `EnumThreads` | Thread list | `HdlEnumThreads` |
-| `PollEvents` | Drain exception / health / job / hook wake-ups | `HdlPollEvents` |
+| `PollEvents` | Drain health, instrumentation, and call-lifecycle wake-ups | `HdlPollEvents` |
 
 **Health flags:** `GUI_HUNG`, `HIGH_CPU`, `RECENT_EXCEPTION`. Optional VEH (`HdlSetHealthVeh` / `HDL_HEALTH_VEH`) feeds exception events.
 
-**Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK` (wake only; full payload via `PollHookHits`), `WATCH` (wake only; full payload via `PollWatchHits` when armed).
+**Events (`HDL_EVENT_*`):** `EXCEPTION`, `HEALTH`, `JOB_DONE`, `HOOK`
+(wake only; full payload via `PollHookHits`), `WATCH` (wake only; full payload
+via `PollWatchHits` when armed), `CALL_ORPHANED`, and `CALL_COMPLETED`. Call
+events use `detail` for the call ID and `address` for the resolved hazard key;
+the registry remains authoritative if the bounded event queue drops a wake-up.
 
 **`PollEvents`:** `{ max_events, wait_timeout_ms }` returns typed `EventBatch` messages (maximum clamped to 64).
 
@@ -279,16 +291,35 @@ Typical LEA/CALL/JMP: `disp_offset=3`, `instr_len=7` (or 1/5 for near call/jmp).
 | `CallExport` | Resolve export + call (worker thread) | `HdlCallExport` |
 | `Call` | Absolute address call | `HdlCall` |
 | `CallVtable` | `(*obj)[index]` then call | `HdlCallVtable` |
+| `EnumOrphans` | Stream retained orphan lifecycle records | — |
+| `GetCallStatus` | Query one retained call by ID | — |
+| `AcknowledgeOrphan` | Explicitly remove a running orphan's overlap block | — |
 
 Microsoft x64 ABI, up to **16** arguments. Arg kinds (`HDL_CALL_ARG_*`): `U64`, `I64`, `PTR`, `BUF` (copy-in/out), `CSTR`, `WSTR`, `F32`, `F64` (IEEE bits in `u64`).
 
 Thread modes: `WORKER` (default helper thread) or `MAIN` (sync on primary UI HWND; fails if none / console-only).
+When a `MAIN` call originates on that UI thread it executes inline. There is no
+separate waiter that can enforce the deadline in this case, so its timeout
+cannot preempt or bound the inline callee; the call returns only when the
+callee returns or faults.
 
 **RPC arguments:** repeated `CallArgument` messages use a `oneof` for unsigned/signed integers, pointer, buffer, narrow C-string bytes, UTF-8 wide string, float, and double.
 
-**Call reply:** `CallResult` contains `return_value`, `last_error`, and repeated indexed `BufferCopyOut` values. On timeout/cancel the callee may still be running and `RpcStatus.outcome_unknown` is set.
+**Call reply:** `CallResult` contains `return_value`, `last_error`, repeated
+indexed `BufferCopyOut` values, `call_id`, phase, orphan/blocking IDs, and the
+active unacknowledged-orphan count. `RpcStatus.outcome_unknown` is true only
+when an accepted call became orphaned. Validation, missing-window, and
+same-target `BUSY` failures have known outcomes. Copy-out is withheld after a
+timeout, so a late callee return cannot write into caller-owned storage.
 
-**`CallVtable` extras:** the typed request carries `object`, `index`, repeated arguments, `prepend_this`, and `thread_mode`. When `prepend_this` is true, a synthetic `this` is prepended if missing. The envelope deadline is the only remote call timeout.
+**Lifecycle containment:** the exact resolved address is the hazard key. A
+queued or running call blocks another call to that address until completion or
+explicit acknowledgment. Acknowledgment is an operator override for overlap;
+it never permits shutdown or unload while execution remains active. The
+registry retains up to 64 active calls and 256 lightweight recent records for
+up to ten minutes. Expired queued UI work is skipped rather than invoked.
+
+**`CallVtable` extras:** the typed request carries `object`, `index`, repeated arguments, `prepend_this`, `thread_mode`, and `wait_timeout_ms`. When `prepend_this` is true, a synthetic `this` is prepended if missing. All call requests use `wait_timeout_ms` for execution and a separate envelope deadline for transport.
 
 ---
 

@@ -466,12 +466,29 @@ HDLLib supports absolute calls, export calls, and virtual calls. A virtual call
 prepends the object as `this` by default. Calls can run on the IPC worker or be
 marshaled to the target's main UI thread.
 
+Use a bounded wait and inspect any accepted timeout before doing more work:
+
+```bat
+hdlclient <pid> call --addr 0xFN --timeout 500 u64:1
+hdlclient <pid> call status 17
+hdlclient <pid> call status
+```
+
+The timeout reply supplies the actual call ID. Calls to the same resolved
+target are contained while that record is queued or running. `call ack ID`
+deliberately removes only that overlap block; it does not make shutdown safe.
+Prefer waiting for a terminal phase unless concurrent entry is known to be
+safe for that exact function.
+
 Important boundaries:
 
 - the call surface supports at most 16 arguments;
 - argument types and the return interpretation must match the actual ABI;
 - main-thread dispatch requires a suitable non-console window;
-- a timeout does not stop a callee that is already executing;
+- a main-thread call made from that same UI thread executes inline, so its
+  timeout cannot preempt or bound the callee;
+- a timeout does not stop a callee that is already executing, but the call
+  remains queryable and late buffer copy-out is suppressed;
 - a wrong address, signature, object, or thread can crash or deadlock the
   target.
 

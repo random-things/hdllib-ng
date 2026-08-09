@@ -83,7 +83,10 @@ const wchar_t* StatusHint(const std::wstring& cmd, int32_t status) {
                L"check --module / --addr";
     }
     if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_TIMEOUT) {
-        return L"callee may still be running (orphaned); avoid stacking another call";
+        return L"accepted call may still be running; use its call_id with 'call status'";
+    }
+    if ((cmd == L"call" || cmd == L"vcall") && status == HDL_E_BUSY) {
+        return L"target has an active call; inspect blocking_call_id before retrying";
     }
     if (CmdStartsWith(cmd, L"discover") && status == HDL_E_NOT_FOUND) {
         return L"unknown session id; run discover-create or pass --session";
@@ -100,6 +103,14 @@ const wchar_t* StatusHint(const std::wstring& cmd, int32_t status) {
     }
     if (cmd == L"inject" && status == HDL_E_ACCESS) {
         return L"Wow64 target rejected or access denied; use matching bitness / elevate";
+    }
+    if ((cmd == L"unload" || cmd == L"reload") && status == HDL_E_BUSY) {
+        return L"helper quiescence was not confirmed; it was left loaded; retry after the "
+               L"control pipe becomes responsive or shutdown completes";
+    }
+    if ((cmd == L"unload" || cmd == L"reload") && status == HDL_E_FAILED) {
+        return L"helper shutdown negotiation could not be verified; it was left loaded; "
+               L"inspect the DLL log before retrying";
     }
     /* Generic per-status fallbacks. */
     switch (status) {

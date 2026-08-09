@@ -51,6 +51,8 @@ enum EventType {
   EVENT_TYPE_JOB_DONE = 3;
   EVENT_TYPE_HOOK = 4;
   EVENT_TYPE_WATCH = 5;
+  EVENT_TYPE_CALL_ORPHANED = 6;
+  EVENT_TYPE_CALL_COMPLETED = 7;
 }
 
 enum FieldKind {
@@ -193,6 +195,13 @@ enum CallThreadMode {
   CALL_THREAD_MODE_MAIN = 1;
 }
 
+enum CallPhase {
+  CALL_PHASE_QUEUED = 0;
+  CALL_PHASE_RUNNING = 1;
+  CALL_PHASE_COMPLETED = 2;
+  CALL_PHASE_CANCELLED_BEFORE_START = 3;
+}
+
 message CallArgument {
   oneof value {
     uint64 unsigned_value = 1;
@@ -215,6 +224,28 @@ message CallResult {
   uint64 return_value = 1;
   uint32 last_error = 2;
   repeated BufferCopyOut buffer_copy_outs = 3;
+  fixed64 call_id = 4;
+  bool orphaned = 5;
+  fixed64 blocking_call_id = 6;
+  CallPhase phase = 7;
+  uint32 unacknowledged_orphan_count = 8;
+}
+
+message CallInfo {
+  fixed64 call_id = 1;
+  fixed64 target_address = 2;
+  uint64 created_tick_ms = 3;
+  uint64 started_tick_ms = 4;
+  uint64 finished_tick_ms = 5;
+  uint64 return_value = 6;
+  uint32 thread_id = 7;
+  CallThreadMode thread_mode = 8;
+  CallPhase phase = 9;
+  bool orphaned = 10;
+  bool acknowledged = 11;
+  int32 wait_status = 12;
+  int32 completion_status = 13;
+  uint32 last_error = 14;
 }
 
 message HookHit {

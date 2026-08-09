@@ -3,15 +3,19 @@
 #include "hdllib/hdllib.h"
 
 #include <cstdint>
+#include <functional>
 
 namespace hdl {
 
 // Finds a primary top-level HWND for the current process (best-effort).
 HWND FindPrimaryWindow();
 
-// Runs work on the UI thread of hwnd via temporary WndProc subclass + SendMessageTimeout.
-// work(ctx) is invoked on that thread. Returns HDL_E_TIMEOUT / HDL_E_FAILED / HDL_OK.
-HdlStatus RunOnWindowThread(HWND hwnd, void (*work)(void*), void* ctx, uint32_t timeout_ms,
-                            volatile int* cancel);
+/* Heap-owned window dispatch. Only call_id crosses the window-message boundary. */
+HdlStatus PostWindowCall(HWND hwnd, uint64_t call_id, std::function<void()> execute,
+                         std::function<void()> cancel, std::function<void()> finished);
 
-}  // namespace hdl
+/* Cancel queued tickets. Returns BUSY while a callback is executing target code. */
+HdlStatus CancelQueuedWindowCalls();
+void ResetWindowCallDispatcher();
+
+} // namespace hdl

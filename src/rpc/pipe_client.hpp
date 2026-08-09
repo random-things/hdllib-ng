@@ -40,6 +40,7 @@ class PipeClient final : public hdl::rpc::ClientChannel {
     uint32_t ProtoMajor() const { return proto_major_; }
     uint32_t ProtoMinor() const { return proto_minor_; }
     const std::string& NegotiateError() const { return negotiate_error_; }
+    DWORD ConnectError() const { return connect_error_; }
 
   private:
     bool Negotiate(const hdl::rpc::PipeDeadline& deadline);
@@ -57,5 +58,6 @@ class PipeClient final : public hdl::rpc::ClientChannel {
     uint64_t next_request_id_ = 1;
     std::unordered_map<std::string, bool> methods_;
     std::string negotiate_error_;
+    DWORD connect_error_ = ERROR_SUCCESS;
     std::mutex request_mutex_;
 };

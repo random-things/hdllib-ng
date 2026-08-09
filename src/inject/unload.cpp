@@ -1,11 +1,14 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "inject/unload_policy.hpp"
 #include "win/raii.hpp"
 
 #include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
 #include "rpc/pipe_client.hpp"
+
+#include <string>
 
 namespace hdl {
 namespace inject {
@@ -19,8 +22,35 @@ HMODULE ModuleContaining(const void* addr) {
     return mod;
 }
 
-/* Ask the in-target helper to restore instrumentation before FreeLibrary (hdllib only). */
-bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
+enum class ShutdownPreparation {
+    NotHelper,
+    Prepared,
+    Blocked,
+};
+
+struct ShutdownPreparationResult {
+    ShutdownPreparation state = ShutdownPreparation::NotHelper;
+    HdlStatus status = HDL_OK;
+};
+
+bool IsControlPipeDefinitivelyGone(DWORD pid) {
+    constexpr int kProbeCount = 3;
+    for (int attempt = 0; attempt < kProbeCount; ++attempt) {
+        SetLastError(ERROR_SUCCESS);
+        if (HdlWaitLocalPipe(pid, 0) || GetLastError() != ERROR_FILE_NOT_FOUND) {
+            return false;
+        }
+        if (attempt + 1 < kProbeCount) {
+            Sleep(20);
+        }
+    }
+    return true;
+}
+
+/* Ask the in-target helper to quiesce before FreeLibrary. A helper that cannot
+ * confirm quiescence is contained in place instead of being unsafely unloaded. */
+ShutdownPreparationResult TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base,
+                                                   uint32_t flags) {
     bool is_helper = false;
     win::unique_handle snap(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid));
     if (snap) {
@@ -32,8 +62,8 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
                     win::unique_hmodule probe(
                         LoadLibraryExW(me.szExePath, nullptr, DONT_RESOLVE_DLL_REFERENCES));
                     if (probe) {
-                        if (GetProcAddress(probe.get(), "HdlShutdown") ||
-                            GetProcAddress(probe.get(), "HdlShutdownEx")) {
+                        if (GetProcAddress(probe.get(), "HdlHookProc") ||
+                            GetProcAddress(probe.get(), "HdlWinEventProc")) {
                             is_helper = true;
                         }
                     }
@@ -43,12 +73,52 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
         }
     }
     if (!is_helper) {
-        return false;
+        return {};
+    }
+
+    /* Preserve the explicit Shutdown-then-Unload workflow without waiting for
+     * a connection deadline. This non-connecting probe is conclusive only when
+     * the pipe namespace reports that the endpoint does not exist. */
+    if (IsControlPipeDefinitivelyGone(pid)) {
+        HDL_LOG_INFO("Helper control pipe is absent for pid %u; prior shutdown preparation is "
+                     "confirmed",
+                     pid);
+        return {ShutdownPreparation::Prepared, HDL_OK};
     }
 
     PipeClient pipe(pid, "hdllib-unload", "0.1.0-pre");
     if (!pipe.Connect()) {
-        return false;
+        const DWORD connect_error = pipe.ConnectError();
+        const std::string connect_detail = pipe.NegotiateError();
+
+        /* Connect may fail after reaching a live helper (timeout, access, or
+         * negotiation failure). Consecutive probes distinguish a transient
+         * connection failure after prior shutdown from an ambiguous live state.
+         * Non-transient failures never become prepared retroactively. */
+        const bool absence_confirmed = IsControlPipeDefinitivelyGone(pid);
+        bool probe_reachable = false;
+        DWORD probe_error = ERROR_FILE_NOT_FOUND;
+        if (!absence_confirmed) {
+            SetLastError(ERROR_SUCCESS);
+            probe_reachable = HdlWaitLocalPipe(pid, 0) != FALSE;
+            probe_error = probe_reachable ? ERROR_SUCCESS : GetLastError();
+        }
+        const ShutdownConnectDisposition disposition = ClassifyShutdownConnectFailure(
+            connect_error, probe_reachable, probe_error, absence_confirmed);
+        if (disposition == ShutdownConnectDisposition::PreparedPipeGone) {
+            HDL_LOG_INFO("Helper control pipe is absent for pid %u; prior shutdown preparation "
+                         "is confirmed",
+                         pid);
+            return {ShutdownPreparation::Prepared, HDL_OK};
+        }
+
+        const HdlStatus refusal =
+            disposition == ShutdownConnectDisposition::Busy ? HDL_E_BUSY : HDL_E_FAILED;
+        HDL_LOG_ERROR("Refusing helper unload for pid %u: shutdown connection failed "
+                      "(connect_error=%lu, probe_reachable=%u, probe_error=%lu, detail=%s)",
+                      pid, connect_error, probe_reachable ? 1u : 0u, probe_error,
+                      connect_detail.empty() ? "none" : connect_detail.c_str());
+        return {ShutdownPreparation::Blocked, refusal};
     }
     rpc::v1::ShutdownRequest shutdown;
     shutdown.set_flags(flags);
@@ -58,21 +128,29 @@ bool TryPrepareRemoteShutdown(DWORD pid, uint64_t module_base, uint32_t flags) {
 
     if (!result.status.ok()) {
         HDL_LOG_ERROR("Control.Shutdown returned %d", result.status.hdl_status());
-        return false;
+        const int32_t remote_status = result.status.hdl_status();
+        return {ShutdownPreparation::Blocked,
+                remote_status == HDL_E_BUSY ? HDL_E_BUSY : HDL_E_FAILED};
     }
     /* Wait until the pipe is gone so ServeClient has left the DLL. */
+    bool pipe_gone = false;
     for (int i = 0; i < 150; ++i) {
         win::unique_handle probe(HdlOpenLocalPipe(pid));
         if (!probe) {
             const DWORD err = GetLastError();
             if (err == ERROR_FILE_NOT_FOUND) {
+                pipe_gone = true;
                 break;
             }
         }
         Sleep(20);
     }
+    if (!pipe_gone) {
+        HDL_LOG_ERROR("Refusing helper unload: shutdown pipe did not quiesce for pid %u", pid);
+        return {ShutdownPreparation::Blocked, HDL_E_BUSY};
+    }
     Sleep(50);
-    return true;
+    return {ShutdownPreparation::Prepared, HDL_OK};
 }
 
 /* Decrement LoadLibrary refcount until the module leaves the list (or give up). */
@@ -157,8 +235,15 @@ HdlStatus UnloadRemoteEx(uint32_t pid, const wchar_t* dll_path, int reload, uint
         return HDL_E_NOT_FOUND;
     }
 
-    if (!TryPrepareRemoteShutdown(pid, base, shutdown_flags)) {
-        HDL_LOG_INFO("Prepare shutdown skipped or failed for pid %u (continuing unload)", pid);
+    const ShutdownPreparationResult preparation =
+        TryPrepareRemoteShutdown(pid, base, shutdown_flags);
+    if (preparation.state == ShutdownPreparation::Blocked) {
+        HDL_LOG_ERROR("Refusing unload for pid %u because helper quiescence was not confirmed",
+                      pid);
+        return preparation.status;
+    }
+    if (preparation.state == ShutdownPreparation::NotHelper) {
+        HDL_LOG_INFO("Target module is not an hdllib helper; no helper shutdown required");
     }
 
     win::unique_handle process(OpenTargetProcess(pid));

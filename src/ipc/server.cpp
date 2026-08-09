@@ -11,9 +11,11 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -27,8 +29,27 @@ std::atomic<bool> g_ready{false};
 std::atomic<bool> g_stop{false};
 /* True while ThreadMain is on the stack (including post-loop cleanup). */
 std::atomic<bool> g_accept_alive{false};
+std::atomic<uint32_t> g_start_attempts{0};
+std::atomic<DWORD> g_start_last_error{ERROR_SUCCESS};
+std::atomic<uint64_t> g_start_elapsed_ms{0};
 hdl::win::unique_handle g_stop_event;
 std::thread g_thread;
+
+/* The listener runs on a fresh thread and can be delayed by loader/CI contention.
+ * A 500 ms polling window can make a healthy first bootstrap fail while an immediate
+ * retry succeeds. Keep the wait bounded, but allow transient setup retries. */
+constexpr DWORD kStartupTimeoutMs = 5000;
+
+void EmitStartupFailureDiagnostic(const char* reason) {
+    char message[320];
+    _snprintf_s(
+        message, _TRUNCATE,
+        "[ERROR] IPC bootstrap failed reason=%s attempts=%u last_error=%lu "
+        "accept_alive=%d elapsed_ms=%llu\n",
+        reason, g_start_attempts.load(), static_cast<unsigned long>(g_start_last_error.load()),
+        g_accept_alive.load() ? 1 : 0, static_cast<unsigned long long>(g_start_elapsed_ms.load()));
+    OutputDebugStringA(message);
+}
 
 std::mutex g_clients_mu;
 std::vector<HANDLE> g_client_pipes;
@@ -184,12 +205,26 @@ void SpawnWorker(HANDLE pipe) {
 
 void ThreadMain() {
     g_accept_alive = true;
+    const uint64_t started_ms = GetTickCount64();
     const std::wstring name = PipeName();
     HDL_LOG_INFO("IPC server starting on %ls (multi-client, ACL)", name.c_str());
 
     while (!g_stop.load()) {
+        g_start_attempts.fetch_add(1);
         std::vector<uint8_t> sd_storage;
         SECURITY_ATTRIBUTES* sa = BuildPipeSa(sd_storage);
+        if (!sa) {
+            DWORD err = GetLastError();
+            if (err == ERROR_SUCCESS) {
+                err = ERROR_INVALID_SECURITY_DESCR;
+            }
+            g_start_last_error.store(err);
+            g_start_elapsed_ms.store(GetTickCount64() - started_ms);
+            HDL_LOG_ERROR("IPC startup ACL construction failed: %lu (attempt=%u)", err,
+                          g_start_attempts.load());
+            Sleep(200);
+            continue;
+        }
 
         hdl::win::unique_handle pipe(
             CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -197,25 +232,55 @@ void ThreadMain() {
                              PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, sa));
 
         if (!pipe) {
-            HDL_LOG_ERROR("CreateNamedPipeW failed: %lu", GetLastError());
+            const DWORD err = GetLastError();
+            g_start_last_error.store(err);
+            g_start_elapsed_ms.store(GetTickCount64() - started_ms);
+            HDL_LOG_ERROR("CreateNamedPipeW failed: %lu (attempt=%u)", err,
+                          g_start_attempts.load());
             Sleep(200);
             continue;
         }
 
-        /* First successful listen instance — server is usable for connects. */
-        g_ready = true;
-        g_running = true;
-
         OVERLAPPED ov{};
         hdl::win::unique_handle ov_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        if (!ov_event) {
+            const DWORD err = GetLastError();
+            g_start_last_error.store(err);
+            g_start_elapsed_ms.store(GetTickCount64() - started_ms);
+            HDL_LOG_ERROR("IPC listener event creation failed: %lu (attempt=%u)", err,
+                          g_start_attempts.load());
+            Sleep(200);
+            continue;
+        }
         ov.hEvent = ov_event.get();
-        ConnectNamedPipe(pipe.get(), &ov);
-        DWORD err = GetLastError();
+        const BOOL connect_started = ConnectNamedPipe(pipe.get(), &ov);
+        const DWORD err = connect_started ? ERROR_SUCCESS : GetLastError();
 
         bool connected = false;
-        if (err == ERROR_PIPE_CONNECTED) {
+        bool listening = false;
+        if (connect_started || err == ERROR_PIPE_CONNECTED) {
             connected = true;
+            listening = true;
         } else if (err == ERROR_IO_PENDING) {
+            listening = true;
+        } else {
+            g_start_last_error.store(err);
+            g_start_elapsed_ms.store(GetTickCount64() - started_ms);
+            HDL_LOG_ERROR("ConnectNamedPipe failed: %lu (attempt=%u)", err,
+                          g_start_attempts.load());
+            Sleep(200);
+            continue;
+        }
+
+        if (listening) {
+            /* First established listen operation — the endpoint is now connectable. */
+            g_start_last_error.store(ERROR_SUCCESS);
+            g_start_elapsed_ms.store(GetTickCount64() - started_ms);
+            g_ready = true;
+            g_running = true;
+        }
+
+        if (err == ERROR_IO_PENDING) {
             HANDLE waits[2] = {ov.hEvent, g_stop_event.get()};
             const DWORD wr = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
             if (wr == WAIT_OBJECT_0) {
@@ -224,9 +289,6 @@ void ThreadMain() {
                 CancelIoEx(pipe.get(), &ov);
                 break;
             }
-        } else {
-            HDL_LOG_ERROR("ConnectNamedPipe failed: %lu", err);
-            continue;
         }
 
         ov_event.reset();
@@ -278,19 +340,52 @@ HdlStatus Start() {
     g_stop = false;
     g_ready = false;
     g_running = false;
+    g_start_attempts = 0;
+    g_start_last_error = ERROR_SUCCESS;
+    g_start_elapsed_ms = 0;
     if (!g_stop_event) {
         g_stop_event.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     } else {
         ResetEvent(g_stop_event.get());
     }
-    g_thread = std::thread(ThreadMain);
-    for (int i = 0; i < 50 && !g_ready.load(); ++i) {
+    if (!g_stop_event) {
+        const DWORD err = GetLastError();
+        HDL_LOG_ERROR("IPC startup failed to create stop event: %lu", err);
+        g_start_last_error.store(err);
+        EmitStartupFailureDiagnostic("stop-event");
+        SetLastError(err);
+        return HDL_E_FAILED;
+    }
+    try {
+        g_thread = std::thread(ThreadMain);
+    } catch (const std::system_error& error) {
+        const DWORD code = static_cast<DWORD>(error.code().value());
+        g_start_last_error.store(code);
+        HDL_LOG_ERROR("IPC startup failed to create listener thread: code=%lu message=%s",
+                      static_cast<unsigned long>(code), error.what());
+        EmitStartupFailureDiagnostic("listener-thread");
+        SetLastError(code);
+        return HDL_E_FAILED;
+    }
+    for (DWORD elapsed = 0; elapsed < kStartupTimeoutMs && !g_ready.load(); elapsed += 10) {
         Sleep(10);
     }
     if (!g_ready.load()) {
-        HDL_LOG_ERROR("IPC server failed to become ready");
+        DWORD startup_error = g_start_last_error.load();
+        if (startup_error == ERROR_SUCCESS) {
+            startup_error = ERROR_TIMEOUT;
+            g_start_last_error.store(startup_error);
+        }
+        HDL_LOG_ERROR("IPC server failed to become ready timeout_ms=%lu attempts=%u "
+                      "last_error=%lu accept_alive=%d observed_elapsed_ms=%llu",
+                      static_cast<unsigned long>(kStartupTimeoutMs), g_start_attempts.load(),
+                      static_cast<unsigned long>(g_start_last_error.load()),
+                      g_accept_alive.load() ? 1 : 0,
+                      static_cast<unsigned long long>(g_start_elapsed_ms.load()));
+        EmitStartupFailureDiagnostic("readiness-timeout");
         SignalStop();
         WaitAcceptThreadExit();
+        SetLastError(startup_error);
         return HDL_E_FAILED;
     }
     return HDL_OK;

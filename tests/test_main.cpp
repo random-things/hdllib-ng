@@ -21,6 +21,11 @@ void PrintUsage() {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    // Keep child-process startup failures observable in test output instead of
+    // allowing Windows to block unattended runs with a modal error dialog.
+    SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+                 SEM_NOOPENFILEERRORBOX);
+
     std::wstring dll_path;
     std::wstring target_path;
     bool api_only = false;

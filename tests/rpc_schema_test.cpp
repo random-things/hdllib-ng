@@ -48,10 +48,10 @@ void TestGeneratedInventory() {
         }
         streams += metadata.server_streaming ? 1 : 0;
     }
-    CHECK(std::size(hdl::rpc::kMethods) == 97, "expected 97 methods, got %zu",
+    CHECK(std::size(hdl::rpc::kMethods) == 100, "expected 100 methods, got %zu",
           std::size(hdl::rpc::kMethods));
     CHECK(services.size() == 12, "expected 12 services, got %zu", services.size());
-    CHECK(streams == 23, "expected 23 server streams, got %zu", streams);
+    CHECK(streams == 24, "expected 24 server streams, got %zu", streams);
 }
 } // namespace
 

@@ -107,6 +107,8 @@ enum {
     HDL_EVENT_JOB_DONE = 3,
     HDL_EVENT_HOOK = 4,  /* wake-up; full payload via HdlPollHookHits */
     HDL_EVENT_WATCH = 5, /* hardware / page watchpoint hit */
+    HDL_EVENT_CALL_ORPHANED = 6,
+    HDL_EVENT_CALL_COMPLETED = 7,
 };
 
 typedef struct HdlEvent {

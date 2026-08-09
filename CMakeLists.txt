@@ -459,6 +459,7 @@ set(HDL_DOMAIN_SOURCES
   src/health.cpp
   src/fingerprint.cpp
   src/call.cpp
+  src/call_registry.cpp
   src/call_invoke.asm
   src/call_dispatch.cpp
   src/alloc.cpp

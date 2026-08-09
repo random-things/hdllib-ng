@@ -140,7 +140,7 @@ The pipe accepts **multiple concurrent clients** and uses an ACL for SYSTEM, Adm
 
 `hdl.rpc.v1.Injection/UnloadDll` carries `pid`, `reload`, and `dll_path`. Its reply carries `status` and `base` (set when reloading).
 
-`hdlclient` extras: `call --addr`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, `session`/`store`/`recipe`/`stabilize`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan and `recipe constrain` scope support `--module NAME`.
+`hdlclient` extras: `call --addr`, `call status [ID]`, `call ack ID`, `vcall`, `alloc`/`free`/`alloc-near`, `caves`, `protect`, `flush-icache`, `disasm-backend`/`disasm`/`instrlen`, `stub`, `patch`, `sections`/`exports`/`imports`, `functions`, `resolve-function`, `xrefs-from`/`xrefs-to`, `invalidate-fn-index`, `vtable`/`rtti`, `watch` (`hw`/`page`/`list`/`unwatch`/`hits`/`refresh`), `rip`, `ptrchain`, `modbase`, `hook` / `hooktrace`, `hook-import`, `hook-enable`, `hookhits`, `unhook`, `write`, `resolve-pattern`, `xrefs`, `ptrscan`, `probe`, `discover-*` (incl. pathvalidate/scan/watch-import/reset-heat/export/import/diff/apply-watch/evidence), `log-file`, `health-veh`, `shutdown [--modules]`, `unload`/`reload`, `session`/`store`/`recipe`/`stabilize`, interest store v3 + recipes (`place`/`stitch`/`expand`/`action`/`constrain`). Call arg prefixes: `u64:` `i64:` `f32:` `f64:` `cstr:` `wstr:` `buf:HEX` `ptr:HEX`. Scan and `recipe constrain` scope support `--module NAME`.
 
 Discover / recipe workflows: [docs/client.md](docs/client.md). Built-in disasm backends (Zydis/Capstone) are selected over the pipe; there is no remote custom-backend registration.
 
@@ -150,7 +150,9 @@ Discover / recipe workflows: [docs/client.md](docs/client.md). Built-in disasm b
 - Remote inject methods generally need sufficient process access (often elevation for protected targets).
 - `SetWindowsHookEx` requires a UI thread/window on the target and a suitable hook export on the DLL.
 - Prefer `hdlclient <pid> modules` to resolve bases after inject when unsure.
-- In-process `call` timeouts abandon waiting; the callee thread may still be running.
+- A timed-out in-process call remains tracked by ID. Same-target calls are contained until it
+  completes or is explicitly acknowledged; `call status` shows the authoritative state.
+- Shutdown and helper unload are refused while tracked execution can still return through hdllib.
 - `HDL_CALL_THREAD_MAIN` requires a non-console top-level HWND in the target process.
 - Domain / injection / pipe tests: [tests/README.md](tests/README.md) (`hdl_tests.exe --api-only`, `hdl_client_tests.exe`, `hdl_store_tests.exe`).
 - Higher-level locate/discover + place/code playground: [toys/arena/README.md](toys/arena/README.md) (`hdl_toy_arena.exe`, `HDL_BUILD_TOYS`). Automated verify: `hdl_toy_tests.exe`.

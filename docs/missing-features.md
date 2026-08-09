@@ -14,7 +14,7 @@ Related: [capabilities](capabilities.md), [architecture](architecture.md),
 | # | Item | Status |
 |---|---|---|
 | 1 | Named RPC negotiation and capability discovery | **Done** (minor follow-ups) |
-| 2 | Safe in-process call lifecycle | **Open** |
+| 2 | Safe in-process call lifecycle | **Done** |
 | 3 | Remote surface parity for operator-critical controls | **Done** |
 | 4 | Patch / stub durability across unload and reinject | **Done** |
 | 5 | Connection-scoped session isolation | **Open** |
@@ -43,40 +43,30 @@ expand fuzzing of envelope parsing and complex typed request messages.
 
 ---
 
-## 2. Safe in-process call lifecycle — **open**
+## 2. Safe in-process call lifecycle — **done**
 
-**Why it matters:** The “observe, then invoke deliberately” workflow depends on
-`HdlCall` / `HdlCallExport` / `HdlCallVtable`. Today a timeout returns
-`HDL_E_TIMEOUT` while the callee thread may still be running. That can leave
-the target mid-mutation, re-enter unsafe code on a later call, or make the
-operator think the call never happened.
+Implemented as a process-local registry shared by export, absolute, vtable, and
+main-thread calls. Accepted timeouts return an orphan ID and phase; exact-target
+overlap returns `HDL_E_BUSY` with the blocking ID until completion or explicit
+acknowledgment. `Call/EnumOrphans`, `Call/GetCallStatus`, and
+`Call/AcknowledgeOrphan` expose retained state, with matching `call status` and
+`call ack` CLI commands.
 
-**Current state:** Worker-thread and `HDL_CALL_THREAD_MAIN` paths in
-[`src/call.cpp`](../src/call.cpp) / [`src/call_dispatch.cpp`](../src/call_dispatch.cpp).
-Docs warn that timeouts abandon waiting. The CLI attaches a
-[`StatusHint`](../tools/client/util.cpp) on timed-out `call` / `vcall`
-(“callee may still be running”), but there is still **no** in-target orphan
-registry, no refuse-overlapping-calls policy, and no `Call/EnumOrphans` RPC.
+Call arguments and buffers are execution-owned. Buffer copy-out happens only
+after synchronous completion, so a late return cannot touch caller-owned
+storage. Main-thread dispatch uses heap tickets keyed by call ID and skips an
+expired queued ticket. Shutdown stops admission and refuses teardown/unload
+until worker handles, UI callbacks, waiters, and execution epilogues are
+quiescent; acknowledgment never overrides that protection.
 
-**What needs to be done:**
-
-1. Track outstanding calls (handle / job id / thread id / start time) in a
-   process-local registry similar to hooks/watches.
-2. On timeout: mark the call **orphaned**, surface that in the reply (status +
-   flags or a dedicated `HdlCallResult` field), and refuse overlapping calls to
-   the same target until the orphan completes or is explicitly acknowledged.
-3. Prefer join-with-deadline where possible; if abort is impossible without
-   suspending the target thread, document that and expose `call status` /
-   a named `Call/EnumOrphans` RPC.
-4. For `HDL_CALL_THREAD_MAIN`, define behavior when the UI thread never pumps
-   (hung GUI): distinguish “no HWND” (`HDL_E_NOT_FOUND`) from “posted but not
-   run” (timeout + orphan).
-5. Client: strengthen orphan warnings on subsequent `call` / `events`; add tests that
-   intentionally hang a callee and assert orphan tracking.
-
-**Acceptance:** After a timed-out call, the operator can see that work may still
-be running and cannot silently stack another call into the same hazard without
-acknowledgment.
+Deterministic worker, RPC, UI, lifecycle, and client tests cover running
+timeouts, overlap, different-target admission, explicit acknowledgment,
+protected caller buffers, queued cancellation, lifecycle events, completion
+queries, shutdown containment, deadline races, missing UI windows, and registry
+bounds. The default, ASan-headless, and GUI validation profiles all pass,
+including repeated GUI stress and ASan GUI lifecycle coverage. See
+[capabilities.md](capabilities.md#8-in-process-calls-export--absolute--vtable)
+and [client.md](client.md#call--hook--watch).
 
 ---
 
@@ -338,5 +328,5 @@ one x64 DLL can run inside a 32-bit process. Until then this item stays closed.
 
 Injection research that is intentionally not scheduled:
 [future/](future/README.md) (e.g. I/O ring completions). Prefer finishing open
-items above (especially call orphans, session isolation) before
+items above (especially session isolation and restore completeness) before
 adding more inject techniques.

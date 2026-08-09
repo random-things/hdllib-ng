@@ -78,7 +78,7 @@ rem Prepare only: restore hooks/patches/watches, optional tracked payload DLLs, 
 hdlclient <pid> shutdown
 hdlclient <pid> shutdown --modules
 
-rem Preferred eject: Control/Shutdown (when the helper exports HdlShutdown) then FreeLibrary
+rem Preferred eject: verify Control/Shutdown succeeds, then FreeLibrary
 hdlclient unload <pid> C:\full\path\to\hdllib.dll
 hdlclient unload <pid> C:\full\path\to\hdllib.dll --modules
 ```
@@ -87,6 +87,15 @@ hdlclient unload <pid> C:\full\path\to\hdllib.dll --modules
 tracked via inject/track (never the helper itself). Manual-map / module-stomp
 images are not unloadable this way. Pipe `unload` cannot eject the helper in-process
 (`HDL_E_BUSY`); use the local `hdlclient unload` command.
+The local unload command recognizes hdllib by its injection callback exports.
+With a live control pipe it performs shutdown preparation itself and refuses
+`FreeLibrary` if an active call reports `BUSY`. The explicit two-step workflow
+above remains supported: after a successful `shutdown`, the absent pipe is
+treated as evidence supplied by that prior preparation only when consecutive
+fresh probes report `ERROR_FILE_NOT_FOUND`. A timeout, access denial, busy pipe, malformed
+reply, or protocol mismatch refuses unload with `BUSY` or `FAILED`; the helper
+is left loaded. Access and negotiation failures do not become successful prior
+preparation if the pipe subsequently disappears.
 
 ---
 
@@ -134,6 +143,9 @@ hdlclient <pid> resolve --module kernel32.dll GetCurrentProcessId
 hdlclient <pid> call --module kernel32.dll GetCurrentProcessId
 hdlclient <pid> call --addr 0xFN [--main] [--timeout MS] u64:1 f32:1.5 cstr:hi
 hdlclient <pid> vcall 0xOBJ 3 [--main] [--no-this] u64:1
+hdlclient <pid> call status
+hdlclient <pid> call status 17
+hdlclient <pid> call ack 17
 
 hdlclient <pid> hooktrace 0xFN --args 4
 hdlclient <pid> hook-import KERNEL32.dll!GetCurrentProcessId --args 0
@@ -147,6 +159,18 @@ hdlclient <pid> events --timeout 1000
 ```
 
 Call args: `u64:N` `i64:N` `f32:N` `f64:N` `cstr:TEXT` `wstr:TEXT` `buf:HEXBYTES` `ptr:HEX`. `--main` posts to the process UI thread (needs a non-console HWND).
+If the request is already executing on that UI thread, `--main` runs the callee
+inline. Its timeout cannot preempt or bound that inline execution; the command
+finishes only after the callee returns or faults.
+
+`--timeout` is the execution wait; the client reserves another second for the
+typed response. If an accepted call outlives that wait, its reply includes a
+nonzero `call_id`, `orphaned=true`, and its `queued` or `running` phase. Use
+`call status ID` until it reaches `completed` or `cancelled_before_start`.
+Another call to the same resolved target returns `BUSY` with the blocking ID.
+`call ack ID` deliberately permits overlap but does not make shutdown or unload
+safe while the original call is running. Buffer copy-outs occur only for a call
+that completes while its caller is still waiting.
 
 ### Place / code / PE / graph
 
