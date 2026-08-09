@@ -15,14 +15,20 @@ constexpr uint32_t kReplyReserveMs = 250;
 
 uint32_t ExecutionTimeout(const rpc::CallContext& context, bool has_wait_timeout,
                           uint32_t wait_timeout_ms) {
-    if (has_wait_timeout) {
-        return wait_timeout_ms;
-    }
     if (!context.timeout_ms()) {
-        return 0;
+        return has_wait_timeout ? wait_timeout_ms : 0;
     }
     const uint32_t remaining = context.remaining_timeout_ms();
-    return remaining > kReplyReserveMs ? remaining - kReplyReserveMs : 1;
+    const uint32_t bounded = remaining > kReplyReserveMs ? remaining - kReplyReserveMs : 1;
+    if (!has_wait_timeout) {
+        return bounded;
+    }
+    /* Never wait longer than the envelope deadline; this also limits explicit 0 (infinite)
+       when the transport deadline is finite. */
+    if (!wait_timeout_ms || wait_timeout_ms > bounded) {
+        return bounded;
+    }
+    return wait_timeout_ms;
 }
 
 void SetManagedResult(const ManagedCallResult& managed, const CallArguments& arguments,

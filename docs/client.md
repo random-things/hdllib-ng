@@ -91,7 +91,11 @@ The local unload command recognizes hdllib by its injection callback exports.
 With a live control pipe it performs shutdown preparation itself and refuses
 `FreeLibrary` if an active call reports `BUSY`. The explicit two-step workflow
 above remains supported: after a successful `shutdown`, the absent pipe is
-treated as evidence supplied by that prior preparation.
+treated as evidence supplied by that prior preparation only when consecutive
+fresh probes report `ERROR_FILE_NOT_FOUND`. A timeout, access denial, busy pipe, malformed
+reply, or protocol mismatch refuses unload with `BUSY` or `FAILED`; the helper
+is left loaded. Access and negotiation failures do not become successful prior
+preparation if the pipe subsequently disappears.
 
 ---
 

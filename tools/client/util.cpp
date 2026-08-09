@@ -104,6 +104,14 @@ const wchar_t* StatusHint(const std::wstring& cmd, int32_t status) {
     if (cmd == L"inject" && status == HDL_E_ACCESS) {
         return L"Wow64 target rejected or access denied; use matching bitness / elevate";
     }
+    if ((cmd == L"unload" || cmd == L"reload") && status == HDL_E_BUSY) {
+        return L"helper quiescence was not confirmed; it was left loaded; retry after the "
+               L"control pipe becomes responsive or shutdown completes";
+    }
+    if ((cmd == L"unload" || cmd == L"reload") && status == HDL_E_FAILED) {
+        return L"helper shutdown negotiation could not be verified; it was left loaded; "
+               L"inspect the DLL log before retrying";
+    }
     /* Generic per-status fallbacks. */
     switch (status) {
     case HDL_E_INVALID_ARG:

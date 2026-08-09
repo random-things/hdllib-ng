@@ -7,13 +7,14 @@
 namespace {
 
 DWORD WINAPI BootstrapThread(LPVOID) {
-    if (hdl::CoreInit() != HDL_OK) {
-        HDL_LOG_ERROR("CoreInit failed in bootstrap thread");
+    const HdlStatus status = hdl::CoreInit();
+    if (status != HDL_OK) {
+        HDL_LOG_ERROR("CoreInit failed in bootstrap thread status=%d", static_cast<int>(status));
     }
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     switch (reason) {
@@ -25,7 +26,13 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
             if (t) {
                 CloseHandle(t);
             } else {
-                HDL_LOG_ERROR("Failed to start bootstrap thread: %lu", GetLastError());
+                const DWORD error = GetLastError();
+                OutputDebugStringA(
+                    "[ERROR] helper bootstrap thread creation failed; CreateThread returned "
+                    "null\n");
+                HDL_LOG_ERROR("Failed to start bootstrap thread: %lu", error);
+                /* Do not leave a loaded helper that can never publish its control endpoint. */
+                return FALSE;
             }
         }
         break;

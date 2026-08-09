@@ -255,6 +255,47 @@ void RunLifecycleStressTests(Counters& c, const wchar_t* target_exe, const wchar
         hdl::testapi::Shutdown();
     }
 
+    constexpr int kConcurrentInitCallers = 8;
+    const uint64_t attempt_before = hdl::testapi::InitDiagnostics().attempt_id;
+    std::atomic<int> init_callers_ready{0};
+    std::atomic<bool> release_init_callers{false};
+    std::vector<HdlStatus> init_statuses(kConcurrentInitCallers, HDL_E_FAILED);
+    std::vector<std::thread> init_callers;
+    init_callers.reserve(kConcurrentInitCallers);
+    for (int i = 0; i < kConcurrentInitCallers; ++i) {
+        init_callers.emplace_back([&, i] {
+            init_callers_ready.fetch_add(1);
+            while (!release_init_callers.load()) {
+                std::this_thread::yield();
+            }
+            init_statuses[static_cast<size_t>(i)] = hdl::testapi::Init();
+        });
+    }
+    while (init_callers_ready.load() != kConcurrentInitCallers) {
+        std::this_thread::yield();
+    }
+    release_init_callers.store(true);
+    for (auto& caller : init_callers) {
+        caller.join();
+    }
+    const hdl::CoreInitDiagnostics concurrent_diag = hdl::testapi::InitDiagnostics();
+    bool concurrent_init_ok = hdl::testapi::IsInitialized() &&
+                              concurrent_diag.attempt_id == attempt_before + 1 &&
+                              concurrent_diag.last_status == HDL_OK;
+    for (const HdlStatus status : init_statuses) {
+        concurrent_init_ok &= status == HDL_OK;
+    }
+    char concurrent_detail[160];
+    snprintf(concurrent_detail, sizeof(concurrent_detail),
+             "attempt_before=%llu attempt_after=%llu phase=%s status=%s elapsed_ms=%llu",
+             static_cast<unsigned long long>(attempt_before),
+             static_cast<unsigned long long>(concurrent_diag.attempt_id),
+             hdl::testapi::InitPhaseName(concurrent_diag.phase),
+             hdltest::StatusNameA(concurrent_diag.last_status),
+             static_cast<unsigned long long>(concurrent_diag.elapsed_ms));
+    Report(c, concurrent_init_ok, false, "lifecycle/concurrent_init_x8", concurrent_detail);
+    hdl::testapi::Shutdown();
+
     constexpr int kInitShutdownRounds = 20;
     int ok_rounds = 0;
     for (int i = 0; i < kInitShutdownRounds; ++i) {

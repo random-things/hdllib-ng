@@ -891,7 +891,8 @@ void RunNegotiateMismatch(Counters& c) {
     const bool connected = client.Connect(3000);
     const std::string& err = client.NegotiateError();
     server.join();
-    const bool rejected = !connected && err.find("mismatch") != std::string::npos && served.load();
+    const bool rejected = !connected && err.find("mismatch") != std::string::npos &&
+                          client.ConnectError() == ERROR_REVISION_MISMATCH && served.load();
     Report(c, rejected, false, "ipc/reject_major_mismatch",
            rejected ? "PipeClient::Negotiate refuses incompatible major" : err.c_str());
 
@@ -936,7 +937,7 @@ void RunClientDeadlineValidation(Counters& c) {
             SetEvent(release);
             server.join();
             const bool bounded = !connected && hello_received.load() && elapsed >= timeout_ms / 2 &&
-                                 elapsed < 1000 &&
+                                 elapsed < 1000 && client.ConnectError() == ERROR_TIMEOUT &&
                                  client.NegotiateError().find("deadline") != std::string::npos;
             Report(c, bounded, false, "ipc/connect_deadline",
                    bounded ? "stalled ServerHello cancelled at deadline"

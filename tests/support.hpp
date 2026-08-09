@@ -285,7 +285,40 @@ inline bool SpawnTarget(const wchar_t* target_exe, const TargetProfile& profile,
     out.process = pi.hProcess;
     out.pid = pi.dwProcessId;
 
-    if (WaitForSingleObject(out.ready_event, 15000) != WAIT_OBJECT_0) {
+    const HANDLE startup_waits[] = {out.ready_event, out.process};
+    const DWORD startup_wait = WaitForMultipleObjects(2, startup_waits, FALSE, 15000);
+    if (startup_wait != WAIT_OBJECT_0) {
+        DWORD exit_code = STILL_ACTIVE;
+        const BOOL have_exit_code = GetExitCodeProcess(out.process, &exit_code);
+        const bool exited =
+            (startup_wait == WAIT_OBJECT_0 + 1) || (have_exit_code && exit_code != STILL_ACTIVE);
+        if (exited) {
+            if (exit_code == 0xC0000142u) {
+                std::fwprintf(stderr,
+                              L"SpawnTarget: %ls exited before ready; profile=%hs "
+                              L"exit=0x%08lX (STATUS_DLL_INIT_FAILED)\n",
+                              target_exe, profile.name ? profile.name : "(unnamed)",
+                              static_cast<unsigned long>(exit_code));
+            } else {
+                std::fwprintf(stderr,
+                              L"SpawnTarget: %ls exited before ready; profile=%hs "
+                              L"exit=0x%08lX\n",
+                              target_exe, profile.name ? profile.name : "(unnamed)",
+                              static_cast<unsigned long>(exit_code));
+            }
+        } else if (startup_wait == WAIT_TIMEOUT) {
+            std::fwprintf(stderr,
+                          L"SpawnTarget: %ls did not become ready within 15000 ms; "
+                          L"profile=%hs pid=%lu\n",
+                          target_exe, profile.name ? profile.name : "(unnamed)",
+                          static_cast<unsigned long>(out.pid));
+        } else {
+            std::fwprintf(stderr,
+                          L"SpawnTarget: startup wait failed for %ls; profile=%hs error=%lu\n",
+                          target_exe, profile.name ? profile.name : "(unnamed)",
+                          static_cast<unsigned long>(GetLastError()));
+        }
+        std::fflush(stderr);
         out.Close();
         return false;
     }

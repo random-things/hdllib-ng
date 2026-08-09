@@ -4,7 +4,33 @@
 
 namespace hdl {
 
+enum class CoreInitPhase : uint32_t {
+    Uninitialized = 0,
+    ApplyingDefaults,
+    DisassemblyRegistry,
+    Hooks,
+    Health,
+    CallRegistry,
+    Watch,
+    Ipc,
+    Ready,
+    Failed,
+};
+
+struct CoreInitDiagnostics {
+    uint64_t attempt_id;
+    uint32_t owner_thread_id;
+    uint32_t waiting_callers;
+    CoreInitPhase phase;
+    CoreInitPhase failure_phase;
+    HdlStatus last_status;
+    uint32_t win32_error;
+    uint64_t elapsed_ms;
+};
+
 HdlStatus CoreInit();
+CoreInitDiagnostics CoreGetInitDiagnostics();
+const char* CoreInitPhaseName(CoreInitPhase phase);
 void CoreShutdown();
 void CoreShutdownEx(uint32_t flags);
 /* Quiesce calls and tear down instrumentation (caller replies, then Finish). */

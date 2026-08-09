@@ -78,15 +78,23 @@ bool PipeClient::Connect(DWORD timeout_ms) {
     std::lock_guard<std::mutex> lock(request_mutex_);
     CloseUnlocked();
     negotiate_error_.clear();
+    connect_error_ = ERROR_SUCCESS;
     const hdl::rpc::PipeDeadline deadline(timeout_ms);
     HANDLE pipe = INVALID_HANDLE_VALUE;
     HANDLE completion_port = nullptr;
     const hdl::rpc::PipeIoResult connected =
         hdl::rpc::ConnectLocalPipe(pid_, deadline, &pipe, &completion_port);
     if (connected != hdl::rpc::PipeIoResult::Ok) {
+        connect_error_ = GetLastError();
+        if (connected == hdl::rpc::PipeIoResult::Timeout) {
+            connect_error_ = ERROR_TIMEOUT;
+        } else if (connect_error_ == ERROR_SUCCESS) {
+            connect_error_ = ERROR_GEN_FAILURE;
+        }
         negotiate_error_ = connected == hdl::rpc::PipeIoResult::Timeout
                                ? "RPC connection deadline exceeded"
                                : "RPC pipe connection failed";
+        SetLastError(connect_error_);
         return false;
     }
     handle_ = pipe;
@@ -95,16 +103,27 @@ bool PipeClient::Connect(DWORD timeout_ms) {
         hdl::rpc::WritePipeExact(pipe, completion_port, hdl::rpc::kConnectionPreface,
                                  static_cast<DWORD>(hdl::rpc::kConnectionPrefaceSize), deadline);
     if (preface != hdl::rpc::PipeIoResult::Ok) {
+        connect_error_ =
+            preface == hdl::rpc::PipeIoResult::Timeout ? ERROR_TIMEOUT : GetLastError();
+        if (connect_error_ == ERROR_SUCCESS) {
+            connect_error_ = ERROR_GEN_FAILURE;
+        }
         negotiate_error_ = preface == hdl::rpc::PipeIoResult::Timeout
                                ? "RPC preface deadline exceeded"
                                : "RPC preface failed (transport)";
         CloseUnlocked();
+        SetLastError(connect_error_);
         return false;
     }
     if (!Negotiate(deadline)) {
+        connect_error_ = GetLastError();
+        if (connect_error_ == ERROR_SUCCESS) {
+            connect_error_ = ERROR_INVALID_DATA;
+        }
         const std::string error = negotiate_error_;
         CloseUnlocked();
         negotiate_error_ = error;
+        SetLastError(connect_error_);
         return false;
     }
     return true;
@@ -161,6 +180,7 @@ bool PipeClient::Negotiate(const hdl::rpc::PipeDeadline& deadline) {
     if (!hdl::rpc::ParseEnvelope(bytes.data(), bytes.size(), &response) ||
         !response.has_server_hello()) {
         negotiate_error_ = "ServerHello response malformed";
+        SetLastError(ERROR_INVALID_DATA);
         return false;
     }
     const auto& server = response.server_hello();
@@ -168,11 +188,13 @@ bool PipeClient::Negotiate(const hdl::rpc::PipeDeadline& deadline) {
         negotiate_error_ =
             "RPC protocol major mismatch (DLL=" + std::to_string(server.protocol_major()) +
             " client=" + std::to_string(hdl::rpc::kProtocolMajor) + ")";
+        SetLastError(ERROR_REVISION_MISMATCH);
         return false;
     }
     if (!server.has_limits() || !server.limits().max_frame_bytes() ||
         server.limits().max_in_flight() != 1) {
         negotiate_error_ = "ServerHello transport limits unsupported";
+        SetLastError(ERROR_NOT_SUPPORTED);
         return false;
     }
     proto_major_ = server.protocol_major();

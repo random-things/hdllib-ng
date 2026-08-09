@@ -1,11 +1,14 @@
 #include "inject/common.hpp"
 #include "inject/techniques.hpp"
+#include "inject/unload_policy.hpp"
 #include "win/raii.hpp"
 
 #include "hdl/rpc/v1/services.rpc.hpp"
 #include "hdllib/hdllib.h"
 #include "hdllib/pipe_name.h"
 #include "rpc/pipe_client.hpp"
+
+#include <string>
 
 namespace hdl {
 namespace inject {
@@ -29,6 +32,20 @@ struct ShutdownPreparationResult {
     ShutdownPreparation state = ShutdownPreparation::NotHelper;
     HdlStatus status = HDL_OK;
 };
+
+bool IsControlPipeDefinitivelyGone(DWORD pid) {
+    constexpr int kProbeCount = 3;
+    for (int attempt = 0; attempt < kProbeCount; ++attempt) {
+        SetLastError(ERROR_SUCCESS);
+        if (HdlWaitLocalPipe(pid, 0) || GetLastError() != ERROR_FILE_NOT_FOUND) {
+            return false;
+        }
+        if (attempt + 1 < kProbeCount) {
+            Sleep(20);
+        }
+    }
+    return true;
+}
 
 /* Ask the in-target helper to quiesce before FreeLibrary. A helper that cannot
  * confirm quiescence is contained in place instead of being unsafely unloaded. */
@@ -59,15 +76,49 @@ ShutdownPreparationResult TryPrepareRemoteShutdown(DWORD pid, uint64_t module_ba
         return {};
     }
 
-    PipeClient pipe(pid, "hdllib-unload", "0.1.0-pre");
-    if (!pipe.Connect()) {
-        /* A caller may have completed Control.Shutdown immediately before this
-         * unload, in which case the absent pipe is the expected state. Preserve
-         * that established two-step workflow; a live helper that reports BUSY is
-         * handled below and is never unloaded. */
-        HDL_LOG_INFO("Helper shutdown pipe unavailable for pid %u; assuming prior preparation",
+    /* Preserve the explicit Shutdown-then-Unload workflow without waiting for
+     * a connection deadline. This non-connecting probe is conclusive only when
+     * the pipe namespace reports that the endpoint does not exist. */
+    if (IsControlPipeDefinitivelyGone(pid)) {
+        HDL_LOG_INFO("Helper control pipe is absent for pid %u; prior shutdown preparation is "
+                     "confirmed",
                      pid);
         return {ShutdownPreparation::Prepared, HDL_OK};
+    }
+
+    PipeClient pipe(pid, "hdllib-unload", "0.1.0-pre");
+    if (!pipe.Connect()) {
+        const DWORD connect_error = pipe.ConnectError();
+        const std::string connect_detail = pipe.NegotiateError();
+
+        /* Connect may fail after reaching a live helper (timeout, access, or
+         * negotiation failure). Consecutive probes distinguish a transient
+         * connection failure after prior shutdown from an ambiguous live state.
+         * Non-transient failures never become prepared retroactively. */
+        const bool absence_confirmed = IsControlPipeDefinitivelyGone(pid);
+        bool probe_reachable = false;
+        DWORD probe_error = ERROR_FILE_NOT_FOUND;
+        if (!absence_confirmed) {
+            SetLastError(ERROR_SUCCESS);
+            probe_reachable = HdlWaitLocalPipe(pid, 0) != FALSE;
+            probe_error = probe_reachable ? ERROR_SUCCESS : GetLastError();
+        }
+        const ShutdownConnectDisposition disposition = ClassifyShutdownConnectFailure(
+            connect_error, probe_reachable, probe_error, absence_confirmed);
+        if (disposition == ShutdownConnectDisposition::PreparedPipeGone) {
+            HDL_LOG_INFO("Helper control pipe is absent for pid %u; prior shutdown preparation "
+                         "is confirmed",
+                         pid);
+            return {ShutdownPreparation::Prepared, HDL_OK};
+        }
+
+        const HdlStatus refusal =
+            disposition == ShutdownConnectDisposition::Busy ? HDL_E_BUSY : HDL_E_FAILED;
+        HDL_LOG_ERROR("Refusing helper unload for pid %u: shutdown connection failed "
+                      "(connect_error=%lu, probe_reachable=%u, probe_error=%lu, detail=%s)",
+                      pid, connect_error, probe_reachable ? 1u : 0u, probe_error,
+                      connect_detail.empty() ? "none" : connect_detail.c_str());
+        return {ShutdownPreparation::Blocked, refusal};
     }
     rpc::v1::ShutdownRequest shutdown;
     shutdown.set_flags(flags);

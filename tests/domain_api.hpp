@@ -31,6 +31,12 @@ namespace hdl::testapi {
 inline HdlStatus Init() {
     return CoreInit();
 }
+inline CoreInitDiagnostics InitDiagnostics() {
+    return CoreGetInitDiagnostics();
+}
+inline const char* InitPhaseName(CoreInitPhase phase) {
+    return CoreInitPhaseName(phase);
+}
 inline void Shutdown() {
     CoreShutdown();
 }

@@ -21,7 +21,7 @@ bool EqualsFlag(const wchar_t* v) {
     return false;
 }
 
-}  // namespace
+} // namespace
 
 bool EnvFlag(const wchar_t* name) {
     wchar_t buf[64];
@@ -53,6 +53,14 @@ void ApplyQuietLogDefaults() {
     } else {
         SetLogLevel(LogLevel::Off);
     }
+
+    wchar_t log_file[MAX_PATH];
+    const DWORD log_file_length = GetEnvironmentVariableW(L"HDL_LOG_FILE", log_file, MAX_PATH);
+    if (log_file_length > 0 && log_file_length < MAX_PATH && !SetLogFile(log_file)) {
+        OutputDebugStringA("[ERROR] bootstrap HDL_LOG_FILE could not be opened\n");
+    } else if (log_file_length >= MAX_PATH) {
+        OutputDebugStringA("[ERROR] bootstrap HDL_LOG_FILE exceeds MAX_PATH\n");
+    }
 }
 
-}  // namespace hdl
+} // namespace hdl

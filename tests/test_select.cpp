@@ -1,4 +1,5 @@
 #include "inject/select.hpp"
+#include "inject/unload_policy.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -71,7 +72,7 @@ const HdlInjectCandidate* FindCand(const HdlInjectCandidate* c, uint32_t n, int 
     return nullptr;
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     Counters c{};
@@ -83,8 +84,9 @@ int main() {
         hdl::inject::ScoreAllMethods(profile, cands, &n);
 
         const auto* early = FindCand(cands, n, HDL_INJECT_EARLY_BIRD_APC);
-        Expect(c, early && early->confidence == 0 &&
-                      strstr(early->reasons, "early_bird_not_attach") != nullptr,
+        Expect(c,
+               early && early->confidence == 0 &&
+                   strstr(early->reasons, "early_bird_not_attach") != nullptr,
                "headless: early_bird ineligible");
 
         const auto* hook = FindCand(cands, n, HDL_INJECT_SET_WINDOWS_HOOK_EX);
@@ -96,10 +98,10 @@ int main() {
                "headless: CRT eligible");
 
         const int best = hdl::inject::PickBestMethod(profile);
-        Expect(c, best >= 0 && best != HDL_INJECT_SET_WINDOWS_HOOK_EX &&
-                      best != HDL_INJECT_WINDOW_SUBCLASS &&
-                      best != HDL_INJECT_KERNEL_CALLBACK_TABLE &&
-                      best != HDL_INJECT_EARLY_BIRD_APC,
+        Expect(c,
+               best >= 0 && best != HDL_INJECT_SET_WINDOWS_HOOK_EX &&
+                   best != HDL_INJECT_WINDOW_SUBCLASS && best != HDL_INJECT_KERNEL_CALLBACK_TABLE &&
+                   best != HDL_INJECT_EARLY_BIRD_APC,
                "headless: auto avoids GUI/early_bird");
     }
 
@@ -118,9 +120,9 @@ int main() {
                "gui: kct eligible");
 
         const auto* apc = FindCand(cands, n, HDL_INJECT_QUEUE_USER_APC);
-        Expect(c, apc && (apc->flags & HDL_INJECT_CAND_ELIGIBLE) &&
-                      strstr(apc->reasons, "alertable_unknown") != nullptr &&
-                      apc->confidence < 70,
+        Expect(c,
+               apc && (apc->flags & HDL_INJECT_CAND_ELIGIBLE) &&
+                   strstr(apc->reasons, "alertable_unknown") != nullptr && apc->confidence < 70,
                "gui: classic APC soft-penalized");
     }
 
@@ -144,8 +146,7 @@ int main() {
                "no-access: win-event still eligible");
 
         const int best = hdl::inject::PickBestMethod(profile);
-        Expect(c,
-               best == HDL_INJECT_SET_WINDOWS_HOOK_EX || best == HDL_INJECT_SET_WIN_EVENT_HOOK,
+        Expect(c, best == HDL_INJECT_SET_WINDOWS_HOOK_EX || best == HDL_INJECT_SET_WIN_EVENT_HOOK,
                "no-access: auto picks hook family");
     }
 
@@ -167,8 +168,7 @@ int main() {
         auto profile = MakeOpenHeadless();
         profile.prefer_stealth = true;
         const int best = hdl::inject::PickBestMethod(profile);
-        Expect(c,
-               best == HDL_INJECT_MANUAL_MAP || best == HDL_INJECT_MODULE_STOMP,
+        Expect(c, best == HDL_INJECT_MANUAL_MAP || best == HDL_INJECT_MODULE_STOMP,
                "stealth: auto prefers map/stomp");
 
         HdlInjectCandidate cands[hdl::inject::kMethodCount];
@@ -185,6 +185,40 @@ int main() {
         profile.wow64_target = true;
         const int best = hdl::inject::PickBestMethod(profile);
         Expect(c, best < 0, "wow64: no auto method");
+    }
+
+    {
+        using Disposition = hdl::inject::ShutdownConnectDisposition;
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(ERROR_TIMEOUT, false,
+                                                           ERROR_FILE_NOT_FOUND,
+                                                           true) == Disposition::PreparedPipeGone,
+               "unload: only absent probe confirms prior shutdown");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(
+                   ERROR_TIMEOUT, false, ERROR_FILE_NOT_FOUND, false) == Disposition::Busy,
+               "unload: unconfirmed absence refuses with BUSY");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(ERROR_TIMEOUT, false, ERROR_PIPE_BUSY,
+                                                           false) == Disposition::Busy,
+               "unload: busy pipe refuses with BUSY");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(
+                   ERROR_ACCESS_DENIED, false, ERROR_ACCESS_DENIED, false) == Disposition::Failed,
+               "unload: access failure refuses with FAILED");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(
+                   ERROR_ACCESS_DENIED, false, ERROR_FILE_NOT_FOUND, true) == Disposition::Failed,
+               "unload: access failure stays FAILED after pipe disappears");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(
+                   ERROR_REVISION_MISMATCH, true, ERROR_SUCCESS, false) == Disposition::Failed,
+               "unload: negotiation failure on live pipe refuses with FAILED");
+        Expect(c,
+               hdl::inject::ClassifyShutdownConnectFailure(ERROR_REVISION_MISMATCH, false,
+                                                           ERROR_FILE_NOT_FOUND,
+                                                           true) == Disposition::Failed,
+               "unload: negotiation failure stays FAILED after pipe disappears");
     }
 
     std::printf("\nSelect tests: %d passed, %d failed\n", c.passed, c.failed);

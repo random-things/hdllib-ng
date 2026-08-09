@@ -113,7 +113,7 @@ method short name; the fully qualified form is `hdl.rpc.v1.Service/Method`.
 | `Ping` | Liveness + echo host PID | — (IPC only; `HdlIsInitialized` / `HdlIsIpcRunning` for local) |
 | `SetLogLevel` | Set log verbosity | `HdlSetLogLevel` |
 
-**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `Shutdown`. Log file and health VEH are named RPC methods (`SetLogFile`, `SetHealthVeh` / `GetHealthVeh`).
+**Also (env / bootstrap):** `HDL_LOG_LEVEL`, `HDL_LOG_FILE`, `HDL_NO_IPC=1`, `HDL_HEALTH_VEH`. Lifecycle prepare is on the pipe as `Shutdown`. Log file and health VEH are named RPC methods (`SetLogFile`, `SetHealthVeh` / `GetHealthVeh`). The bootstrap waits up to five seconds for the first protected pipe listener and retries transient listener/ACL setup failures during that window. A failure to create the bootstrap worker fails DLL attachment instead of leaving an inert loaded helper. Core initialization failures always emit an `OutputDebugString` record containing the attempt, failing phase, status, Win32 error, and elapsed time even when normal logging is off; set `HDL_LOG_LEVEL=1` or higher for the surrounding stage records, and set `HDL_LOG_FILE` before process start when those records must survive without a debugger attached.
 
 Default after inject: log level **off**; health VEH **off** until enabled or first `PollEvents`; IPC starts unless `HDL_NO_IPC`.
 
@@ -141,7 +141,11 @@ Remote helper unload is recognized through hdllib's injection callback exports
 and, when its control pipe is live, first sends `Shutdown(shutdown_flags)`. A
 reported active call refuses unload rather than proceeding through
 `FreeLibrary`. The established two-step workflow also remains valid: a caller
-may complete `Shutdown` first and then unload after the pipe has disappeared.
+may complete `Shutdown` first and then unload after consecutive control-pipe
+probes report `ERROR_FILE_NOT_FOUND`. Timeout, access, pipe-busy,
+and negotiation failures do not prove quiescence; unload fails closed with
+`BUSY` or `FAILED` and leaves the helper loaded. Access and negotiation failures
+remain failures even if the endpoint disappears afterward.
 
 **`Shutdown` request:** `ShutdownRequest { flags }` (`HDL_SHUTDOWN_UNLOAD_MODULES = 1` FreeLibrary-tracks registered payloads, never the helper itself). Its empty response is flushed before the deferred server stop begins. Eject with local `hdlclient unload <pid> <hdllib.dll> [--modules]`.
 

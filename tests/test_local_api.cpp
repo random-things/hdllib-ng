@@ -440,14 +440,34 @@ void RunLocalApiTests(Counters& c, const wchar_t* dll_path, bool include_ui_thre
                       bool include_process_region_scan_test) {
     std::printf("\n== Local API / lifecycle ==\n");
 
-    // Linking hdllib loads DllMain bootstrap asynchronously â€” wait or init explicitly.
-    const DWORD start = GetTickCount();
-    while (!hdl::testapi::IsInitialized() && GetTickCount() - start < 3000) {
-        Sleep(50);
-    }
+    /* hdl_tests links hdl_domain_obj directly, so no DLL_PROCESS_ATTACH bootstrap runs here. */
     const HdlStatus init = hdl::testapi::Init();
-    Report(c, init == HDL_OK && hdl::testapi::IsInitialized() != 0, false, "HdlInit", "");
-    Report(c, hdl::testapi::Init() == HDL_OK, false, "HdlInit idempotent", "");
+    const hdl::CoreInitDiagnostics init_diag = hdl::testapi::InitDiagnostics();
+    char init_detail[224];
+    snprintf(init_detail, sizeof(init_detail),
+             "status=%s attempt=%llu phase=%s failure_phase=%s win32_error=%lu owner_tid=%lu "
+             "waiters=%lu elapsed_ms=%llu",
+             hdltest::StatusNameA(init), static_cast<unsigned long long>(init_diag.attempt_id),
+             hdl::testapi::InitPhaseName(init_diag.phase),
+             hdl::testapi::InitPhaseName(init_diag.failure_phase),
+             static_cast<unsigned long>(init_diag.win32_error),
+             static_cast<unsigned long>(init_diag.owner_thread_id),
+             static_cast<unsigned long>(init_diag.waiting_callers),
+             static_cast<unsigned long long>(init_diag.elapsed_ms));
+    Report(c,
+           init == HDL_OK && hdl::testapi::IsInitialized() != 0 &&
+               init_diag.last_status == HDL_OK && init_diag.phase == hdl::CoreInitPhase::Ready,
+           false, "HdlInit", init_detail);
+    const HdlStatus idempotent_init = hdl::testapi::Init();
+    const hdl::CoreInitDiagnostics idempotent_diag = hdl::testapi::InitDiagnostics();
+    char idempotent_detail[128];
+    snprintf(idempotent_detail, sizeof(idempotent_detail),
+             "status=%s attempt_before=%llu attempt_after=%llu",
+             hdltest::StatusNameA(idempotent_init),
+             static_cast<unsigned long long>(init_diag.attempt_id),
+             static_cast<unsigned long long>(idempotent_diag.attempt_id));
+    Report(c, idempotent_init == HDL_OK && idempotent_diag.attempt_id == init_diag.attempt_id,
+           false, "HdlInit idempotent", idempotent_detail);
 
     hdl::testapi::SetLogLevelInt(HDL_LOG_ERROR);
 
