@@ -31,7 +31,7 @@ jobs:
           ./tools/ci/run-checks.ps1 -Check CodeQL -Bootstrap
           -ArtifactsDir "$env:RUNNER_TEMP\hdllib-codeql-artifacts"
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v4.37.3
+        uses: github/codeql-action/upload-sarif@v4.38.0
         with:
           sarif_file: ${{ runner.temp }}\hdllib-codeql-artifacts\codeql\codeql-results.sarif
           category: /language:c-cpp
